@@ -68,9 +68,8 @@ class ModeLine(Static):
         self.detail = detail
         body = Text()
         body.append(f"  {mode.icon} {mode.label} on", style="dim")
-        body.append(" | shift + tab to change mode", style="dim")
         if self.detail:
-            body.append(f"  {art.icon('dot')} {self.detail}", style="dim")
+            body.append(f"  | {self.detail}", style="dim")
         self.update(body)
 
 

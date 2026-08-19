@@ -343,9 +343,11 @@ async def test_auto_mode_never_turns_prose_into_a_question(workdir):
 async def test_mode_line_matches_the_spec(workdir):
     app, pilot, context = await start(workdir)
     try:
+        app.mode_line.show(Mode.MANUAL, "test test-model")
         line = content(app.query_one(ModeLine))
         assert "manual mode on" in line
-        assert "shift + tab to change mode" in line
+        assert "| test test-model" in line
+        assert "shift + tab to change mode" not in line
     finally:
         await context.__aexit__(None, None, None)
 

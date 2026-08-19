@@ -128,7 +128,7 @@ VERBS = [
 ]
 
 TIPS = [
-    "Press shift+tab to switch between manual, auto, and plan modes.",
+    "Press shift + tab to change mode (manual, auto, or plan).",
     "Use /btw for a quick side question without changing the main conversation.",
     "Drag over any transcript text, then press ctrl+shift+c to copy it.",
     "Click the running-command bar to inspect or stop active commands.",
