@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+build/work/
+dist/
+*.spec.bak
+
+.pytest_cache/
+.coverage
+htmlcov/
+
+.eirene/
+.DS_Store
+*-old.*
