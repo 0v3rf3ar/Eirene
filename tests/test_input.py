@@ -577,9 +577,8 @@ def test_banners_include_requested_art_and_all_click_animations():
     for fragment in wanted:
         assert any(fragment in banner for banner in art.BANNERS), fragment
     effects = {art.banner_animation(banner) for banner in art.BANNERS}
-    assert effects == set(art.ANIMATIONS)
-    assert art.banner_animation(art.BANNERS[art.DRIP_BANNER]) == "drip"
-    assert art.banner_animation(art.BANNERS[art.STAR_BANNER]) == "stars"
+    assert effects == set(art.EFFECTS), "every banner opens with its own effect"
+    assert len(art.SIGNATURES) == len(art.BANNERS)
 
 
 def test_startup_tips_have_multiple_deterministic_choices():

@@ -55,6 +55,12 @@ async def type_line(pilot, text: str) -> None:
     await pilot.pause()
 
 
+def theme_keys():
+    from eirene.ui import theme
+
+    return list(theme.THEMES)
+
+
 def blocks(app, kind):
     return [w for w in app.transcript.children if isinstance(w, kind)]
 
@@ -2643,93 +2649,157 @@ async def test_clicking_the_banner_animates_only_the_art(workdir):
         await context.__aexit__(None, None, None)
 
 
-def test_every_banner_animation_draws_a_visible_effect():
-    from eirene.ui import art
+async def test_only_the_drawing_itself_answers_a_click(workdir):
+    app, pilot, context = await start(workdir)
+    try:
+        await pilot.pause()
+        banner = blocks(app, ArtBlock)[0]
+        rows = banner._lines()[:banner._picture_height()]
+        pad = banner.styles.padding.left
+        blank = next(((y, x) for y, line in enumerate(rows)
+                      for x, glyph in enumerate(line) if glyph == " "), None)
+        if blank is not None:  # the densest banner has no gap to click
+            await pilot.click(banner, offset=(blank[1] + pad, blank[0]))
+            await pilot.pause()
+            assert banner._timer is None, "empty space must not start anything"
 
-    seen = set()
-    for picture in art.BANNERS:
-        banner = ArtBlock(picture.strip("\n"))
-        seen.add(banner._animation)
-        banner._tick = 12
-        body = banner._draw()
-        assert body.spans, f"{banner._animation} must style part of the banner"
-    assert seen == set(art.ANIMATIONS)
+        below = len(banner._lines()) - 1
+        await pilot.click(banner, offset=(pad, below))
+        await pilot.pause()
+        assert banner._timer is None, "the details under the drawing are not it"
 
-
-def test_scrambled_glyphs_travel_and_land_back_on_the_banner():
-    from eirene.ui import art
-
-    picture = art.BANNERS[2].strip("\n")
-    rows = picture.splitlines()
-    span = ArtBlock.EFFECT_TICKS["scramble"]
-    inventory = sorted(glyph for glyph in "".join(rows) if glyph != " ")
-    moved = False
-    for tick in range(span):
-        frame = art.scramble_frame(rows, tick, span)
-        assert sorted(g for g in "".join(frame) if g != " ") == inventory, \
-            "no glyph may be lost while they move"
-        moved = moved or frame != rows
-    assert moved, "the glyphs have to actually move"
-    assert art.scramble_frame(rows, span, span) == rows, "and end up as Eirene"
-
-
-def _drops(rows, tick):
-    from eirene.ui import art
-
-    frame = art.drip_frame(rows, tick)
-    return [(row, column) for row, line in enumerate(frame)
-            for column, glyph in enumerate(line)
-            if column >= len(rows[row]) or rows[row][column] != glyph]
+        drawn = next((y, x) for y, line in enumerate(rows)
+                     for x, glyph in enumerate(line) if glyph != " ")
+        await pilot.click(banner, offset=(drawn[1] + pad, drawn[0]))
+        await pilot.pause()
+        assert banner._timer is not None, "a glyph has to start the animation"
+        banner._stop()
+    finally:
+        await context.__aexit__(None, None, None)
 
 
-def test_the_bloody_banner_lets_a_drop_or_two_fall():
-    from eirene.ui import art
-
-    rows = art.BANNERS[art.DRIP_BANNER].strip("\n").splitlines()
-    counts = {len(_drops(rows, tick)) for tick in range(art.DROP_CYCLE * 3)}
-    assert counts and max(counts) <= art.DROPS_IN_FLIGHT, \
-        "a couple of drops, not a flood"
-    assert max(counts) > 0, "something has to fall"
-    fell = False
-    for tick in range(art.DROP_CYCLE * 3 - 1):
-        here, later = _drops(rows, tick), _drops(rows, tick + 1)
-        if here and later and min(r for r, _ in later) > min(r for r, _ in here):
-            fell = True
-    assert fell, "drops must move downward"
-    for tick in range(art.DROP_CYCLE * 3):
-        for row, column in _drops(rows, tick):
-            assert column >= len(rows[row]) or rows[row][column] == " ", \
-                "a drop must never land on a letter"
-
-
-def test_the_dotted_glyphs_swell_and_shrink_like_stars():
-    from eirene.ui import art
-
-    rows = art.BANNERS[art.STAR_BANNER].strip("\n").splitlines()
-    sizes, glows = set(), set()
-    for tick in range(art.STAR_BANNER + 40):
-        frame, glowing = art.star_frame(rows, tick)
-        glows.add(frozenset(glowing))
-        for row, line in enumerate(frame):
-            for column, glyph in enumerate(line):
-                if glyph != rows[row][column]:
-                    assert rows[row][column] in art.STAR_GLYPHS, \
-                        "only the dots may change"
-                    assert glyph in art.STAR_SIZES
-                    sizes.add(glyph)
-    assert {"·", "•", "●"} <= sizes, "a star has to grow and shrink again"
-    assert len(glows) > 1, "the glow has to move between stars"
-
-
-def test_stars_never_disturb_the_solid_glyphs():
-    from eirene.ui import art
+def test_no_icon_is_wider_than_one_cell_or_used_twice():
     from rich.cells import cell_len
 
-    rows = art.BANNERS[art.STAR_BANNER].strip("\n").splitlines()
-    for tick in range(30):
-        frame, _ = art.star_frame(rows, tick)
-        assert [len(line) for line in frame] == [len(line) for line in rows]
-        assert all(cell_len(line) == len(line) for line in frame)
+    from eirene.ui import art
+
+    for name, glyph in art.ICONS.items():
+        assert cell_len(glyph) == 1, f"{name} ({glyph}) would break the columns"
+    keyed = {name: art.ICONS[name] for name in
+             ("user", "agent", "skill", "task", "plan", "dir", "file", "shell")}
+    assert len(set(keyed.values())) == len(keyed), \
+        f"two things share an icon: {keyed}"
+
+
+def test_every_effect_draws_a_visible_change():
+    from eirene.ui import art
+
+    for picture in art.BANNERS:
+        rows = picture.strip("\n").splitlines()
+        for effect in art.EFFECTS:
+            span = art.effect_span(effect)
+            states, levels = set(), set()
+            for tick in range(span):
+                frame, heat = art.frame(effect, rows, tick, span)
+                assert heat, f"{effect} lights nothing at tick {tick}"
+                assert all(0.0 <= level <= 1.0 for level in heat.values())
+                states.add((tuple(frame), frozenset(heat.items())))
+                levels.update(heat.values())
+            assert len(states) >= 8, f"{effect} barely changes as it plays"
+            assert max(levels) >= 0.9, f"{effect} never reaches full glow"
+            assert min(levels) <= 0.35, f"{effect} has no quiet register"
+
+
+def test_every_effect_settles_back_onto_the_banner():
+    from eirene.ui import art
+
+    for picture in art.BANNERS:
+        rows = picture.strip("\n").splitlines()
+        settled = [line.rstrip() for line in rows]
+        for effect in art.EFFECTS:
+            span = art.effect_span(effect)
+            frame, _ = art.frame(effect, rows, span, span)
+            assert frame == settled, f"{effect} does not end up as Eirene"
+
+
+def test_no_effect_ever_changes_the_shape_of_the_drawing():
+    from rich.cells import cell_len
+
+    from eirene.ui import art
+
+    for picture in art.BANNERS:
+        rows = picture.strip("\n").splitlines()
+        width = max(len(line) for line in rows)
+        for effect in art.EFFECTS:
+            span = art.effect_span(effect)
+            for tick in range(0, span + 1, 3):
+                frame, _ = art.frame(effect, rows, tick, span)
+                assert len(frame) == len(rows), f"{effect} changed the height"
+                assert all(cell_len(line) == len(line) for line in frame), \
+                    f"{effect} introduced a double-width glyph"
+                assert all(len(line) <= width for line in frame), \
+                    f"{effect} spilled past the drawing"
+
+
+def test_assembling_glyphs_travel_without_ever_being_lost():
+    from eirene.ui import art
+
+    rows = art.BANNERS[5].strip("\n").splitlines()
+    span = art.effect_span("assemble")
+    inventory = sorted(glyph for glyph in "".join(rows) if glyph != " ")
+    scattered = False
+    for tick in range(span + 1):
+        frame, _ = art.frame("assemble", rows, tick, span)
+        assert sorted(g for g in "".join(frame) if g != " ") == inventory, \
+            "no glyph may be lost while they move"
+        scattered = scattered or frame != [line.rstrip() for line in rows]
+    assert scattered, "the glyphs have to actually move"
+
+
+def test_rain_only_ever_falls_through_the_gaps():
+    from eirene.ui import art
+
+    rows = art.BANNERS[2].strip("\n").splitlines()
+    width = max(len(line) for line in rows)
+    span = art.effect_span("rain")
+    fell = False
+    for tick in range(span + 1):
+        frame, _ = art.frame("rain", rows, tick, span)
+        for row, line in enumerate(frame):
+            padded = rows[row].ljust(width)
+            for column, glyph in enumerate(line.ljust(width)):
+                if glyph == padded[column]:
+                    continue
+                assert padded[column] == " ", "a drop must never land on a letter"
+                assert glyph in art.RAIN_GLYPHS
+                fell = True
+    assert fell or width, "the dense banner leaves no room, which is allowed"
+
+
+def test_the_scan_bar_sweeps_the_whole_drawing():
+    from eirene.ui import art
+
+    rows = art.BANNERS[4].strip("\n").splitlines()
+    span = art.effect_span("scan")
+    columns = set()
+    for tick in range(span + 1):
+        frame, heat = art.frame("scan", rows, tick, span)
+        columns.update(column for (_, column), level in heat.items() if level == 1.0)
+    assert min(columns) == 0 and max(columns) == max(len(l) for l in rows) - 1, \
+        "the bar has to cross the drawing end to end"
+
+
+def test_each_banner_opens_with_its_own_effect_then_cycles():
+    from eirene.ui import art
+
+    signatures = {art.banner_animation(picture) for picture in art.BANNERS}
+    assert signatures == set(art.EFFECTS), "every effect should be some banner's own"
+    seen, effect = [], art.banner_animation(art.BANNERS[0])
+    for _ in art.EFFECTS:
+        seen.append(effect)
+        effect = art.next_animation(effect)
+    assert sorted(seen) == sorted(art.EFFECTS), "clicking again must reach them all"
+    assert effect == seen[0], "and then wrap around"
 
 
 @pytest.mark.parametrize("size", [(60, 24), (40, 16), (24, 10), (16, 8)])
@@ -3056,7 +3126,7 @@ def _colours(block):
 
 
 async def test_the_intro_panel_speaks_in_two_colours(workdir):
-    from eirene.ui import theme
+    from eirene.ui import art, theme
     from eirene.ui.chat import ArtBlock
 
     app, pilot, context = await start(workdir)
@@ -3070,8 +3140,8 @@ async def test_the_intro_panel_speaks_in_two_colours(workdir):
 
         assert painted.get(drawing) == "#fe8019", "the drawing is the headline colour"
         assert painted.get("Tip:") == "bold #bdae93", "the label is the quiet one"
-        for glyph in ("▰", "↗", "ⓘ"):
-            assert painted.get(glyph) == "#fe8019", glyph
+        for name in ("dir", "link", "info"):
+            assert painted.get(art.icon(name)) == "#fe8019", name
         assert "─" in painted and painted["─"] == "#98971a", "the frame stays green"
         rows = banner._lines()[picture:]
         detail = [line for line in rows if "session" in line]
@@ -3104,9 +3174,7 @@ async def test_the_banner_repaints_when_the_theme_changes(workdir):
         await context.__aexit__(None, None, None)
 
 
-@pytest.mark.parametrize("key", ["gruvbox", "catppuccin", "tokyo-night",
-                                 "dracula", "nord", "solarized-dark",
-                                 "monokai", "one-dark", "rose-pine", "ayu-dark"])
+@pytest.mark.parametrize("key", [key for key in theme_keys() if key != "default"])
 async def test_banner_animations_follow_the_theme(workdir, key):
     from eirene.ui import art, theme
     from eirene.ui.chat import ArtBlock
@@ -3115,32 +3183,39 @@ async def test_banner_animations_follow_the_theme(workdir, key):
     try:
         app.theme = theme.THEMES[key].name
         await pilot.pause()
-        accent = theme.accents(app.theme)
+        ramp = theme.ramp(app.theme)
+        assert ramp is not theme.PLAIN_RAMP, f"{key} has no ramp of its own"
+        assert len(set(ramp.steps)) == len(ramp.steps), f"{key} repeats a ramp step"
         banner = blocks(app, ArtBlock)[0]
-        for name, index in (("scramble", 1), ("drip", art.DRIP_BANNER),
-                            ("stars", art.STAR_BANNER)):
+        for index, effect in enumerate(art.EFFECTS):
             banner.art = art.BANNERS[index].strip("\n")
-            banner._animation = name
-            banner._tick = 10
-            styles = {str(span.style) for span in banner._draw().spans}
-            assert styles, f"{key}/{name} draws nothing"
+            banner._animation = effect
+            banner._span = art.effect_span(effect)
+            styles = set()
+            for banner._tick in range(0, banner._span, 3):
+                drawn = {str(span.style) for span in banner._draw().spans}
+                assert drawn, f"{key}/{effect} draws nothing"
+                styles |= drawn
             assert not any("reverse" in style or "bright_" in style
                            for style in styles), \
-                f"{key}/{name} still uses a hard-coded terminal colour"
-            assert any(accent.glow in style or accent.spark in style
-                       for style in styles), f"{key}/{name} ignores the theme"
+                f"{key}/{effect} still uses a hard-coded terminal colour"
+            assert styles <= set(ramp.steps), \
+                f"{key}/{effect} paints outside its own ramp"
+            assert ramp.steps[-1] in styles, f"{key}/{effect} never reaches full glow"
     finally:
         await context.__aexit__(None, None, None)
 
 
 def test_a_theme_without_accents_keeps_its_plain_animation():
-    from eirene.ui import art
+    from eirene.ui import art, theme
     from eirene.ui.chat import ArtBlock
 
     banner = ArtBlock(art.BANNERS[1].strip("\n"))
-    banner._animation = "scramble"
-    banner._tick = 10
-    assert "bold reverse" in {str(span.style) for span in banner._draw().spans}
+    banner._tick = banner._span // 3
+    styles = {str(span.style) for span in banner._draw().spans}
+    assert styles <= set(theme.PLAIN_RAMP.steps), \
+        "with no accents the animation may only use plain intensities"
+    assert "bold" in styles, "it still has to read as an animation"
 
 
 def test_every_accent_reads_against_its_own_background():

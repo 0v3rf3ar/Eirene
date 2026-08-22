@@ -759,10 +759,8 @@ class Eirene(App):
         self.copy_to_clipboard(text)
         tool = copy_to_system(text)
         self.screen.clear_selection()
-        if tool:
-            self.say(f"copied {len(text)} characters")
-        else:
-            self.say(f"copied {len(text)} characters - if your clipboard is empty, "
+        if not tool:
+            self.say("copied, but no clipboard tool was found - "
                      "install wl-clipboard or xclip", "warn")
 
     def on_mouse_down(self, event: events.MouseDown) -> None:

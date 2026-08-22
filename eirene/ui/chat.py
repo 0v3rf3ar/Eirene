@@ -168,8 +168,6 @@ class ArtBlock(Block):
     """Pre-rendered ASCII art, never wrapped."""
 
     SHIMMER_TICK = 1 / 24
-    BAND = 6
-    EFFECT_TICKS = {"scramble": 54, "drip": 96, "stars": 72}
 
     DEFAULT_CSS = """
     ArtBlock {
@@ -190,7 +188,10 @@ class ArtBlock(Block):
         self.reflow = reflow
         self._tick = -1
         self._timer = None
+        self._played = False
         self._animation = art.banner_animation(text)
+        self._span = art.effect_span(self._animation)
+        self._heat: dict[tuple[int, int], float] = {}
         super().__init__(self._draw())
 
     def _lines(self) -> list[str]:
@@ -207,13 +208,7 @@ class ArtBlock(Block):
         """The drawing as it looks this tick, details left untouched."""
         rows = self._lines()
         head, tail = rows[:picture], rows[picture:]
-        if self._animation == "scramble":
-            head = art.scramble_frame(head, self._tick,
-                                      self.EFFECT_TICKS["scramble"])
-        elif self._animation == "drip":
-            head = art.drip_frame(head, self._tick)
-        elif self._animation == "stars":
-            head, self._glow = art.star_frame(head, self._tick)
+        head, self._heat = art.frame(self._animation, head, self._tick, self._span)
         return head + tail
 
     def _draw(self) -> Text:
@@ -223,30 +218,32 @@ class ArtBlock(Block):
         base = "dim" if self.dim and not toned else ""
         body = Text(no_wrap=True, overflow="crop")
         picture = self._picture_height()
-        self._glow: set[tuple[int, int]] = set()
+        self._heat: dict[tuple[int, int], float] = {}
         rows = self._lines() if self._tick < 0 else self._frame(picture)
+        ramp = theme.ramp_for(self)
         for index, line in enumerate(rows):
             if index:
                 body.append("\n")
             start = len(body.plain)
-            body.append(line, style=base)
+            lit = self._tick >= 0 and index < picture and bool(line.strip())
+            body.append(line, style="" if lit else base)
             if index >= picture or not line.strip():
                 self._paint_rules(body, line, start)
-                continue
-            if self._tick < 0:
-                self._paint_art(body, line, start)
-                continue
-            if self._animation == "stars":
-                bright = f"bold {accent.glow}" if accent and accent.glow else "bold bright_white"
-                faint = accent.spark if accent and accent.spark else "cyan"
-                for column, glyph in enumerate(line):
-                    if glyph not in art.STAR_SIZES:
-                        continue
-                    shine = bright if (index, column) in self._glow else faint
-                    body.stylize(shine, start + column, start + column + 1)
+            elif lit:
+                self._paint_heat(body, line, start, index, ramp)
             else:
-                self._animate_line(body, line, start, index, picture)
+                self._paint_art(body, line, start)
         return body
+
+    def _paint_heat(self, body: Text, line: str, start: int, row: int,
+                    ramp: theme.Ramp) -> None:
+        """One ramp for every effect, so the theme always drives the colour."""
+        for column, glyph in enumerate(line):
+            if glyph == " ":
+                continue
+            style = ramp.at(self._heat.get((row, column), 0.0))
+            if style:
+                body.stylize(style, start + column, start + column + 1)
 
     def _paint_art(self, body: Text, line: str, start: int) -> None:
         """The drawing itself carries the theme's headline colour."""
@@ -275,42 +272,27 @@ class ArtBlock(Block):
             elif glyph in keys and accent.marker:
                 body.stylize(accent.marker, start + column, start + column + 1)
 
-    def _animate_line(self, body: Text, line: str, start: int,
-                      row: int, picture: int) -> None:
-        """Light the moving glyphs so the rearrangement reads on screen."""
-        accent = theme.for_widget(self)
-        if self._animation == "drip":
-            falling = f"bold {accent.spark}" if accent and accent.spark else "bold bright_red"
-            for column, glyph in enumerate(line):
-                if glyph in art.DRIP_GLYPHS:
-                    body.stylize(falling, start + column, start + column + 1)
-            return
-        moving = f"bold {accent.glow}" if accent and accent.glow else "bold reverse"
-        settled = self._tick >= self.EFFECT_TICKS["scramble"]
-        for column, glyph in enumerate(line):
-            if glyph == " ":
-                continue
-            if not settled and (column * 7 + row * 11 + self._tick) % 13 < 3:
-                body.stylize(moving, start + column, start + column + 1)
-
     def restyle(self) -> None:
         """Repaint when the user switches theme."""
         if self._tick < 0:
             self.update(self._draw())
 
     def shimmer(self) -> None:
-        """Sweep a highlight across the drawing."""
+        """Play an effect, stepping to the next one on every repeat click."""
         if self._timer is not None:
             self._timer.stop()
             self._timer = None
+        if self._played:
+            self._animation = art.next_animation(self._animation)
+        self._played = True
+        self._span = art.effect_span(self._animation)
         self._tick = 0
         self.update(self._draw())
         self._timer = self.set_interval(self.SHIMMER_TICK, self._advance)
 
     def _advance(self) -> None:
         self._tick += 1
-        limit = self.EFFECT_TICKS[self._animation]
-        if self._tick > limit:
+        if self._tick > self._span:
             self._stop()
             return
         self.update(self._draw())
@@ -323,8 +305,18 @@ class ArtBlock(Block):
         self.update(self._draw())
 
     def on_click(self, event) -> None:
+        if not self._on_glyph(event.x, event.y):
+            return
         event.stop()
         self.shimmer()
+
+    def _on_glyph(self, x: int, y: int) -> bool:
+        """The space around the drawing is not part of it."""
+        column = x - self.styles.padding.left
+        if column < 0 or not 0 <= y < self._picture_height():
+            return False
+        line = self._lines()[y]
+        return column < len(line) and line[column] != " "
 
     def on_resize(self, event) -> None:
         """Rebuild rules and columns for the widget's laid-out width."""
@@ -339,6 +331,8 @@ class ArtBlock(Block):
         self._stop()
         self.art = self.reflow(max(self.size.width, 1))
         self._animation = art.banner_animation(self.art)
+        self._span = art.effect_span(self._animation)
+        self._played = False
         self.update(self._draw())
 
     def on_unmount(self) -> None:

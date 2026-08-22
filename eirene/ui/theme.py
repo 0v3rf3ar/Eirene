@@ -245,3 +245,64 @@ def for_widget(widget) -> Accents | None:
         return accents(widget.app.theme)
     except (RuntimeError, AttributeError):  # no active app, as in unit tests
         return None
+
+
+@dataclass(frozen=True)
+class Ramp:
+    """Animation colours ordered from resting to full glow."""
+
+    steps: tuple[str, ...]
+
+    def at(self, heat: float) -> str:
+        level = 0.0 if heat < 0 else 1.0 if heat > 1 else heat
+        return self.steps[round(level * (len(self.steps) - 1))]
+
+
+PLAIN_RAMP = Ramp(("dim", "", "bold"))
+
+
+def _luminance(colour: str) -> float:
+    channels = (int(colour[index:index + 2], 16) / 255 for index in (1, 3, 5))
+    parts = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+             for c in channels]
+    return 0.2126 * parts[0] + 0.7152 * parts[1] + 0.0722 * parts[2]
+
+
+def _contrast(colour: str, background: str) -> float:
+    high, low = sorted((_luminance(colour), _luminance(background)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+def _ramp(key: str) -> Ramp:
+    """Sorting by contrast, not brightness, keeps light themes hot at the front."""
+    built = THEMES[key]
+    accent = ACCENTS.get(key)
+    # The single-colour themes have no accents to borrow, so the animation
+    # takes its tones from the theme itself and stays inside one hue.
+    sources = ((accent.detail, accent.art, accent.marker, accent.glow, accent.spark)
+               if accent is not None
+               else (built.foreground, built.primary, built.accent, built.secondary))
+    pool: list[str] = []
+    for colour in sources:
+        if colour.startswith("#") and colour not in pool:
+            pool.append(colour)
+    if len(pool) < 2:
+        return PLAIN_RAMP
+    pool.sort(key=lambda colour: _contrast(colour, built.background))
+    return Ramp((f"dim {pool[0]}", *pool, f"bold {pool[-1]}"))
+
+
+RAMPS = {THEMES[key].name: _ramp(key) for key in THEMES}
+RAMPS = {name: value for name, value in RAMPS.items() if value is not PLAIN_RAMP}
+
+
+def ramp(theme_name: str) -> Ramp:
+    """The heat ramp a banner animation paints with."""
+    return RAMPS.get(theme_name or "", PLAIN_RAMP)
+
+
+def ramp_for(widget) -> Ramp:
+    try:
+        return ramp(widget.app.theme)
+    except (RuntimeError, AttributeError):
+        return PLAIN_RAMP
