@@ -244,9 +244,9 @@ class Agent:
         project = self.project.prompt_block()
         if project:
             text = f"{text}\n\n{project}"
-        plan = plan_mod.load(self.sandbox.root)
+        plan = plan_mod.load(self.sandbox.root, self.session.id)
         if plan.active:
-            text = f"{text}\n\nDurable project plan:\n{plan.render()}"
+            text = f"{text}\n\nDurable session plan:\n{plan.render()}"
         return text
 
     def tool_specs(self) -> list[dict[str, Any]] | None:
@@ -546,7 +546,8 @@ class Agent:
                                       or 200_000),
                         on_output=chunks.append,
                         isolation=str(self.config.get("execution_isolation", "none")),
-                        isolate_network=bool(self.config.get("isolate_network", False)))
+                        isolate_network=bool(self.config.get("isolate_network", False)),
+                        plan_scope=self.session.id)
             is_error = False
         except asyncio.CancelledError:
             raise

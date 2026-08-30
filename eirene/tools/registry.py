@@ -274,10 +274,10 @@ TOOLS: list[Tool] = [
              "type": "object", "properties": {"name": {"type": "string"}},
              "required": ["name"],
          }),
-    Tool("plan_show", READ, "Show the durable plan for this project.", {
+    Tool("plan_show", READ, "Show the durable plan for this session.", {
         "type": "object", "properties": {},
     }),
-    Tool("plan_update", READ, "Create or replace the durable project plan metadata.", {
+    Tool("plan_update", READ, "Create or replace the durable session plan metadata.", {
         "type": "object", "properties": {
             "objective": {"type": "string"},
             "steps": {"type": "array", "items": {"type": "object", "properties": {
@@ -287,13 +287,13 @@ TOOLS: list[Tool] = [
             "notes": {"type": "string"},
         }, "required": ["objective", "steps"],
     }),
-    Tool("plan_set_status", READ, "Update one durable plan step's status.", {
+    Tool("plan_set_status", READ, "Update one durable session plan step's status.", {
         "type": "object", "properties": {
             "index": {"type": "integer"},
             "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "blocked"]},
         }, "required": ["index", "status"],
     }),
-    Tool("plan_clear", READ, "Clear the durable project plan metadata.", {
+    Tool("plan_clear", READ, "Clear the durable session plan metadata.", {
         "type": "object", "properties": {},
     }),
     Tool("apply_patch", WRITE,
@@ -362,7 +362,8 @@ def describe(name: str, args: dict[str, Any], box: Sandbox) -> str:
 async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
                   timeout: float | None = None, max_bytes: int = 200_000,
                   on_output: Callable[[str], None] | None = None,
-                  isolation: str = "none", isolate_network: bool = False) -> str:
+                  isolation: str = "none", isolate_network: bool = False,
+                  plan_scope: str | None = None) -> str:
     """Run a tool call and return its text result."""
     if name not in BY_NAME:
         raise ToolError(f"unknown tool '{name}'")
@@ -470,18 +471,18 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
         body = skill_ops.load(skill)
         return f"# Skill: {skill.title}\n{body}" if body else "skill is empty"
     if name == "plan_show":
-        return plan_ops.load(box.root).render()
+        return plan_ops.load(box.root, plan_scope).render()
     if name == "plan_update":
         raw_steps = args.get("steps")
         if not isinstance(raw_steps, list):
             raise ToolError("steps must be an array")
         return plan_ops.update(box.root, str(args.get("objective") or ""), raw_steps,
-                               str(args.get("notes") or ""))
+                               str(args.get("notes") or ""), plan_scope)
     if name == "plan_set_status":
         return plan_ops.set_status(box.root, int(_number(args.get("index"), 0) or 0),
-                                   _text(args, "status"))
+                                   _text(args, "status"), plan_scope)
     if name == "plan_clear":
-        return plan_ops.clear(box.root)
+        return plan_ops.clear(box.root, plan_scope)
     if name == "apply_patch":
         return patches.apply(box, _text(args, "patch"))
 

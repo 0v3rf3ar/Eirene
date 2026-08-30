@@ -1,4 +1,4 @@
-"""Durable project-scoped structured plans."""
+"""Durable structured plans."""
 
 from __future__ import annotations
 
@@ -53,9 +53,9 @@ class Plan:
         return "\n".join(rows)
 
 
-def load(root: Path) -> Plan:
+def load(root: Path, session_id: str | None = None) -> Plan:
     root = root.resolve()
-    path = _path(root)
+    path = _path(root, session_id)
     try:
         body = json.loads(path.read_text(encoding="utf-8"))
         return Plan(str(root), str(body.get("objective") or ""),
@@ -66,7 +66,7 @@ def load(root: Path) -> Plan:
 
 
 def update(root: Path, objective: str, raw_steps: list[dict[str, Any]],
-           notes: str = "") -> str:
+           notes: str = "", session_id: str | None = None) -> str:
     if len(raw_steps) > MAX_STEPS:
         raise ToolError(f"a plan may have at most {MAX_STEPS} steps")
     steps = [_step(item) for item in raw_steps]
@@ -77,12 +77,13 @@ def update(root: Path, objective: str, raw_steps: list[dict[str, Any]],
                 notes.strip(), time.time())
     if not plan.objective and not plan.steps:
         raise ToolError("plan needs an objective or at least one step")
-    _save(root, plan)
+    _save(root, plan, session_id)
     return plan.render()
 
 
-def set_status(root: Path, index: int, status: str) -> str:
-    plan = load(root)
+def set_status(root: Path, index: int, status: str,
+               session_id: str | None = None) -> str:
+    plan = load(root, session_id)
     if not plan.active:
         raise ToolError("no active plan")
     if status not in STATUSES:
@@ -95,13 +96,13 @@ def set_status(root: Path, index: int, status: str) -> str:
                 step.status = "pending"
     plan.steps[index - 1].status = status
     plan.updated = time.time()
-    _save(root, plan)
+    _save(root, plan, session_id)
     return plan.render()
 
 
-def clear(root: Path) -> str:
+def clear(root: Path, session_id: str | None = None) -> str:
     try:
-        _path(root.resolve()).unlink()
+        _path(root.resolve(), session_id).unlink()
     except FileNotFoundError:
         pass
     except OSError as exc:
@@ -121,13 +122,16 @@ def _step(raw: Any) -> Step:
     return Step(text[:500], status, str(raw.get("verification") or "").strip()[:500])
 
 
-def _path(root: Path) -> Path:
-    key = hashlib.sha256(str(root).encode()).hexdigest()[:24]
+def _path(root: Path, session_id: str | None = None) -> Path:
+    identity = str(root)
+    if session_id:
+        identity = f"{identity}\0{session_id}"
+    key = hashlib.sha256(identity.encode()).hexdigest()[:24]
     return paths.plans_dir() / f"{key}.json"
 
 
-def _save(root: Path, plan: Plan) -> None:
-    path = _path(root.resolve())
+def _save(root: Path, plan: Plan, session_id: str | None = None) -> None:
+    path = _path(root.resolve(), session_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = asdict(plan)
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".plan-", suffix=".tmp")

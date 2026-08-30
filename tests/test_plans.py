@@ -55,6 +55,12 @@ def test_plan_is_project_scoped(workdir, tmp_path):
     assert plans.load(other).active is False
 
 
+def test_session_plans_do_not_leak_between_sessions(workdir):
+    plans.update(workdir, "Mine", [{"text": "One"}], session_id="session-a")
+    assert plans.load(workdir, "session-a").active
+    assert plans.load(workdir, "session-b").active is False
+
+
 def test_clear_removes_the_plan(workdir):
     plans.update(workdir, "Mine", [{"text": "One"}])
     assert plans.clear(workdir) == "plan cleared"

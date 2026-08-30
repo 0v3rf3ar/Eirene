@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from rich.cells import cell_len
 from rich.text import Text
 from textual import events
 from textual.containers import Container, VerticalScroll
 from textual.widgets import Static
 
-from . import art, markup
+from . import art, markup, theme
 from .format import strip_escapes
 from .palette import FOREGROUND
 
@@ -76,6 +77,8 @@ class AsidePanel(Container):
         self.answer = ""
         self.note = "asking…"
         self.failed = False
+        self._content: Text | None = None
+        self._content_width: int | None = None
         self._width = markup.DEFAULT_WIDTH
 
     def compose(self):
@@ -85,6 +88,21 @@ class AsidePanel(Container):
 
     def on_mount(self) -> None:
         self.display = False
+        self.restyle()
+
+    def restyle(self) -> None:
+        """Use the theme's own surface so light themes stay light."""
+        accent = theme.for_widget(self)
+        background = (accent.surface if accent and accent.surface
+                      else POPUP_BACKGROUND)
+        foreground = (accent.on_surface if accent and accent.on_surface
+                      else FOREGROUND)
+        self.styles.background = background
+        self.styles.color = foreground
+        self.close_button.styles.background = background
+        self.close_button.styles.color = foreground
+        if self.display:
+            self.refresh_body()
 
     @property
     def open(self) -> bool:
@@ -104,9 +122,26 @@ class AsidePanel(Container):
 
     def ask(self, question: str) -> None:
         """Show the window with a pending answer."""
+        self._content = None
+        self._content_width = None
         self.question = strip_escapes(question)
         self.answer = ""
         self.note = "asking…"
+        self.failed = False
+        self.display = True
+        self._place()
+        self.refresh_body()
+
+    def show_content(self, content: Text) -> None:
+        """Show a finished, selectable panel without adding it to the chat."""
+        self._content = content
+        self._content_width = max(
+            (cell_len(line) for line in content.plain.splitlines()),
+            default=0,
+        )
+        self.question = ""
+        self.answer = ""
+        self.note = ""
         self.failed = False
         self.display = True
         self._place()
@@ -124,6 +159,8 @@ class AsidePanel(Container):
 
     def close(self) -> None:
         self.display = False
+        self._content = None
+        self._content_width = None
         self.question = ""
         self.answer = ""
         self.note = ""
@@ -136,7 +173,11 @@ class AsidePanel(Container):
             return
         if not screen.width or not screen.height:
             return
-        wanted = max(min(int(screen.width * WIDTH_SHARE), MAX_WIDTH), MIN_WIDTH)
+        if self._content_width is not None:
+            wanted = self._content_width + 4
+        else:
+            wanted = int(screen.width * WIDTH_SHARE)
+        wanted = max(min(wanted, MAX_WIDTH), MIN_WIDTH)
         width = max(min(wanted, screen.width), 8)
         self._width = max(width - 4, 4)
         self.styles.width = width
@@ -154,15 +195,24 @@ class AsidePanel(Container):
         """One Text, so the answer can be selected."""
         if not self.display:
             return
+        if self._content is not None:
+            self.body.update(self._content)
+            self._place()
+            return
         room = self._width
-        body = Text(style=TEXT)
+        accent = theme.for_widget(self)
+        text_colour = (accent.on_surface if accent and accent.on_surface
+                       else TEXT)
+        question_colour = (accent.thinking if accent and accent.thinking
+                           else QUESTION)
+        body = Text(style=text_colour)
         head = Text()
-        head.append(f"{art.icon('think')} btw  ", style=f"bold {TEXT}")
-        head.append(self.question, style=QUESTION)
+        head.append(f"{art.icon('think')} btw  ", style=f"bold {text_colour}")
+        head.append(self.question, style=question_colour)
         head.truncate(max(room - len(CLOSE) - 2, 4), overflow="ellipsis")
         body.append_text(head)
         if self.note:
-            body.append(f"\n  {self.note}", style=f"italic {QUESTION}")
+            body.append(f"\n  {self.note}", style=f"italic {question_colour}")
         if self.answer:
             body.append("\n")
             body.append_text(markup.render(self.answer.rstrip(), room))

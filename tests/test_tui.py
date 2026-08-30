@@ -333,6 +333,69 @@ async def test_complex_plan_is_a_quiet_live_checklist(workdir):
         await context.__aexit__(None, None, None)
 
 
+@pytest.mark.parametrize("key", ["solarized-light", "gruvbox-light", "latte"])
+async def test_task_list_uses_the_active_theme(workdir, key):
+    from eirene.core import plans
+    from eirene.ui import theme
+
+    app, pilot, context = await start(workdir, size=(100, 40))
+    try:
+        app.theme = theme.THEMES[key].name
+        plans.update(workdir, "Ship it", [{"text": "Implement it",
+                                            "status": "in_progress"}],
+                     session_id=app.session.id)
+        app.refresh_plan()
+        await pilot.pause()
+
+        accent = theme.accents(app.theme)
+        assert app.tasks.styles.background.hex.lower() == accent.surface.lower()
+        assert app.tasks.styles.color.hex.lower() == accent.on_surface.lower()
+        assert app.tasks.styles.border_top[1].hex.lower() == accent.rule.lower()
+        styles = {str(span.style) for span in app.tasks._Static__content.spans}
+        assert any(accent.marker in style for style in styles)
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_completed_plan_closes_the_task_list(workdir):
+    from eirene.core import plans
+
+    app, pilot, context = await start(workdir)
+    try:
+        plans.update(workdir, "Done", [{"text": "Finished",
+                                         "status": "completed"}],
+                     session_id=app.session.id)
+        app.refresh_plan()
+        await pilot.pause()
+
+        assert not app.tasks.display
+        assert not plans.load(workdir, app.session.id).active
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_task_list_is_reset_when_switching_sessions(workdir):
+    from eirene.core import plans
+    from eirene.core.session import Session
+
+    app, pilot, context = await start(workdir)
+    other = Session.create(workdir)
+    other.add_user("another conversation")
+    other.close()
+    try:
+        plans.update(workdir, "Only here", [{"text": "Current work"}],
+                     session_id=app.session.id)
+        app.refresh_plan()
+        assert app.tasks.display
+
+        await app.switch_session(other.id)
+        await pilot.pause()
+        assert not app.tasks.display
+        assert not plans.load(workdir, other.id).active
+    finally:
+        await context.__aexit__(None, None, None)
+
+
 async def test_auto_mode_never_turns_prose_into_a_question(workdir):
     provider = Script([TextDelta("Which framework should I use?\n\n- Flask\n- Django"),
                        Done("stop")])
@@ -3277,6 +3340,35 @@ async def test_a_light_theme_never_shows_a_dark_slab(workdir, key):
         assert str(row.styles.background.hex).lower() == accent.surface.lower(), \
             "the sent row sits on the theme's own panel"
         assert accent.surface != "#30343a", "not the hard-coded dark grey"
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("key", ["solarized-light", "gruvbox-light", "latte"])
+async def test_usage_popup_uses_light_theme_colours(workdir, key):
+    from eirene import commands
+    from eirene.ui import theme
+
+    app, pilot, context = await start(workdir, size=(100, 40))
+    try:
+        app.theme = theme.THEMES[key].name
+        await commands.dispatch(app, "/usage")
+        await pilot.pause()
+
+        accent = theme.accents(app.theme)
+        panel = app.aside.region
+        inside = app.screen.get_style_at(panel.x + 2, panel.y + 1)
+        styles = {str(span.style) for span in app.aside.body._Static__content.spans}
+
+        assert inside.bgcolor is not None
+        assert inside.bgcolor.name == accent.surface
+        assert app.aside.styles.background.hex.lower() == accent.surface.lower()
+        assert app.aside.region.width < app.size.width * 0.8, \
+            "content-only usage popups should not keep the generic wide window"
+        assert any(accent.rule in style for style in styles)
+        assert any(accent.detail in style for style in styles)
+        assert any(accent.marker in style for style in styles)
+        assert any(accent.on_surface in style for style in styles)
     finally:
         await context.__aexit__(None, None, None)
 

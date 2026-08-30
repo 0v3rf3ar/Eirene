@@ -121,7 +121,7 @@ class Eirene(App):
         yield BackToBottom()
         yield AsidePanel()
         yield Composer(Picker(), PermissionBar(), SlashMenu(), StatusLine(),
-                       TaskList(self.sandbox.root))
+                       TaskList(self.sandbox.root, self.session.id))
 
     @property
     def transcript(self) -> Transcript:
@@ -176,7 +176,7 @@ class Eirene(App):
         self.agent.reload_skills()
         self._restore_provider()
         self.refresh_mode_line()
-        self.tasks.refresh_plan()
+        self.refresh_plan()
         self._flusher = self.set_interval(1 / 20, self._flush_live)
         self.name_the_tab()
         self.prompt.focus()
@@ -212,6 +212,15 @@ class Eirene(App):
                                  f"{mark} eirene - {label}")
             return
         write_terminal_title(getattr(self, "_driver", None), f"eirene - {label}")
+
+    def refresh_plan(self) -> None:
+        """Show only this session's unfinished plan."""
+        plan = plan_mod.load(self.sandbox.root, self.session.id)
+        if (plan.steps and
+                all(step.status in {"completed", "blocked"} for step in plan.steps)):
+            plan_mod.clear(self.sandbox.root, self.session.id)
+        self.tasks.session_id = self.session.id
+        self.tasks.refresh_plan()
 
     def mark_busy(self, busy: bool) -> None:
         """Spin the tab title while the agent works."""
@@ -411,11 +420,11 @@ class Eirene(App):
         if self.turn and not self.turn.done():
             self.say("still working - use /btw to ask something on the side", "warn")
             return
-        old_plan = plan_mod.load(self.sandbox.root)
+        old_plan = plan_mod.load(self.sandbox.root, self.session.id)
         if old_plan.steps and all(step.status in {"completed", "blocked"}
                                   for step in old_plan.steps):
-            plan_mod.clear(self.sandbox.root)
-            self.tasks.refresh_plan()
+            plan_mod.clear(self.sandbox.root, self.session.id)
+            self.refresh_plan()
         if not self.session.name:
             self.session.name = name_from(text)
             self.name_the_tab()
@@ -533,10 +542,10 @@ class Eirene(App):
                     if event.steps:
                         objective = self.session.name or "Complete the current request"
                         plan_mod.update(self.sandbox.root, objective, event.steps,
-                                        event.explanation)
+                                        event.explanation, self.session.id)
                     else:
-                        plan_mod.clear(self.sandbox.root)
-                    self.tasks.refresh_plan()
+                        plan_mod.clear(self.sandbox.root, self.session.id)
+                    self.refresh_plan()
                 elif isinstance(event, agent_mod.ToolPreview):
                     answer = thought = None
                     cards[event.id] = await self.push(
@@ -556,7 +565,7 @@ class Eirene(App):
                         card.feed(event.chunk)
                 elif isinstance(event, agent_mod.ToolFinished):
                     if event.name in {"plan_update", "plan_set_status", "plan_clear"}:
-                        self.tasks.refresh_plan()
+                        self.refresh_plan()
                         continue
                     card = cards.get(event.id)
                     if card is None:
@@ -780,6 +789,8 @@ class Eirene(App):
         self._titled = False
         self._warned_context = False
         self.agent.usage = UsageTotals()
+        plan_mod.clear(self.sandbox.root, self.session.id)
+        self.refresh_plan()
         reset_provider = getattr(self.agent.provider, "reset_thread", None)
         if reset_provider:
             reset_provider()
@@ -810,6 +821,7 @@ class Eirene(App):
             reset_provider()
         self._titled = bool(resumed.name)
         self._warned_context = False
+        self.refresh_plan()
         self.transcript.reset()
         await self.push(ArtBlock(self._banner_text(), reflow=self._banner_text))
         await self.replay_transcript()

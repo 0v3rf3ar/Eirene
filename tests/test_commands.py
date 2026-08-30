@@ -282,9 +282,15 @@ async def test_usage_before_anything_happens(workdir):
     try:
         await dispatch(app, "/usage")
         await settle(pilot)
-        body = "\n".join(texts(app))
+        body = app.aside.body._Static__content.plain
         assert "nothing sent yet" in body
         assert app.session.id in body
+        assert app.aside.open
+        assert not any("nothing sent yet" in text for text in texts(app))
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not app.aside.open
     finally:
         await context.__aexit__(None, None, None)
 
@@ -295,8 +301,9 @@ async def test_usage_counts_a_turn(workdir):
         app.agent.usage.record(120, 45, 2.0, "model-a")
         await dispatch(app, "/usage")
         await settle(pilot)
-        body = "\n".join(texts(app))
+        body = app.aside.body._Static__content.plain
         assert "120" in body and "45" in body
+        assert not any("120" in text or "45" in text for text in texts(app))
     finally:
         await context.__aexit__(None, None, None)
 

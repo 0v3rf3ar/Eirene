@@ -279,7 +279,7 @@ async def test_arrows_drive_the_menu_not_history(workdir):
 
 
 async def test_enter_runs_the_command_straight_away(workdir):
-    """Typing /exit and pressing enter must not need a second enter."""
+    """Typing /usage and pressing enter must not need a second enter."""
     app, pilot, context = await start(workdir)
     try:
         for char in "/usage":
@@ -294,9 +294,9 @@ async def test_enter_runs_the_command_straight_away(workdir):
         assert app.prompt.text == "", "no leftover text to re-send"
         assert app.prompt.recent[-1] == "/usage"
         assert not app.slash.open
-        body = "\n".join(content(b) for b in app.transcript.children
-                          if hasattr(b, "_Static__content"))
+        body = content(app.aside.body)
         assert "nothing sent yet" in body, "the command actually ran"
+        assert app.aside.open
     finally:
         await context.__aexit__(None, None, None)
 
