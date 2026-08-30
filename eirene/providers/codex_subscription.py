@@ -395,27 +395,27 @@ class _AppServer:
 
     async def _read(self) -> None:
         assert self.process is not None and self.process.stdout is not None
-        while line := await self.process.stdout.readline():
-            try:
-                message = json.loads(line)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                continue
-            request_id = message.get("id")
-            if request_id is not None and "method" not in message:
-                future = self.pending.pop(request_id, None)
-                if future is None or future.done():
-                    continue
-                if message.get("error"):
-                    error = message["error"]
-                    future.set_exception(ProviderError(
-                        str(error.get("message") if isinstance(error, dict) else error)))
-                else:
-                    future.set_result(message.get("result") or {})
-            elif request_id is not None and message.get("method"):
-                asyncio.create_task(self._answer_server_request(message))
-            else:
-                await self.notifications.put(message)
-        detail = "".join(self._stderr).strip()[-500:] or "process exited"
+        # Command completion items can contain the full aggregated output in a
+        # single JSONL record. StreamReader.readline() enforces asyncio's 64 KiB
+        # line limit and kills this task when a noisy command crosses it, leaving
+        # the turn waiting for notifications that nobody is reading. Drain fixed
+        # size chunks and frame the JSONL records ourselves instead.
+        buffer = bytearray()
+        reader_error = ""
+        try:
+            while chunk := await self.process.stdout.read(64 * 1024):
+                buffer.extend(chunk)
+                while (newline := buffer.find(b"\n")) >= 0:
+                    self._handle_line(bytes(buffer[:newline]))
+                    del buffer[:newline + 1]
+            if buffer:
+                self._handle_line(bytes(buffer))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            reader_error = f"protocol reader failed: {exc}"
+        detail = (reader_error or "".join(self._stderr).strip()[-500:]
+                  or "process exited")
         error = ConnectionFailed("Codex app-server", detail)
         await self.notifications.put({"method": "error", "params": {
             "error": {"message": error.user_message()}}})
@@ -423,6 +423,32 @@ class _AppServer:
             if not future.done():
                 future.set_exception(error)
         self.pending.clear()
+
+    def _handle_line(self, line: bytes) -> None:
+        """Dispatch one app-server JSONL record without imposing a line limit."""
+        if not line.strip():
+            return
+        try:
+            message = json.loads(line)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return
+        if not isinstance(message, dict):
+            return
+        request_id = message.get("id")
+        if request_id is not None and "method" not in message:
+            future = self.pending.pop(request_id, None)
+            if future is None or future.done():
+                return
+            if message.get("error"):
+                error = message["error"]
+                future.set_exception(ProviderError(
+                    str(error.get("message") if isinstance(error, dict) else error)))
+            else:
+                future.set_result(message.get("result") or {})
+        elif request_id is not None and message.get("method"):
+            asyncio.create_task(self._answer_server_request(message))
+        else:
+            self.notifications.put_nowait(message)
 
     async def _answer_server_request(self, message: dict[str, Any]) -> None:
         try:

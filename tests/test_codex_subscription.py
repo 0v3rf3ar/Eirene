@@ -65,7 +65,8 @@ for line in sys.stdin:
                        {{"step": "Apply fix", "status": "inProgress"}}]}}}},
           {{"method": "item/completed", "params": {{
               "threadId": "thread-1", "turnId": "turn-1",
-              "item": {{"id": "cmd-1", "type": "commandExecution"}}}}}},
+              "item": {{"id": "cmd-1", "type": "commandExecution",
+                       "aggregatedOutput": {aggregated_output}}}}}}},
           {{"method": "turn/completed", "params": {{
               "threadId": "thread-1", "turn": {{"id": "turn-1", "status": "completed"}}}}}},
         ]
@@ -74,10 +75,11 @@ for line in sys.stdin:
 '''
 
 
-def fake_codex(tmp_path, logged_in=True):
+def fake_codex(tmp_path, logged_in=True, large_output=False):
     script = tmp_path / "fake_codex.py"
     script.write_text(FAKE_SERVER.format(
-        python=sys.executable, logged_in="True" if logged_in else "False"),
+        python=sys.executable, logged_in="True" if logged_in else "False",
+        aggregated_output=json.dumps("x" * 100_000 if large_output else "")),
         encoding="utf-8")
     if os.name == "nt":
         path = tmp_path / "fake-codex.cmd"
@@ -111,6 +113,19 @@ async def test_subscription_account_models_and_stream(workdir, tmp_path):
         assert activity.provider_commands() == []
     finally:
         activity.unsubscribe(listener)
+        await provider.close()
+
+
+async def test_large_command_completion_does_not_stall_stream(workdir, tmp_path):
+    provider = CodexSubscription(
+        binary=fake_codex(tmp_path, large_output=True), timeout=2)
+    provider.set_context(workdir, "auto")
+    try:
+        events = [event async for event in provider.stream(
+            [{"role": "user", "content": "run a noisy command"}], "codex-a")]
+        assert isinstance(events[-1], Done)
+        assert activity.provider_commands() == []
+    finally:
         await provider.close()
 
 
