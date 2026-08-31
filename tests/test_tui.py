@@ -2352,6 +2352,8 @@ async def test_permission_highlight_fills_the_whole_row(workdir):
         asking = asyncio.create_task(app.permission.ask("run tests", "requested"))
         await pilot.pause()
         await pilot.pause()
+        assert app.permission.styles.border_top[0] == "round"
+        assert app.permission.styles.margin.top == 1
         body = app.permission._Static__content
         spans = [span for span in body.spans if "reverse" in str(span.style)]
         assert spans

@@ -22,7 +22,9 @@ class PermissionBar(Static):
     PermissionBar {
         width: 1fr;
         height: auto;
+        margin: 1 0 0 0;
         padding: 0 1;
+        border: round $primary;
         background: transparent;
         display: none;
     }
