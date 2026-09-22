@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -10,6 +11,9 @@ import subprocess
 import time
 import uuid
 import zipfile
+import shlex
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,6 +22,16 @@ from .errors import ToolError
 
 MAX_CHECKPOINT_BYTES = 100_000_000
 MAX_DIFF_BYTES = 400_000
+_POLICY = ContextVar("git_execution_policy", default=None)
+
+
+@contextmanager
+def execution_policy(**policy):
+    token = _POLICY.set(policy)
+    try:
+        yield
+    finally:
+        _POLICY.reset(token)
 
 
 @dataclass
@@ -139,16 +153,26 @@ def checkpoint(cwd: Path, label: str = "") -> str:
     checkpoint_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     archive = paths.checkpoints_dir() / f"{checkpoint_id}.zip"
     archive.parent.mkdir(parents=True, exist_ok=True)
-    manifest = {"version": 1, "id": checkpoint_id, "created": time.time(),
+    tracked = _git(state.root, "ls-files", "-z").stdout.split("\0")
+    snapshot_paths = sorted(set(state.paths) | {p for p in tracked if p})
+    manifest = {"version": 2, "id": checkpoint_id, "created": time.time(),
                 "label": label[:120], "root": str(state.root),
                 "branch": state.branch, "head": state.head, "paths": state.paths,
-                "files": []}
+                "files": [], "snapshot_paths": snapshot_paths, "modes": {}, "links": {}}
     total = 0
     try:
         with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
-            for relative in state.paths:
-                target = _inside(state.root, relative)
-                if not target.is_file() or target.is_symlink():
+            index_path = Path(_git(state.root, "rev-parse", "--git-path", "index").stdout.strip())
+            if not index_path.is_absolute():
+                index_path = state.root / index_path
+            if index_path.is_file():
+                bundle.write(index_path, "git-index")
+            for relative in snapshot_paths:
+                target = _snapshot_target(state.root, relative)
+                if target.is_symlink():
+                    manifest["links"][relative] = os.readlink(target)
+                    continue
+                if not target.is_file():
                     continue
                 size = target.stat().st_size
                 total += size
@@ -156,6 +180,7 @@ def checkpoint(cwd: Path, label: str = "") -> str:
                     raise ToolError("checkpoint exceeds the 100 MB safety limit")
                 bundle.write(target, f"files/{relative}")
                 manifest["files"].append(relative)
+                manifest["modes"][relative] = target.stat().st_mode & 0o777
             bundle.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
         if os.name != "nt":
             archive.chmod(0o600)
@@ -180,6 +205,8 @@ def rollback(cwd: Path, checkpoint_id: str) -> str:
         manifest = json.loads(bundle.read("manifest.json"))
         if Path(manifest.get("root", "")).resolve() != root:
             raise ToolError("checkpoint belongs to a different repository")
+        if manifest.get("version") == 2:
+            return _restore_snapshot(root, bundle, manifest, checkpoint_id)
         baseline = set(str(p) for p in manifest.get("paths", []))
         saved = set(str(p) for p in manifest.get("files", []))
         current = set(changed_paths(root))
@@ -187,6 +214,8 @@ def rollback(cwd: Path, checkpoint_id: str) -> str:
         # checkpoint are removed only when Git reports them as changed.
         _git(root, "restore", "--staged", "--worktree", ".", check=False)
         for relative in sorted(current - baseline, reverse=True):
+            if _tracked(root, relative):
+                continue
             target = _inside(root, relative)
             if target.is_file() or target.is_symlink():
                 target.unlink()
@@ -203,6 +232,86 @@ def rollback(cwd: Path, checkpoint_id: str) -> str:
                     shutil.rmtree(target)
                 else:
                     target.unlink()
+    return f"restored checkpoint {checkpoint_id} ({len(baseline)} paths)"
+
+
+def _snapshot_target(root: Path, relative: str) -> Path:
+    path = Path(relative)
+    if path.is_absolute() or ".." in path.parts:
+        raise ToolError("invalid checkpoint path")
+    target = root / path
+    parent = target.parent.resolve()
+    if parent != root and root not in parent.parents:
+        raise ToolError("checkpoint parent escapes repository")
+    return target
+
+
+def _fingerprint(root: Path) -> dict:
+    names = set(changed_paths(root)) | set(_git(root, "ls-files", "-z").stdout.split("\0"))
+    result = {}
+    for name in sorted(names - {""}):
+        target = _snapshot_target(root, name)
+        if target.is_symlink():
+            result[name] = "link:" + os.readlink(target)
+        elif target.is_file():
+            digest = hashlib.sha256()
+            with target.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(65536), b""):
+                    digest.update(chunk)
+            result[name] = f"{target.stat().st_mode}:{digest.hexdigest()}"
+        else:
+            result[name] = "missing"
+    index = Path(_git(root, "rev-parse", "--git-path", "index").stdout.strip())
+    if not index.is_absolute():
+        index = root / index
+    return {"files": result, "index": hashlib.sha256(index.read_bytes()).hexdigest() if index.exists() else "missing"}
+
+
+def seal(cwd: Path, checkpoint_id: str) -> None:
+    """Remember the end of agent work so later user edits block rollback."""
+    root = repository(cwd)
+    if isinstance(root, Path):
+        target = paths.checkpoints_dir() / f"{_safe_id(checkpoint_id)}.after.json"
+        target.write_text(json.dumps(_fingerprint(root)), encoding="utf-8")
+        target.chmod(0o600)
+
+
+def _restore_snapshot(root, bundle, manifest, checkpoint_id):
+    head = _git(root, "rev-parse", "--short", "HEAD", check=False).stdout.strip() or "unborn"
+    if head != manifest["head"]:
+        raise ToolError("HEAD changed since checkpoint; rollback refused")
+    seal_path = paths.checkpoints_dir() / f"{checkpoint_id}.after.json"
+    if seal_path.exists() and json.loads(seal_path.read_text()) != _fingerprint(root):
+        raise ToolError("files changed after the agent finished; rollback would overwrite newer work")
+    baseline = set(manifest["snapshot_paths"])
+    current = set(changed_paths(root)) | set(_git(root, "ls-files", "-z").stdout.split("\0"))
+    # Validate all paths and materialize all archive data before touching the tree.
+    names = (baseline | current) - {""}
+    targets = {name: _snapshot_target(root, name) for name in names}
+    bodies = {name: bundle.read(f"files/{name}") for name in manifest["files"]}
+    links = manifest.get("links", {})
+    for name, target in targets.items():
+        if target.exists() and target.is_dir() and not target.is_symlink():
+            raise ToolError(f"checkpoint file became a directory: {name}")
+    for name, target in targets.items():
+        if target.is_symlink() or (name not in bodies and name not in links and target.is_file()):
+            target.unlink()
+        if name in bodies:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(bodies[name])
+            target.chmod(manifest["modes"].get(name, 0o644))
+        elif name in links:
+            if target.exists():
+                target.unlink()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.symlink_to(links[name])
+    index = Path(_git(root, "rev-parse", "--git-path", "index").stdout.strip())
+    if not index.is_absolute():
+        index = root / index
+    if "git-index" in bundle.namelist():
+        index.write_bytes(bundle.read("git-index"))
+    elif index.exists():
+        index.unlink()
     return f"restored checkpoint {checkpoint_id} ({len(baseline)} paths)"
 
 
@@ -274,11 +383,17 @@ def remove_worktree(cwd: Path, path: str) -> str:
 
 
 def _git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+    argv = ["git", "-c", "core.fsmonitor=false", *args]
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat"}
+    policy = _POLICY.get()
+    if policy and policy.get("backend") != "none":
+        from ..tools import isolation
+        argv = isolation.command(shlex.join(argv), cwd, **policy)
+        env = isolation.environment({"GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat"})
     try:
-        result = subprocess.run(["git", *args], cwd=cwd, text=True,
+        result = subprocess.run(argv, cwd=cwd, text=True,
                                 capture_output=True, timeout=30,
-                                env={**os.environ, "GIT_TERMINAL_PROMPT": "0",
-                                     "GIT_PAGER": "cat"})
+                                env=env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ToolError(f"cannot run Git: {exc}") from exc
     if check and result.returncode:

@@ -17,7 +17,7 @@ from eirene.ui.chat import Block, NoticeBlock
 
 EXPECTED = {"help", "connect", "model", "schedule", "tasks", "exit", "usage", "git", "plan", "plugins", "sessions",
             "skills", "compact", "agents", "btw", "clear", "notification", "theme",
-            "review"}
+            "review", "sandbox", "prompt-suggest"}
 
 
 class Script:
@@ -298,12 +298,13 @@ async def test_usage_before_anything_happens(workdir):
 async def test_usage_counts_a_turn(workdir):
     app, pilot, context = await start(workdir, Script())
     try:
+        transcript_before = texts(app)
         app.agent.usage.record(120, 45, 2.0, "model-a")
         await dispatch(app, "/usage")
         await settle(pilot)
         body = app.aside.body._Static__content.plain
         assert "120" in body and "45" in body
-        assert not any("120" in text or "45" in text for text in texts(app))
+        assert texts(app) == transcript_before
     finally:
         await context.__aexit__(None, None, None)
 

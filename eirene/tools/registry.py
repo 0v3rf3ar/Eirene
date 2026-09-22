@@ -306,6 +306,21 @@ TOOLS: list[Tool] = [
 
 BY_NAME = {tool.name: tool for tool in TOOLS}
 
+for _name in ("run_command", "start_process"):
+    BY_NAME[_name].schema["properties"].update({
+        "read_paths": {"type": "array", "items": {"type": "string"},
+                       "description": "Existing external paths to mount read-only; requires approval."},
+        "write_paths": {"type": "array", "items": {"type": "string"},
+                        "description": "Existing external directories/files to mount writable; requires approval."},
+        "network_access": {"type": "boolean", "description": "Request network access for this command; requires approval."},
+    })
+
+_output_tool = Tool("read_output", READ, "Read a saved tool output artifact by ID and byte offset.", {
+    "type": "object", "properties": {"artifact_id": {"type": "string"},
+    "offset": {"type": "integer"}, "limit": {"type": "integer"}}, "required": ["artifact_id"]})
+TOOLS.append(_output_tool)
+BY_NAME[_output_tool.name] = _output_tool
+
 
 def specs(include_exec: bool = True) -> list[dict[str, Any]]:
     """Schemas in provider-neutral form."""
@@ -363,7 +378,18 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
                   timeout: float | None = None, max_bytes: int = 200_000,
                   on_output: Callable[[str], None] | None = None,
                   isolation: str = "none", isolate_network: bool = False,
-                  plan_scope: str | None = None) -> str:
+                  plan_scope: str | None = None, read_only: bool = False) -> str:
+    with git_ops.execution_policy(backend=isolation, network=not isolate_network,
+                                  read_only=read_only):
+        return await _execute(name, args, box, timeout=timeout, max_bytes=max_bytes,
+                              on_output=on_output, isolation=isolation,
+                              isolate_network=isolate_network, plan_scope=plan_scope,
+                              read_only=read_only)
+
+
+async def _execute(name: str, args: dict[str, Any], box: Sandbox, *,
+                  timeout=None, max_bytes=200_000, on_output=None, isolation="none",
+                  isolate_network=False, plan_scope=None, read_only=False) -> str:
     """Run a tool call and return its text result."""
     if name not in BY_NAME:
         raise ToolError(f"unknown tool '{name}'")
@@ -372,6 +398,13 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
 
     if name == "ask_user":
         return str(args.get("question", "")).strip() or "a question"
+    if name == "read_output":
+        from ..core import artifacts
+        try:
+            return artifacts.read(_text(args, "artifact_id"), int(args.get("offset", 0)),
+                                  int(args.get("limit", 50000)))
+        except (ValueError, OSError) as exc:
+            raise ToolError(f"cannot read output: {exc}") from exc
 
     if name == "run_command":
         command = str(args.get("command", "")).strip()
@@ -382,7 +415,9 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
                                  max_bytes=max_bytes, on_output=on_output,
                                  powershell=bool(args.get("powershell")),
                                  pty=bool(args.get("pty")), isolation=isolation,
-                                 isolate_network=isolate_network)
+                                 isolate_network=isolate_network and not args.get("network_access", False),
+                                 read_paths=args.get("read_paths", []), write_paths=args.get("write_paths", []),
+                                 read_only=read_only)
         if result.refused:
             raise ToolError(result.refused)
         if not result.ok:
@@ -392,7 +427,8 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
     if name == "start_process":
         return await processes.start(_text(args, "command"), box.root,
                                      pty=bool(args.get("pty")), isolation=isolation,
-                                     isolate_network=isolate_network,
+                                     isolate_network=isolate_network and not args.get("network_access", False),
+                                     read_paths=args.get("read_paths", []), write_paths=args.get("write_paths", []),
                                      auto_stop=float(_number(args.get("auto_stop"), 0) or 0))
     if name == "poll_process":
         return await processes.poll(_text(args, "process_id"),
@@ -419,7 +455,9 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
     if name == "language_diagnostics":
         return await language.diagnostics(
             box, _text(args, "path"),
-            float(_number(args.get("timeout"), 30) or 30))
+            float(_number(args.get("timeout"), 30) or 30),
+            isolation=isolation, isolate_network=isolate_network,
+            read_only=read_only)
     if name == "browser_inspect":
         if isolate_network:
             raise ToolError("browser access is disabled by isolate_network")
@@ -486,6 +524,10 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
     if name == "apply_patch":
         return patches.apply(box, _text(args, "patch"))
 
+    if name.startswith("git_"):
+        repo = git_ops.repository(box.root)
+        if repo and repo != box.root:
+            raise ToolError("Git repository extends outside workspace; use an approved shell mount of the repository root")
     if name == "git_status":
         return git_ops.status(box.root)
     if name == "git_diff":
@@ -516,9 +558,11 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
 
 def _run_file_tool(name: str, args: dict[str, Any], box: Sandbox) -> str:
     if name == "read_file":
-        return files.read_file(box, _text(args, "path"),
+        body = files.read_file(box, _text(args, "path"),
                                int(_number(args.get("offset"), 0) or 0),
                                int(_number(args.get("limit"), 0) or 0))
+        scoped = project_ops.scoped_instructions(box.root, box.resolve(_text(args, "path")))
+        return body + ("\n\n" + scoped if scoped else "")
     if name == "read_image":
         from ..core.attachments import prepare_image
         prepare_image(box, _text(args, "path"))
@@ -566,7 +610,10 @@ def touched_path(name: str, args: dict[str, Any]) -> str | None:
 def escape_paths(name: str, args: dict[str, Any]) -> list[str]:
     """Paths a call needs outside the root, mirroring sandbox_escape."""
     if name in ("run_command", "start_process"):
-        return []
+        return [str(p) for key in ("read_paths", "write_paths") for p in args.get(key, [])]
+    if name == "apply_patch":
+        return [patches._name(c.new if c.new != "/dev/null" else c.old)
+                for c in patches.parse(str(args.get("patch", "")))]
     value = args.get("path")
     return [str(value)] if value else []
 
@@ -597,6 +644,23 @@ def preview(name: str, args: dict[str, Any], box: Sandbox) -> str:
 
 def sandbox_escape(name: str, args: dict[str, Any], box: Sandbox) -> str:
     """Reason a call leaves the sandbox, or empty."""
+    if name in ("run_command", "start_process"):
+        for key in ("read_paths", "write_paths"):
+            if not isinstance(args.get(key, []), list) or any(not isinstance(p, str) for p in args.get(key, [])):
+                raise ToolError(f"{key} must be an array of paths")
+        requests = []
+        if args.get("read_paths"):
+            requests.append("read mounts: " + ", ".join(args["read_paths"]))
+        if args.get("write_paths"):
+            requests.append("write mounts: " + ", ".join(args["write_paths"]))
+        if args.get("network_access"):
+            requests.append("network access")
+        if requests:
+            return "requesting " + "; ".join(requests)
+    if name == "apply_patch":
+        outside = [p for p in escape_paths(name, args) if not box.contains(p)]
+        if outside:
+            return "patch outside workspace: " + ", ".join(outside)
     for key in ("path",):
         value = args.get(key)
         if value and not box.contains(str(value)):

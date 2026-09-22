@@ -222,7 +222,7 @@ async def test_plan_mode_hides_the_shell_tool(workdir):
     runner = build(workdir, provider, mode=Mode.PLAN)
     await drive(runner)
     names = {spec["name"] for spec in provider.tools_seen[0]}
-    assert "run_command" not in names
+    assert "run_command" in names  # Execution still enforces read-only policy.
 
 
 async def test_full_providers_receive_complete_web_workflow(workdir):
@@ -624,19 +624,19 @@ async def test_the_model_can_ask_the_user_to_choose(workdir):
     agent.session.close()
 
 
-async def test_auto_mode_exposes_no_question_tool(workdir):
+async def test_auto_mode_exposes_question_tool(workdir):
     provider = Script([TextDelta("done"), Done("stop")])
     agent = build(workdir, provider, mode=Mode.AUTO)
     await drive(agent)
     names = {spec["name"] for spec in provider.tools_seen[0]}
-    assert "ask_user" not in names
+    assert "ask_user" in names
     system = provider.systems[0]
     assert "smallest sufficient number" in system
     assert "root-cause hypothesis" in system
     assert "simple work, act directly without a plan" in system
 
 
-async def test_auto_mode_resolves_a_hallucinated_question_itself(workdir):
+async def test_auto_mode_can_clarify_requirements(workdir):
     asked = []
     provider = Script(
         [ToolCall("c1", "ask_user",
@@ -651,10 +651,10 @@ async def test_auto_mode_resolves_a_hallucinated_question_itself(workdir):
 
     agent.choose = choose
     events = await drive(agent)
-    assert asked == []
+    assert asked == ["which database?"]
     assert "selected sqlite" in text(events)
     result = next(e for e in events if isinstance(e, ToolFinished))
-    assert "decide" in result.result
+    assert result.result == "postgres"
 
 
 async def test_asking_never_prompts_for_permission(workdir):
@@ -706,7 +706,7 @@ async def test_dismissing_the_question_stops_the_turn(workdir):
     agent.session.close()
 
 
-async def test_asking_with_nobody_there_carries_on(workdir):
+async def test_asking_with_nobody_there_stops(workdir):
     agent = build(workdir, Script(
         [ToolCall("c1", "ask_user", {"question": "which?", "options": ["a", "b"]}),
          Done("tool_use")],
@@ -716,18 +716,20 @@ async def test_asking_with_nobody_there_carries_on(workdir):
     events = [event async for event in agent.run("go")]
     finished = [e for e in events if isinstance(e, ToolFinished)]
     assert "no one is here" in finished[0].result
-    assert text(events) == "picked one myself"
+    assert text(events) == ""
+    assert events[-1].status != "completed"
     agent.session.close()
 
 
-async def test_a_question_without_options_is_not_a_dead_end(workdir):
+async def test_a_question_without_options_stops(workdir):
     agent = build(workdir, Script(
         [ToolCall("c1", "ask_user", {"question": "well?"}), Done("tool_use")],
         [TextDelta("carried on"), Done("stop")]))
     agent.choose = lambda question, options: _answer("never asked")
 
     events = [event async for event in agent.run("go")]
-    assert text(events) == "carried on"
+    assert text(events) == ""
+    assert events[-1].status != "completed"
     agent.session.close()
 
 

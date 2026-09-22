@@ -12,7 +12,7 @@ from typing import Any
 from .errors import ConfigError
 from . import paths
 
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 
 DEFAULTS: dict[str, Any] = {
     "version": CONFIG_VERSION,
@@ -32,12 +32,13 @@ DEFAULTS: dict[str, Any] = {
     "log_level": "INFO",
     "log_max_bytes": 2_000_000,
     "log_backups": 3,
-    "execution_isolation": "none",
-    "isolate_network": False,
+    "execution_isolation": "auto",
+    "prompt_suggest": False,
+    "isolate_network": True,
     "plugins": {},
     "hooks": {},
     "mcp_servers": {},
-    "auto_compact": False,
+    "auto_compact": True,
     "model_context_limits": {},
     "model_costs": {},
     "reduce_motion": False,
@@ -221,8 +222,8 @@ def _merge_defaults(data: dict[str, Any]) -> dict[str, Any]:
         merged["mode"] = "manual"
     level = str(merged.get("log_level", "INFO")).upper()
     merged["log_level"] = level if level in VALID_LOG_LEVELS else "INFO"
-    isolation = str(merged.get("execution_isolation", "none")).lower()
-    merged["execution_isolation"] = isolation if isolation in {"none", "bubblewrap"} else "none"
+    merged["execution_isolation"] = "auto"
+    merged.pop("container_image", None)
     store = str(merged.get("credential_store", "file")).lower()
     merged["credential_store"] = store if store in {"file", "keyring"} else "file"
     merged["isolate_network"] = bool(merged.get("isolate_network", False))
@@ -247,6 +248,13 @@ def _migrate(data: dict[str, Any]) -> dict[str, Any]:
         # Version 2 introduced diagnostics/logging settings. Defaults supply
         # their values, so the migration only needs to advance the schema.
         version = 2
+    if version < 3:
+        # Old releases persisted unsafe defaults even when never selected.
+        if migrated.get("execution_isolation", "none") == "none":
+            migrated["execution_isolation"] = "auto"
+        migrated["isolate_network"] = True
+        migrated["auto_compact"] = True
+        version = 3
     migrated["version"] = min(max(version, 1), CONFIG_VERSION)
     return migrated
 

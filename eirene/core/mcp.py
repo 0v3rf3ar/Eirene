@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,8 @@ class MCPClient:
         self.process: asyncio.subprocess.Process | None = None
         self.next_id = 1
         self.lock = asyncio.Lock()
+        self.stderr_tail = bytearray()
+        self.stderr_task = None
 
     async def connect(self) -> list[MCPTool]:
         command = self.definition.get("command")
@@ -52,11 +55,20 @@ class MCPClient:
         configured_env = self.definition.get("env")
         if isinstance(configured_env, dict):
             env.update({str(k): str(v) for k, v in configured_env.items()})
+        backend = self.definition.get("_isolation", "none")
+        if backend != "none":
+            from ..tools import isolation
+            command = isolation.command(shlex.join(command), cwd, backend=backend,
+                network=not self.definition.get("_isolate_network", True),
+                read_paths=self.definition.get("read_paths", []),
+                write_paths=self.definition.get("write_paths", []))
+            env = isolation.environment(configured_env if isinstance(configured_env, dict) else {})
         try:
             self.process = await asyncio.create_subprocess_exec(
                 *command, cwd=str(cwd), env=env, stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 start_new_session=os.name != "nt")
+            self.stderr_task = asyncio.create_task(self._drain_stderr())
             await self.request("initialize", {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},
@@ -133,13 +145,7 @@ class MCPClient:
         except asyncio.TimeoutError as exc:
             raise ToolError(f"MCP server {self.name} timed out") from exc
         if not raw:
-            detail = ""
-            if self.process.stderr:
-                try:
-                    detail = (await asyncio.wait_for(self.process.stderr.read(2000), 1)).decode(
-                        "utf-8", "replace").strip()
-                except asyncio.TimeoutError:
-                    pass
+            detail = self.stderr_tail.decode("utf-8", "replace").strip()
             raise ToolError(f"MCP server {self.name} exited" + (f": {detail}" if detail else ""))
         try:
             value = json.loads(raw)
@@ -152,14 +158,20 @@ class MCPClient:
     async def close(self) -> None:
         process = self.process
         self.process = None
-        if not process or process.returncode is not None:
-            return
-        process.terminate()
-        try:
-            await asyncio.wait_for(process.wait(), 2)
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
+        if process:
+            from ..tools.shell import _kill_tree
+            await _kill_tree(process)
+        if self.stderr_task:
+            self.stderr_task.cancel()
+            await asyncio.gather(self.stderr_task, return_exceptions=True)
+            self.stderr_task = None
+
+    async def _drain_stderr(self):
+        stream = self.process.stderr if self.process else None
+        if stream:
+            while chunk := await stream.read(8192):
+                self.stderr_tail.extend(chunk)
+                del self.stderr_tail[:-8192]
 
 
 class MCPManager:
@@ -203,6 +215,8 @@ class MCPManager:
         await asyncio.gather(*(client.close() for client in self.clients.values()),
                              return_exceptions=True)
         self.clients.clear()
+        self.tools.clear()
+        self.ready = False
 
 
 def _safe(value: str) -> str:

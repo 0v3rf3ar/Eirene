@@ -27,20 +27,50 @@ def read_file(box: Sandbox, path: str, offset: int = 0, limit: int = 0) -> str:
         size = resolved.stat().st_size
         raise ToolError(f"{box.relative(resolved)} is binary ({size} bytes)")
     try:
-        data = resolved.read_bytes()[:MAX_READ_BYTES]
+        start = max(offset, 0)
+        wanted = limit if limit > 0 else 2000
+        chunk = []
+        used = 0
+        more = False
+        with resolved.open("r", encoding="utf-8", errors="replace") as handle:
+            for index, (line, clipped) in enumerate(_bounded_lines(handle)):
+                if index < start:
+                    continue
+                if len(chunk) >= wanted or used + len(line.encode("utf-8")) > MAX_READ_BYTES:
+                    more = True
+                    if not chunk:
+                        chunk.append(line[:MAX_READ_BYTES])
+                    break
+                chunk.append(line.rstrip("\r\n"))
+                used += len(line.encode("utf-8"))
+                if clipped:
+                    more = True
+                    chunk[-1] += " [line truncated at read limit]"
+                    break
     except OSError as exc:
         raise ToolError(f"cannot read {box.relative(resolved)}: {exc}") from exc
-    lines = data.decode("utf-8", "replace").splitlines()
-    start = max(offset, 0)
-    end = start + limit if limit > 0 else len(lines)
-    chunk = lines[start:end]
     if not chunk:
-        return "(empty)" if not lines else f"(no lines at offset {start})"
+        return "(empty)" if start == 0 else f"(no lines at offset {start})"
     width = len(str(start + len(chunk)))
     body = "\n".join(f"{start + i + 1:>{width}}\t{line}" for i, line in enumerate(chunk))
-    if end < len(lines):
-        body += f"\n… {len(lines) - end} more lines"
+    if more:
+        body += f"\n… more lines; continue with offset={start + len(chunk)}"
     return body
+
+
+def _bounded_lines(handle):
+    """Never allocate a whole arbitrarily large physical line."""
+    while True:
+        line = handle.readline(MAX_READ_BYTES)
+        if not line:
+            return
+        clipped = not line.endswith("\n") and len(line) == MAX_READ_BYTES
+        if clipped:
+            while True:
+                rest = handle.readline(MAX_READ_BYTES)
+                if not rest or rest.endswith("\n"):
+                    break
+        yield line, clipped
 
 
 def write_file(box: Sandbox, path: str, content: str) -> str:

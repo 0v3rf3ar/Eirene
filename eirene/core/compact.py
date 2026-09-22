@@ -25,13 +25,21 @@ async def compact(session: Session, provider, model: str) -> tuple[int, int, str
     rebuilt = [Message.user(f"Summary of the conversation so far:\n{summary}"),
                Message.assistant("Understood, continuing from there.")]
     rebuilt.extend(tail)
+    if estimate_messages(rebuilt) >= before:
+        # A complete recent tool group can be large. Keep it paired while
+        # shortening only its result bodies; originals remain in the JSONL log.
+        for message in rebuilt[2:]:
+            if message.get("role") == "tool" and len(str(message.get("content", ""))) > 4000:
+                body = str(message["content"])
+                message["content"] = body[:2000] + "\n[older tool output shortened; see saved transcript/artifact]\n" + body[-2000:]
     session.replace_history(rebuilt, summary)
     return before, estimate_messages(rebuilt), summary
 
 
 async def _summarise(provider, model: str, transcript: str) -> str:
     parts: list[str] = []
-    async for event in provider.stream([Message.user(transcript)], model,
+    stream = getattr(provider, "isolated_stream", provider.stream)
+    async for event in stream([Message.user(transcript)], model,
                                        system=COMPACT_PROMPT, tools=None,
                                        max_tokens=2048):
         if isinstance(event, TextDelta):
@@ -54,12 +62,18 @@ def _transcript(messages: list[dict]) -> str:
         elif role == "tool":
             flag = "ERROR" if message.get("is_error") else "RESULT"
             rows.append(f"{flag}: {content[:600]}")
-    return "\n".join(rows)[:120_000]
+    text = "\n".join(rows)
+    if len(text) > 120_000:
+        return text[:20_000] + "\n[older middle omitted; recent context follows]\n" + text[-100_000:]
+    return text
 
 
 def _safe_tail(messages: list[dict]) -> list[Message]:
     """Keep recent turns without orphaning tool results."""
-    tail = messages[-KEEP_TAIL:]
+    start = max(0, len(messages) - KEEP_TAIL)
+    while start > 0 and messages[start].get("role") == "tool":
+        start -= 1
+    tail = messages[start:]
     while tail and tail[0].get("role") == "tool":
         tail = tail[1:]
     while tail and tail[-1].get("role") == "assistant" and tail[-1].get("tool_calls"):

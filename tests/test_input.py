@@ -549,7 +549,7 @@ def test_every_banner_is_intact():
     from rich.cells import cell_len
     from eirene.ui import art
 
-    assert len(art.BANNERS) == 6
+    assert len(art.BANNERS) == 2
     for text in art.BANNERS:
         lines = text.strip("\n").splitlines()
         assert lines
@@ -564,20 +564,19 @@ def test_banners_are_sorted_by_width():
     from eirene.ui import art
     widths = [size for _, size in art.SIZED]
     assert widths == sorted(widths)
-    assert widths[0] == 16 and widths[-1] == 45
+    assert widths[0] == 16 and widths[-1] == 24
 
 
 def test_banners_include_requested_art_and_all_click_animations():
     from eirene.ui import art
 
-    wanted = ("▄███▄   ▄█ █▄▄▄▄", "┏━╸╻┏━┓┏━╸┏┓╻┏━╸", "██████ ▄▄ ▄▄▄▄",
-              "░█▀▀░▀█▀░█▀▄", "▓█████  ██▓ ██▀███", "▄▄▄ .▪  ▄▄▄")
-    for gone in ("▗▄▄▄▖▄  ▄▄▄ ▗▞▀▚▖", "█▀██▀▀▀"):
+    wanted = ("┏━╸╻┏━┓┏━╸┏┓╻┏━╸", "░█▀▀░▀█▀░█▀▄")
+    for gone in ("▗▄▄▄▖▄  ▄▄▄ ▗▞▀▚▖", "█▀██▀▀▀", "▄▄▄ .▪  ▄▄▄"):
         assert not any(gone in banner for banner in art.BANNERS), gone
     for fragment in wanted:
         assert any(fragment in banner for banner in art.BANNERS), fragment
     effects = {art.banner_animation(banner) for banner in art.BANNERS}
-    assert effects == set(art.EFFECTS), "every banner opens with its own effect"
+    assert effects == set(art.SIGNATURES)
     assert len(art.SIGNATURES) == len(art.BANNERS)
 
 

@@ -59,7 +59,7 @@ class StatusLine(Static):
         self._refresh()
 
     def set_phase(self, phase: str) -> None:
-        if phase != "thinking" and not self.thinking and self.started:
+        if phase not in {"thinking", "reasoning"} and not self.thinking and self.started:
             self.thinking = time.monotonic() - self.started
         self.phase = strip_escapes(phase)
         self._refresh()

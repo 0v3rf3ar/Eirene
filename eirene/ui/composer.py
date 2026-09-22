@@ -115,6 +115,15 @@ class Prompt(TextArea):
         border: none;
         background: transparent;
     }
+    Prompt .text-area--placeholder {
+        color: #777777;
+        text-style: none;
+    }
+    Prompt:light .text-area--placeholder { color: #707070; }
+    Prompt:ansi .text-area--placeholder {
+        color: ansi_bright_black;
+        text-style: dim;
+    }
     """
 
     BINDINGS: list = []
@@ -125,6 +134,9 @@ class Prompt(TextArea):
         def __init__(self, text: str):
             super().__init__()
             self.text = text
+
+    class SuggestionAccepted(Message):
+        """Accept the optional follow-up without submitting it."""
 
     class Draft(Message):
         """The pending text changed."""
@@ -153,6 +165,7 @@ class Prompt(TextArea):
                          show_line_numbers=False, id="prompt")
         self.recent: list[str] = []
         self.menu_open = False
+        self.prompt_suggestion = ""
         self._position = 0
         self._pending = ""
         self._secret = False
@@ -162,12 +175,29 @@ class Prompt(TextArea):
     # value
 
     @property
+    def prompt_suggestion(self) -> str:
+        return getattr(self, "_prompt_suggestion", "")
+
+    @prompt_suggestion.setter
+    def prompt_suggestion(self, value: str) -> None:
+        self._prompt_suggestion = value
+        self.placeholder = "" if getattr(self, "_secret", False) else value
+        self.refresh(layout=True)
+
+    def get_content_height(self, container, viewport, width: int) -> int:
+        if self.placeholder and not self.text:
+            return min(MAX_ROWS, max(1, len(Text(str(self.placeholder)).wrap(
+                self.app.console, max(width, 1)))))
+        return super().get_content_height(container, viewport, width)
+
+    @property
     def secret(self) -> bool:
         return self._secret
 
     @secret.setter
     def secret(self, hide: bool) -> None:
         self._secret = bool(hide)
+        self.placeholder = "" if hide else self.prompt_suggestion
         self._line_cache.clear()
         self.refresh()
 
@@ -249,6 +279,12 @@ class Prompt(TextArea):
 
     async def _on_key(self, event: events.Key) -> None:
         key = event.key
+        if (key in {"tab", "right"} and self.prompt_suggestion and not self.text
+                and not self.menu_open and not self._secret):
+            event.stop()
+            event.prevent_default()
+            self.post_message(self.SuggestionAccepted())
+            return
         if key == "enter":
             event.stop()
             event.prevent_default()

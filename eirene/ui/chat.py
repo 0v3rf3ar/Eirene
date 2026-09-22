@@ -401,6 +401,7 @@ class ToolBlock(Block):
         self.is_error = False
         self.seconds = 0.0
         self.finished = False
+        self.artifact_id = ""
         super().__init__(Text(""))
         self.flush()
 
@@ -440,8 +441,39 @@ class ToolBlock(Block):
 class CommandBlock(ToolBlock):
     """A shell command with an explicit running/success/failure state."""
 
+    def __init__(self, name: str, label: str):
+        self.expanded = False
+        self._saved_key = None
+        self._saved_output = ""
+        super().__init__(name, label)
+
+    def on_click(self, event) -> None:
+        event.stop()
+        self.expanded = not self.expanded
+        self.flush()
+
+    def _detail(self) -> str:
+        if self.artifact_id:
+            from ..core import artifacts
+            try:
+                path = artifacts.location(self.artifact_id)
+                stat = path.stat()
+                limit = 200_000 if self.expanded else 8000
+                key = (self.artifact_id, stat.st_size, stat.st_mtime_ns, limit)
+                if key != self._saved_key:
+                    self._saved_output = strip_escapes(artifacts.read(self.artifact_id, limit=limit))
+                    if self.expanded and stat.st_size > limit:
+                        self._saved_output += "\n[Showing first 200 KB; full output is saved in the output artifact.]"
+                    self._saved_key = key
+                if self._saved_output:
+                    return self._saved_output
+            except (OSError, ValueError):
+                pass
+        return self.output or self.result
+
     def flush(self) -> None:
-        body = Text()
+        # Keep the collapsed preview to two physical rows, even for long lines.
+        body = Text(no_wrap=not self.expanded, overflow="crop" if not self.expanded else "fold")
         if not self.finished:
             color, action = palette.YELLOW, "Running"
         elif self.is_error:
@@ -453,10 +485,13 @@ class CommandBlock(ToolBlock):
         body.append("(")
         body.append(self.label or "(empty)", style="underline")
         body.append(")")
+        body.append("  ▾ collapse" if self.expanded else "  ▸ expand", style="dim")
         if self.finished and self.seconds >= 1:
             body.append(f"  {self.seconds:.0f}s", style="dim")
-        detail = self.result if self.finished else self.output
-        for index, line in enumerate(_tail(detail)):
+        lines = self._detail().splitlines()
+        if not self.expanded:
+            lines = lines[:2]
+        for index, line in enumerate(lines):
             body.append("\n")
             body.append(f"{art.icon('corner')} " if index == 0 else "  ", style="dim")
             body.append(line, style="bold" if self.is_error else "dim")
@@ -467,6 +502,7 @@ class ChangeBlock(Block):
     """A file change, numbered and highlighted."""
 
     def __init__(self, path: str, diff_text: str, action: str = ""):
+        self.diff_text = diff_text
         self.change = diff.parse(path, diff_text, action)
         self.label = path
         self.result = ""

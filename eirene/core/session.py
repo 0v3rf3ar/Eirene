@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import uuid
@@ -159,6 +160,14 @@ class Session:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self._handle = open(self.path, "a", encoding="utf-8")
+            if self.path.stat().st_size:
+                with self.path.open("rb") as previous:
+                    previous.seek(-1, os.SEEK_END)
+                    if previous.read(1) != b"\n":
+                        # Preserve a torn record as an invalid line; never join
+                        # a new valid record onto its incomplete JSON payload.
+                        self._handle.write("\n")
+                        self._handle.flush()
         except OSError as exc:
             raise SessionError(f"cannot open session log: {exc}") from exc
 
@@ -181,8 +190,10 @@ class Session:
         try:
             self._handle.write(json.dumps(record, ensure_ascii=False) + "\n")
             self._handle.flush()
-        except (OSError, TypeError, ValueError):
-            pass
+            if record.get("t") in {"assistant", "tool_state", "tool_result", "compact", "provider_tool"}:
+                os.fsync(self._handle.fileno())
+        except (OSError, TypeError, ValueError) as exc:
+            raise SessionError(f"cannot persist session: {exc}") from exc
 
     def add_user(self, text: str, attachments: list[dict] | None = None) -> Message:
         if not self.name:
@@ -209,12 +220,27 @@ class Session:
         return msg
 
     def add_tool_result(self, call_id: str, name: str, content: str,
-                        is_error: bool = False, seconds: float = 0.0) -> Message:
+                        is_error: bool = False, seconds: float = 0.0,
+                        artifact_id: str = "") -> Message:
         msg = Message.tool(call_id, name, content, is_error, seconds)
+        if artifact_id:
+            msg["artifact_id"] = artifact_id
         self.messages.append(msg)
         self._write({"t": "tool_result", "tool_call_id": call_id, "name": name,
-                     "content": content, "is_error": is_error, "seconds": seconds})
+                     "content": content, "is_error": is_error, "seconds": seconds,
+                     "artifact_id": artifact_id})
         return msg
+
+    def repair_pending(self, reason: str = "interrupted; execution outcome is unknown; inspect state before retrying") -> None:
+        pending = {}
+        for message in self.messages:
+            for call in message.get("tool_calls", []):
+                pending[call["id"]] = call
+            if message.get("role") == "tool":
+                pending.pop(message.get("tool_call_id"), None)
+        for call in pending.values():
+            self.add_tool_result(call["id"], call["name"], reason, True)
+            self.add_note("tool_state", call_id=call["id"], state="outcome_unknown")
 
     def rename(self, name: str) -> None:
         """Give the session a better title."""
@@ -270,8 +296,19 @@ def replay(records: list[dict[str, Any]], *, apply_compaction: bool = True) -> l
                                          record.get("content", ""),
                                          record.get("is_error", False),
                                          float(record.get("seconds") or 0.0)))
+            if record.get("artifact_id"):
+                messages[-1]["artifact_id"] = record["artifact_id"]
         elif kind == "compact" and apply_compaction:
             messages = [Message(m) for m in record.get("messages", [])]
+        elif kind == "provider_tool" and not apply_compaction:
+            if record.get("finished"):
+                msg = Message.tool(record["id"], record["name"], record.get("result", ""),
+                                   bool(record.get("is_error")))
+                msg["artifact_id"] = record.get("artifact_id", "")
+                messages.append(msg)
+            else:
+                messages.append(Message.assistant("", [{"id": record["id"],
+                    "name": record["name"], "arguments": {}, "label": record.get("label", "")}]))
     return messages
 
 

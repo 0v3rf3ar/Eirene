@@ -1023,10 +1023,7 @@ async def test_reasoning_content_is_never_shown(workdir):
             if app.turn and app.turn.done():
                 break
         thoughts = blocks(app, ThinkingBlock)
-        assert thoughts, "the reasoning marker should appear"
-        assert thoughts[0].buffer == "the secret plan"
-        assert all("secret plan" not in content(b) for b in thoughts)
-        assert "reasoning" in content(thoughts[0])
+        assert not thoughts, "reasoning belongs in the status line, not the transcript"
     finally:
         await context.__aexit__(None, None, None)
 
@@ -1860,7 +1857,7 @@ async def test_an_old_input_copies_without_the_marker(workdir):
         await context.__aexit__(None, None, None)
 
 
-async def test_a_heavy_chat_suggests_compacting(workdir):
+async def test_a_heavy_chat_compacts_and_fails_closed_if_budget_is_too_small(workdir):
     from eirene.core.session import Message
 
     provider = Script([TextDelta("ok"), Done("stop")],
@@ -1875,7 +1872,8 @@ async def test_a_heavy_chat_suggests_compacting(workdir):
             if app.turn and app.turn.done():
                 break
         notices = [content(b) for b in blocks(app, NoticeBlock)]
-        assert any("/compact" in text for text in notices)
+        assert any("context compacted" in text for text in notices)
+        assert any("exceeds budget" in text for text in notices)
 
         before = len(notices)
         await type_line(pilot, "again")
@@ -1884,7 +1882,7 @@ async def test_a_heavy_chat_suggests_compacting(workdir):
             if app.turn and app.turn.done():
                 break
         again = [content(b) for b in blocks(app, NoticeBlock)]
-        assert len([t for t in again if "/compact" in t]) == 1, "warn once only"
+        assert any("exceeds budget" in text for text in again)
         assert len(again) >= before
     finally:
         await context.__aexit__(None, None, None)
@@ -2809,7 +2807,7 @@ def test_no_effect_ever_changes_the_shape_of_the_drawing():
 def test_assembling_glyphs_travel_without_ever_being_lost():
     from eirene.ui import art
 
-    rows = art.BANNERS[5].strip("\n").splitlines()
+    rows = art.BANNERS[1].strip("\n").splitlines()
     span = art.effect_span("assemble")
     inventory = sorted(glyph for glyph in "".join(rows) if glyph != " ")
     scattered = False
@@ -2824,7 +2822,7 @@ def test_assembling_glyphs_travel_without_ever_being_lost():
 def test_rain_only_ever_falls_through_the_gaps():
     from eirene.ui import art
 
-    rows = art.BANNERS[2].strip("\n").splitlines()
+    rows = art.BANNERS[0].strip("\n").splitlines()
     width = max(len(line) for line in rows)
     span = art.effect_span("rain")
     fell = False
@@ -2844,7 +2842,7 @@ def test_rain_only_ever_falls_through_the_gaps():
 def test_the_scan_bar_sweeps_the_whole_drawing():
     from eirene.ui import art
 
-    rows = art.BANNERS[4].strip("\n").splitlines()
+    rows = art.BANNERS[0].strip("\n").splitlines()
     span = art.effect_span("scan")
     columns = set()
     for tick in range(span + 1):
@@ -2858,7 +2856,7 @@ def test_each_banner_opens_with_its_own_effect_then_cycles():
     from eirene.ui import art
 
     signatures = {art.banner_animation(picture) for picture in art.BANNERS}
-    assert signatures == set(art.EFFECTS), "every effect should be some banner's own"
+    assert signatures == set(art.SIGNATURES)
     seen, effect = [], art.banner_animation(art.BANNERS[0])
     for _ in art.EFFECTS:
         seen.append(effect)
@@ -3253,7 +3251,7 @@ async def test_banner_animations_follow_the_theme(workdir, key):
         assert len(set(ramp.steps)) == len(ramp.steps), f"{key} repeats a ramp step"
         banner = blocks(app, ArtBlock)[0]
         for index, effect in enumerate(art.EFFECTS):
-            banner.art = art.BANNERS[index].strip("\n")
+            banner.art = art.BANNERS[index % len(art.BANNERS)].strip("\n")
             banner._animation = effect
             banner._span = art.effect_span(effect)
             styles = set()

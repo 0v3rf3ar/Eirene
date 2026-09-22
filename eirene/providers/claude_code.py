@@ -102,12 +102,14 @@ class ClaudeCode(Provider):
             if history:
                 prompt = f"Prior Eirene conversation:\n{history}\n\nCurrent user request:\n{prompt}"
 
-        gate = self.mode == "manual" and self.approve is not None
-        asking = self.mode != "auto" and self.choose is not None
+        gate = self.mode != "plan" and self.approve is not None
+        asking = self.choose is not None
         broker = None
         args = ["-p", prompt, "--output-format", "stream-json",
                 "--verbose", "--include-partial-messages", "--model", model,
                 "--permission-mode", self._permission_mode(),
+                "--settings", json.dumps({"sandbox": {"enabled": True,
+                    "allowUnsandboxedCommands": False, "failIfUnavailable": True}}),
                 "--append-system-prompt", _system_prompt(system, asking)]
         if gate or asking:
             broker = PermissionBroker(self.root, self.approve if gate else None,
@@ -294,7 +296,7 @@ READ_TOOLS = ("Read", "Grep", "Glob", "WebFetch", "WebSearch", "NotebookRead",
 WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 LABEL_KEYS = ("file_path", "path", "command", "pattern", "query", "url",
               "description", "prompt", "name")
-RESULT_LIMIT = 400
+RESULT_LIMIT = 20_000_000
 
 
 CHANGE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
@@ -330,7 +332,7 @@ def _tool_label(name: str, raw: Any, root: Path) -> str:
                 text = str(Path(text).relative_to(root))
             except ValueError:
                 pass
-        return text[:120]
+        return text[:10000 if key == "command" else 120]
     return name
 
 

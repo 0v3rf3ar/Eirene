@@ -270,7 +270,7 @@ class CodexSubscription(Provider):
             return {"approvalPolicy": "never",
                     "sandboxPolicy": {"type": "readOnly"}}
         if self.mode == "auto":
-            return {"approvalPolicy": "never", "sandboxPolicy": {
+            return {"approvalPolicy": "on-request", "sandboxPolicy": {
                 "type": "workspaceWrite", "writableRoots": [str(self.root)],
                 "networkAccess": False}}
         # "on-request" lets Codex write inside the workspace unasked, which is
@@ -292,12 +292,12 @@ class CodexSubscription(Provider):
                            for option in question.get("options") or []
                            if isinstance(option, dict) and option.get("label")]
                 answer = None
-                if self.mode != "auto" and self.choose is not None:
+                if self.choose is not None:
                     answer = await self.choose(str(question.get("question") or ""),
                                                options)
                 answers[question_id] = {"answers": [answer] if answer else []}
             return {"answers": answers}
-        if self.mode != "manual" or self.approve is None:
+        if self.mode == "plan" or self.approve is None:
             return {"decision": "decline"}
         if method == "item/commandExecution/requestApproval":
             command = params.get("command") or []
@@ -497,7 +497,7 @@ def _item_tool(item: dict[str, Any], root: Path) -> ProviderTool | None:
         changes = [change for change in item.get("changes") or []
                    if isinstance(change, dict)]
         label, preview = _file_change_preview(changes, root)
-    return ProviderTool(item_id, name, label[:120] or name, kind, preview=preview)
+    return ProviderTool(item_id, name, label[:10000 if kind == "exec" else 120] or name, kind, preview=preview)
 
 
 def _relative(path: str, root: Path) -> str:
@@ -508,10 +508,10 @@ def _relative(path: str, root: Path) -> str:
 
 
 def _item_result(item: dict[str, Any]) -> str:
-    for key in ("output", "result", "summary", "status"):
+    for key in ("aggregatedOutput", "output", "result", "summary", "status"):
         value = item.get(key)
         if isinstance(value, str) and value.strip():
-            return value[:400]
+            return value[:20_000_000]
     return ""
 
 

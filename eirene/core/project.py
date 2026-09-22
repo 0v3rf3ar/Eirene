@@ -95,6 +95,13 @@ def _scan(root: Path) -> ProjectProfile:
             manifests.append(name)
             frameworks.append(framework)
             commands.extend(suggested)
+    if (root / "package.json").is_file():
+        try:
+            scripts = json.loads((root / "package.json").read_text()).get("scripts", {})
+            commands = [c for c in commands if c not in MANIFESTS["package.json"][1]]
+            commands.extend(f"npm run {name}" for name in ("test", "lint", "typecheck", "build") if name in scripts)
+        except (OSError, ValueError, AttributeError):
+            pass
     instructions = [name for name in INSTRUCTION_FILES if (root / name).is_file()]
     instruction_parts = []
     remaining = MAX_INSTRUCTION_CHARS
@@ -161,3 +168,23 @@ def _save(cache: Path, signature: str, profile: ProjectProfile) -> None:
             cache.chmod(0o600)
     except OSError:
         pass
+
+
+def scoped_instructions(root: Path, target: Path) -> str:
+    """Return nested instructions, outer to inner, for one path."""
+    root, target = root.resolve(), target.resolve()
+    if target != root and root not in target.parents:
+        return ""
+    directory = target if target.is_dir() else target.parent
+    parents = []
+    while directory != root:
+        parents.append(directory)
+        directory = directory.parent
+    rows = []
+    for parent in reversed(parents):
+        for name in ("AGENTS.md", "EIRENE.md", "CLAUDE.md"):
+            file = parent / name
+            if file.is_file() and root in file.resolve().parents:
+                with file.open(encoding="utf-8", errors="replace") as handle:
+                    rows.append(f"Instructions scoped to {parent.relative_to(root)}/ ({name}):\n" + handle.read(MAX_INSTRUCTION_CHARS))
+    return "\n\n".join(rows)

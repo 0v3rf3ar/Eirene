@@ -22,9 +22,12 @@ tasks when an interactive session is not needed.
 
 It works with API-based providers as well as existing Codex and Claude Code
 subscriptions. File and command permissions can be switched between manual, auto,
-and read-only planning modes. The project sandbox helps prevent accidental access
-outside the selected directory, but it is not a replacement for a container or an
-OS-level sandbox.
+and read-only planning modes. Commands use kernel-enforced isolation by default.
+Commands automatically use Bubblewrap on Linux; no Docker, Podman, or images are needed.
+Bubblewrap must be installed and user namespaces enabled. `/sandbox` shows status.
+Approved edits update the actual project. Additional host paths and command network
+access require explicit grants. See [execution and recovery](docs/harness.md) for
+setup, scope, and limitations.
 
 ## Install
 

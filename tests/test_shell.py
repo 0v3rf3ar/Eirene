@@ -158,7 +158,7 @@ async def test_capture_keeps_head_and_tail():
     "wc -l file", "find . -name '*.py'", "ping -c 4 example.com",
     "git status", "git log --oneline", "git diff", "ls -la | grep py",
     "cd src && ls", "which python3", "uname -a", "ps aux", "df -h",
-    "diff a.txt b.txt", "sort names.txt | uniq",
+    "diff a.txt b.txt", "sort names.txt",
 ])
 def test_read_only_commands_are_safe(command):
     assert shell.is_safe(command) is True

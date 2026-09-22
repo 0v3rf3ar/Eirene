@@ -61,7 +61,7 @@ def decide(mode: Mode, kind: str, escape: str = "") -> tuple[str, str]:
         if verdict == BLOCK:
             return BLOCK, "plan mode makes no changes"
         if escape:
-            return BLOCK, escape
+            return ASK, escape
         return ALLOW, ""
     if escape:
         # Leaving the sandbox is worth one question, not a dead end.

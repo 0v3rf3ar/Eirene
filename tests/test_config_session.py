@@ -78,11 +78,11 @@ def test_execution_isolation_is_validated():
         "execution_isolation": "bubblewrap", "isolate_network": True,
     }), encoding="utf-8")
     config = Config.load()
-    assert config.get("execution_isolation") == "bubblewrap"
+    assert config.get("execution_isolation") == "auto"
     assert config.get("isolate_network") is True
     paths.config_file().write_text(json.dumps({"execution_isolation": "magic"}),
                                    encoding="utf-8")
-    assert Config.load().get("execution_isolation") == "none"
+    assert Config.load().get("execution_isolation") == "auto"
 
 
 def test_env_key_wins(monkeypatch):

@@ -38,7 +38,7 @@ from .ui.theme import THEMES
 from .ui.format import display_path
 from .ui.aside import AsidePanel
 from .ui.chat import (AnswerBlock, ArtBlock, BackToBottom, ChangeBlock, CommandBlock,
-                      DiffBlock, NoticeBlock, PromptNavigator, ThinkingBlock,
+                      DiffBlock, NoticeBlock, PromptNavigator,
                       ToolBlock, Transcript, UserBlock)
 from .ui.complete import SlashMenu
 from .ui.composer import Composer, ModeLine, Prompt
@@ -52,7 +52,7 @@ TAB_TICK = 0.25
 IDLE_ESCAPE_WINDOW = 2.0
 
 
-SHELL_TOOLS = ("run_command", "Bash", "BashOutput", "KillShell")
+SHELL_TOOLS = ("run_command", "start_process", "poll_process", "Bash", "BashOutput", "KillShell")
 
 
 def _fit(value: str, width: int) -> str:
@@ -111,6 +111,10 @@ class Eirene(App):
         self._tab_timer = None
         self._flusher = None
         self._idle_escape_at = 0.0
+        self._suggestion_generation = 0
+        self._suggestion_task = None
+        self._suggestion_status = "Waiting for a completed reply"
+        self._last_suggestion_exchange = None
 
     # layout
 
@@ -274,7 +278,7 @@ class Eirene(App):
                         card = await self.push(ChangeBlock(
                             label, str(call.get("preview") or ""),
                             str(call.get("action") or "Update")))
-                    elif call.get("name") == "run_command":
+                    elif call.get("name") in SHELL_TOOLS:
                         card = await self.push(CommandBlock(call.get("name", ""), label))
                     else:
                         card = await self.push(ToolBlock(call.get("name", ""), label))
@@ -283,6 +287,7 @@ class Eirene(App):
             elif role == "tool":
                 card = cards.get(str(message.get("tool_call_id", "")))
                 if card is not None:
+                    card.artifact_id = str(message.get("artifact_id") or "")
                     card.finish(body, bool(message.get("is_error")),
                                 float(message.get("seconds") or 0.0))
                     card.flush()
@@ -368,6 +373,8 @@ class Eirene(App):
 
     def on_prompt_draft(self, message: Prompt.Draft) -> None:
         """Keep the slash menu in step with the draft."""
+        if message.text:
+            self.clear_prompt_suggestion()
         if not message.suggest:
             self.slash.close()
             self.prompt.menu_open = False
@@ -408,6 +415,7 @@ class Eirene(App):
 
     async def on_prompt_sent(self, message: Prompt.Sent) -> None:
         self._idle_escape_at = 0.0
+        self.clear_prompt_suggestion()
         text = message.text
         self.slash.close()
         self.prompt.menu_open = False
@@ -418,7 +426,9 @@ class Eirene(App):
             self._start_command(text)
             return
         if self.turn and not self.turn.done():
-            self.say("still working - use /btw to ask something on the side", "warn")
+            self.agent.steer(text)
+            await self.push(UserBlock(text))
+            self.say("queued for the next safe execution boundary")
             return
         old_plan = plan_mod.load(self.sandbox.root, self.session.id)
         if old_plan.steps and all(step.status in {"completed", "blocked"}
@@ -506,7 +516,8 @@ class Eirene(App):
         native_change = name.startswith("native_")
         if native_change and preview:
             name = name.removeprefix("native_")
-            await self.push(DiffBlock(f"{name} {label}", preview))
+            if not any(card.diff_text == preview for card in self.transcript.query(ChangeBlock)):
+                await self.push(ChangeBlock(label, preview, self._change_action(label)))
         if preview and name not in ("run_command",) + agent_mod.CHANGE_TOOLS:
             if not native_change:
                 await self.push(DiffBlock(f"{name} {label}", preview))
@@ -519,21 +530,30 @@ class Eirene(App):
     # the turn
 
     async def _run_turn(self, text: str, *, record_text: str | None = None) -> None:
+        self.clear_prompt_suggestion()
         self.status.start()
         self.mark_busy(True)
         answer: AnswerBlock | None = None
-        thought: ThinkingBlock | None = None
+        reply_text = ""
+        suggestion_release = asyncio.Event()
+        suggestion_started = False
+        turn_completed = False
         cards: dict[str, ToolBlock] = {}
         try:
             async for event in self.agent.run(text, record_text=record_text):
                 if isinstance(event, agent_mod.Answer):
+                    reply_text += event.text
                     if answer is None:
                         answer = await self.push(AnswerBlock(), live=True)
                     answer.feed(event.text)
+                    if ((not suggestion_started or self._suggestion_task is None)
+                            and self.config.get("prompt_suggest", False)
+                            and not self.prompt.text):
+                        self._offer_prompt_suggestion(record_text or text, reply_text,
+                                                      reveal_after=suggestion_release)
+                        suggestion_started = True
                 elif isinstance(event, agent_mod.Thought):
-                    if thought is None:
-                        thought = await self.push(ThinkingBlock(), live=True)
-                    thought.feed(event.text)
+                    self.status.set_phase("reasoning")
                 elif isinstance(event, agent_mod.Phase):
                     self.status.set_phase(event.name)
                 elif isinstance(event, agent_mod.Tokens):
@@ -547,12 +567,16 @@ class Eirene(App):
                         plan_mod.clear(self.sandbox.root, self.session.id)
                     self.refresh_plan()
                 elif isinstance(event, agent_mod.ToolPreview):
-                    answer = thought = None
+                    self.clear_prompt_suggestion()
+                    suggestion_started = False
+                    answer = None
                     cards[event.id] = await self.push(
                         ChangeBlock(event.label, event.diff,
                                     self._change_action(event.label)), live=True)
                 elif isinstance(event, agent_mod.ToolStarted):
-                    answer = thought = None
+                    self.clear_prompt_suggestion()
+                    suggestion_started = False
+                    answer = None
                     if (event.name not in {"plan_update", "plan_set_status", "plan_clear"}
                             and event.id not in cards):
                         block = (CommandBlock(event.name, event.label)
@@ -563,6 +587,8 @@ class Eirene(App):
                     card = cards.get(event.id)
                     if card:
                         card.feed(event.chunk)
+                        if event.artifact_id:
+                            card.artifact_id = event.artifact_id
                 elif isinstance(event, agent_mod.ToolFinished):
                     if event.name in {"plan_update", "plan_set_status", "plan_clear"}:
                         self.refresh_plan()
@@ -574,20 +600,26 @@ class Eirene(App):
                                  else ToolBlock(event.name, event.label))
                         card = await self.push(block)
                     card.finish(event.result, event.is_error, event.seconds)
+                    card.artifact_id = event.artifact_id
                     card.flush()
                 elif isinstance(event, agent_mod.Notice):
-                    answer = thought = None
+                    answer = None
                     await self.push(NoticeBlock(event.text, "warn"))
                 elif isinstance(event, agent_mod.Failed):
-                    answer = thought = None
+                    answer = None
                     await self.push(NoticeBlock(event.text, "fail"))
                 elif isinstance(event, agent_mod.TurnDone):
                     self.transcript.settle()
                     self.status.stop(self._turn_note(event))
                     self._announce_done(event, answer)
                     self._name_the_session(record_text or text, answer)
-                    await self._manage_context()
                     self._offer_choices(answer)
+                    if event.status == "completed":
+                        turn_completed = True
+                        self._last_suggestion_exchange = (self.session.id, record_text or text, reply_text)
+                        if not suggestion_started:
+                            self._offer_prompt_suggestion(record_text or text, reply_text)
+                        suggestion_release.set()
         except asyncio.CancelledError:
             try:
                 self.transcript.settle()
@@ -597,6 +629,8 @@ class Eirene(App):
                 pass
             raise
         finally:
+            if not turn_completed:
+                self.clear_prompt_suggestion()
             self.mark_busy(False)
             try:
                 if self.status.active:
@@ -628,6 +662,97 @@ class Eirene(App):
             return
         self.session.rename(title)
         self.name_the_tab()
+
+    def clear_prompt_suggestion(self) -> None:
+        self._suggestion_generation += 1
+        if self._suggestion_task is not None and not self._suggestion_task.done():
+            self._suggestion_task.cancel()
+        self._suggestion_task = None
+        self.prompt.prompt_suggestion = ""
+
+    def _set_suggestion_status(self, text: str) -> None:
+        self._suggestion_status = text
+        if self.aside.open and self.aside._toggle_callback == self.set_prompt_suggestions:
+            from .commands.prompt_suggest import show
+            show(self)
+
+    def set_prompt_suggestions(self, enabled: bool) -> None:
+        self.config.set("prompt_suggest", enabled)
+        self.config.save()
+        self.clear_prompt_suggestion()
+        self._set_suggestion_status("Waiting for a completed reply" if enabled else "Disabled")
+        if not enabled or (self.turn and not self.turn.done()):
+            return
+        exchange = self._last_suggestion_exchange
+        if exchange and exchange[0] == self.session.id:
+            self._offer_prompt_suggestion(exchange[1], exchange[2])
+            return
+        # Enabling after a reply (including a resumed session) should work now,
+        # not require the user to send another prompt first.
+        request = reply = ""
+        for message in self.session.messages:
+            if message.get("role") == "user":
+                request, reply = str(message.get("content") or ""), ""
+            elif message.get("role") == "assistant" and message.get("content"):
+                reply = str(message["content"])
+        if request and reply:
+            self._offer_prompt_suggestion(request, reply)
+
+    def on_prompt_suggestion_accepted(self, message: Prompt.SuggestionAccepted) -> None:
+        if self.picker.waiting or self.permission.waiting or self.prompt.text:
+            return
+        suggestion = self.prompt.prompt_suggestion
+        self.clear_prompt_suggestion()
+        if suggestion:
+            self._set_suggestion_status("Copied to input")
+            self.prompt.value = suggestion
+            self.prompt.focus()
+
+    def _offer_prompt_suggestion(self, request: str, answer, *, reveal_after=None) -> None:
+        if not self.config.get("prompt_suggest", False):
+            return
+        if not self.agent.ready:
+            self._set_suggestion_status("Connect a provider first (/connect)")
+            return
+        reply = answer if isinstance(answer, str) else getattr(answer, "buffer", "") or ""
+        if not reply.strip():
+            self._set_suggestion_status("Waiting for a completed reply")
+            return
+        self.clear_prompt_suggestion()
+        generation = self._suggestion_generation
+        session = self.session
+        self._set_suggestion_status("Generating…")
+        async def generate():
+            try:
+                suggestion = await asyncio.wait_for(self.agent.suggest_prompt(request, reply), 120)
+                if (generation != self._suggestion_generation
+                        or session is not self.session or self.prompt.text
+                        or not self.config.get("prompt_suggest", False)):
+                    return
+                if not suggestion:
+                    self._set_suggestion_status("No suggestion returned; switch off/on to retry")
+                    return
+                if reveal_after is not None:
+                    self._set_suggestion_status("Prepared · waiting for answer to finish")
+                    await reveal_after.wait()
+                if (generation != self._suggestion_generation or self.prompt.text
+                        or session is not self.session or not self.config.get("prompt_suggest", False)):
+                    return
+                # Don't discard a valid suggestion just because a choice UI is
+                # momentarily open. New input/turns cancel this task instead.
+                while self.picker.waiting or self.permission.waiting:
+                    await asyncio.sleep(0.1)
+                self.prompt.prompt_suggestion = suggestion
+                self._set_suggestion_status("Ready · Tab or → to accept")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                detail = "Request timed out" if isinstance(exc, asyncio.TimeoutError) else "Provider request failed"
+                self._set_suggestion_status(detail + "; switch off/on to retry")
+        task = asyncio.create_task(generate())
+        self._suggestion_task = task
+        self.asides.add(task)
+        task.add_done_callback(self.asides.discard)
 
     def _offer_choices(self, answer) -> None:
         """A question in prose still becomes a choice."""
@@ -696,6 +821,8 @@ class Eirene(App):
         notify.send(title, body or f"done in {event.seconds:.0f}s")
 
     def _turn_note(self, event: agent_mod.TurnDone) -> str:
+        if event.status != "completed":
+            return f"{event.status} · {event.seconds:.0f}s"
         if event.seconds < 1 and not event.usage.total:
             return ""
         parts = [f"{event.seconds:.0f}s"]
@@ -708,7 +835,11 @@ class Eirene(App):
     # actions
 
     def action_interrupt(self) -> None:
-        """Esc, in priority order."""
+        """Close an output viewer before interrupting work underneath it."""
+        from .ui.output import OutputScreen
+        if isinstance(self.screen, OutputScreen):
+            self.screen.dismiss()
+            return
         if self.aside.open:
             self.aside.close()
             self.prompt.focus()
@@ -782,6 +913,7 @@ class Eirene(App):
 
     def clear_session(self) -> None:
         """Forget this session and its log."""
+        self.clear_prompt_suggestion()
         if self.turn and not self.turn.done():
             self.say("still working - press esc first", "warn")
             return
@@ -800,6 +932,7 @@ class Eirene(App):
 
     async def switch_session(self, session_id: str) -> None:
         """Replace the active session and redraw its saved conversation."""
+        self.clear_prompt_suggestion()
         if session_id == self.session.id:
             self.say("already in that session")
             return

@@ -139,6 +139,20 @@ def _safe_segment(segment: str) -> bool:
         name = name[:-4]
     if name not in SAFE:
         return False
+    # Never classify a caller-supplied executable by basename alone.
+    if tokens[0] != name or name in {"env", "uniq", "date", "hostname", "chcp"}:
+        return False
+    if name == "sort":
+        return not any(a.startswith(("-o", "--output", "--compress-program"))
+                       or (a.startswith("-") and not a.startswith("--") and "o" in a)
+                       for a in tokens[1:])
+    if name == "git":
+        args = tokens[1:]
+        return bool(args) and args[0] in {"status", "log", "diff", "show", "describe",
+                                         "rev-parse", "ls-files", "blame", "shortlog"} and not any(
+            a.startswith(("--output", "--ext-diff", "--textconv")) for a in args)
+    if name == "find" and any(a.startswith(("-fprint", "-fprintf", "-fls")) for a in tokens[1:]):
+        return False
     check = SAFE[name]
     if check is None:
         return True
@@ -295,6 +309,9 @@ def _spawn_kwargs() -> dict:
 
 
 async def _kill_tree(process: asyncio.subprocess.Process) -> None:
+    await _terminate_tree(process)
+
+async def _terminate_tree(process: asyncio.subprocess.Process) -> None:
     """Kill the process and its children."""
     if process.returncode is not None:
         return
@@ -385,7 +402,8 @@ async def run(command: str, cwd: Path, *, timeout: float | None = None,
               powershell: bool = False,
               allow_blocked: bool = False,
               stall: float = DEFAULT_STALL, pty: bool = False,
-              isolation: str = "none", isolate_network: bool = False) -> ShellResult:
+              isolation: str = "none", isolate_network: bool = False,
+              read_paths=(), write_paths=(), read_only: bool = False) -> ShellResult:
     """Run a command, guaranteed to return."""
     loop = asyncio.get_running_loop()
     started = loop.time()
@@ -409,7 +427,8 @@ async def run(command: str, cwd: Path, *, timeout: float | None = None,
                 actual = _pty_command(command)
             process = await _start(actual, cwd, env, powershell,
                                    isolation=isolation,
-                                   isolate_network=isolate_network)
+                                   isolate_network=isolate_network, read_paths=read_paths,
+                                   write_paths=write_paths, read_only=read_only)
             item.process = process
         except (OSError, ValueError) as exc:
             raise ToolError(f"cannot start command: {exc}") from exc
@@ -446,29 +465,24 @@ async def run(command: str, cwd: Path, *, timeout: float | None = None,
 async def _start(command: str, cwd: Path, env: dict[str, str] | None,
                  powershell: bool, *, stdin=subprocess.DEVNULL,
                  isolation: str = "none",
-                 isolate_network: bool = False) -> asyncio.subprocess.Process:
+                 isolate_network: bool = False, read_paths=(), write_paths=(),
+                 read_only: bool = False) -> asyncio.subprocess.Process:
     kwargs = dict(cwd=str(cwd), env=_child_env(env), stdin=stdin,
                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **_spawn_kwargs())
+    if isolation != "none" or read_only:
+        from . import isolation as environments
+        argv = environments.command(command, cwd, backend=isolation,
+                                    network=not isolate_network, read_paths=read_paths,
+                                    write_paths=write_paths, read_only=read_only)
+        kwargs["env"] = environments.environment({**NONINTERACTIVE_ENV, **(env or {})})
+        process = await asyncio.create_subprocess_exec(*argv, **kwargs)
+        return process
     if powershell and IS_WINDOWS:
         exe = "pwsh" if _has("pwsh") else "powershell"
         return await asyncio.create_subprocess_exec(
             exe, "-NoProfile", "-NonInteractive", "-Command", command, **kwargs)
     if IS_WINDOWS:
         return await asyncio.create_subprocess_exec("cmd", "/d", "/c", command, **kwargs)
-    if isolation == "bubblewrap":
-        from shutil import which
-        executable = which("bwrap")
-        if not executable:
-            raise ToolError("Bubblewrap isolation requested but 'bwrap' is unavailable")
-        root = str(cwd.resolve())
-        argv = [executable, "--die-with-parent", "--new-session", "--unshare-pid",
-                "--unshare-ipc", "--unshare-uts", "--ro-bind", "/", "/",
-                "--bind", root, root, "--dev", "/dev", "--proc", "/proc",
-                "--tmpfs", "/tmp", "--chdir", root]
-        if isolate_network:
-            argv.append("--unshare-net")
-        argv.extend(["/bin/sh", "-c", command])
-        return await asyncio.create_subprocess_exec(*argv, **kwargs)
     return await asyncio.create_subprocess_exec("/bin/sh", "-c", command, **kwargs)
 
 

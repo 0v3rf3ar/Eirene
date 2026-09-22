@@ -145,7 +145,7 @@ async def test_subscription_device_login_is_codex_managed(tmp_path):
 def test_mode_policies_are_safe_and_native(workdir):
     provider = CodexSubscription()
     provider.set_context(workdir, "auto")
-    assert provider._turn_policy()["approvalPolicy"] == "never"
+    assert provider._turn_policy()["approvalPolicy"] == "on-request"
     assert provider._turn_policy()["sandboxPolicy"]["type"] == "workspaceWrite"
     provider.set_context(workdir, "manual")
     assert provider._turn_policy()["approvalPolicy"] == "untrusted", (

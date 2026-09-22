@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import shlex
 from pathlib import Path
 
 from ..core.errors import ToolError
@@ -16,7 +17,9 @@ from .sandbox import Sandbox
 MAX_OUTPUT = 80_000
 
 
-async def diagnostics(box: Sandbox, path: str, timeout: float = 30) -> str:
+async def diagnostics(box: Sandbox, path: str, timeout: float = 30, *,
+                      isolation: str = "none", isolate_network: bool = True,
+                      read_only: bool = False) -> str:
     target = box.resolve(path)
     if not target.is_file():
         raise ToolError(f"not a file: {path}")
@@ -28,6 +31,21 @@ async def diagnostics(box: Sandbox, path: str, timeout: float = 30) -> str:
         except (OSError, json.JSONDecodeError) as exc:
             return str(exc)
     command = _diagnostic_command(target, suffix)
+    if suffix == ".rs" and (box.root / "Cargo.toml").is_file() and shutil.which("cargo"):
+        command = [shutil.which("cargo"), "check", "--offline", "--message-format=short",
+                   "--target-dir", "/tmp/eirene-cargo-target"]
+    if suffix == ".go" and (box.root / "go.mod").is_file() and shutil.which("go"):
+        command = [shutil.which("go"), "test", "-run", "^$", "./..."]
+    if suffix in {".ts", ".tsx"} and (box.root / "tsconfig.json").is_file():
+        compiler = box.root / "node_modules" / ".bin" / "tsc"
+        executable = str(compiler) if compiler.exists() else shutil.which("tsc")
+        command = [executable, "--noEmit", "--pretty", "false", "--project", str(box.root / "tsconfig.json")] if executable else None
+    if (isolation != "none" or read_only) and command is not None:
+        from . import shell
+        result = await shell.run(shlex.join(command), box.root, timeout=timeout,
+                                 isolation=isolation, isolate_network=isolate_network,
+                                 read_only=read_only)
+        return result.output.strip() or ("no syntax diagnostics" if result.ok else result.summary())
     if command is None:
         raise ToolError(f"no installed diagnostic engine supports {suffix or 'this file'}")
     process = await asyncio.create_subprocess_exec(

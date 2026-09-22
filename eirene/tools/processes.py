@@ -42,7 +42,7 @@ _processes: dict[str, ManagedProcess] = {}
 
 async def start(command: str, cwd: Path, *, pty: bool = False,
                 isolation: str = "none", isolate_network: bool = False,
-                auto_stop: float = 0) -> str:
+                auto_stop: float = 0, read_paths=(), write_paths=()) -> str:
     reap()
     if len([item for item in _processes.values() if item.running]) >= MAX_PROCESSES:
         raise ToolError(f"at most {MAX_PROCESSES} managed processes may run")
@@ -53,7 +53,8 @@ async def start(command: str, cwd: Path, *, pty: bool = False,
     try:
         process = await shell._start(actual, cwd, None, False, stdin=subprocess.DEVNULL,
                                      isolation=isolation,
-                                     isolate_network=isolate_network)
+                                     isolate_network=isolate_network, read_paths=read_paths,
+                                     write_paths=write_paths)
     except (OSError, ValueError) as exc:
         raise ToolError(f"cannot start process: {exc}") from exc
     process_id = uuid.uuid4().hex[:10]

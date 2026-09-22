@@ -5,8 +5,8 @@ from __future__ import annotations
 from rich.cells import cell_len
 from rich.text import Text
 from textual import events
-from textual.containers import Container, VerticalScroll
-from textual.widgets import Static
+from textual.containers import Container, VerticalScroll, Horizontal
+from textual.widgets import Static, Switch
 
 from . import art, markup, theme
 from .format import strip_escapes
@@ -69,6 +69,8 @@ class AsidePanel(Container):
         border: round $primary;
         display: none;
     }}
+    #aside-toggle-row {{ height: 3; display: none; align: left middle; }}
+    #aside-toggle-label {{ width: 1fr; height: 1; margin-top: 1; }}
     """
 
     def __init__(self) -> None:
@@ -80,10 +82,14 @@ class AsidePanel(Container):
         self._content: Text | None = None
         self._content_width: int | None = None
         self._width = markup.DEFAULT_WIDTH
+        self._toggle_callback = None
 
     def compose(self):
         with AsideBody():
             yield Static(Text(""), id="aside-body")
+            with Horizontal(id="aside-toggle-row"):
+                yield Static("Prompt suggestions", id="aside-toggle-label")
+                yield Switch(False, id="aside-toggle")
         yield CloseButton(Text(CLOSE, style="bold"))
 
     def on_mount(self) -> None:
@@ -122,6 +128,7 @@ class AsidePanel(Container):
 
     def ask(self, question: str) -> None:
         """Show the window with a pending answer."""
+        self._hide_toggle()
         self._content = None
         self._content_width = None
         self.question = strip_escapes(question)
@@ -134,6 +141,7 @@ class AsidePanel(Container):
 
     def show_content(self, content: Text) -> None:
         """Show a finished, selectable panel without adding it to the chat."""
+        self._hide_toggle()
         self._content = content
         self._content_width = max(
             (cell_len(line) for line in content.plain.splitlines()),
@@ -147,6 +155,24 @@ class AsidePanel(Container):
         self._place()
         self.refresh_body()
 
+    def show_toggle(self, content: Text, enabled: bool, callback) -> None:
+        self.show_content(content)
+        switch = self.query_one("#aside-toggle", Switch)
+        with self.prevent(Switch.Changed):
+            switch.value = enabled
+        self._toggle_callback = callback
+        self.query_one("#aside-toggle-row").display = True
+        self.call_after_refresh(self._place)
+
+    def _hide_toggle(self) -> None:
+        self._toggle_callback = None
+        self.query_one("#aside-toggle-row").display = False
+
+    def on_switch_changed(self, event: Switch.Changed) -> None:
+        if event.switch.id == "aside-toggle" and self._toggle_callback:
+            event.stop()
+            self._toggle_callback(event.value)
+
     def feed(self, text: str) -> None:
         self.answer += strip_escapes(text)
 
@@ -158,6 +184,7 @@ class AsidePanel(Container):
         self.refresh_body()
 
     def close(self) -> None:
+        self._hide_toggle()
         self.display = False
         self._content = None
         self._content_width = None

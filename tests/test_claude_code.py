@@ -225,7 +225,8 @@ def test_a_claude_tool_result_is_flattened_for_display():
     assert _result_text([{"type": "text", "text": "one"},
                          {"type": "image"}, {"type": "text", "text": "two"}]) == "one\ntwo"
     assert _result_text(None) == ""
-    assert len(_result_text("x" * 900)) == RESULT_LIMIT
+    assert len(_result_text("x" * 900)) == 900
+    assert len(_result_text("x" * (RESULT_LIMIT + 1))) == RESULT_LIMIT
 
 
 async def test_the_permission_bridge_stays_out_of_the_transcript(workdir, tmp_path):

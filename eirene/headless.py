@@ -142,6 +142,7 @@ def _emit(event, quiet: bool) -> bool:
     elif isinstance(event, agent_mod.TurnDone):
         sys.stdout.write("\n")
         sys.stdout.flush()
+        return event.status != "completed"
     return False
 
 

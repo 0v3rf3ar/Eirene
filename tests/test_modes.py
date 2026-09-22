@@ -32,9 +32,9 @@ def test_auto_escape_asks_rather_than_giving_up():
     assert reason == "outside the sandbox"
 
 
-def test_plan_blocks_escapes_outright():
+def test_plan_requests_approval_for_external_reads():
     verdict, reason = decide(Mode.PLAN, READ, "outside the sandbox")
-    assert verdict == BLOCK
+    assert verdict == ASK
     assert reason == "outside the sandbox"
 
 

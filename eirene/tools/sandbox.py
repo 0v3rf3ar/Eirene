@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from pathlib import Path
+from contextvars import ContextVar
 from typing import Iterator
 
 from ..core.errors import SandboxError
@@ -15,7 +16,7 @@ class Sandbox:
 
     def __init__(self, root: Path):
         self.root = Path(root).expanduser().resolve()
-        self._permitted: set[Path] = set()
+        self._grants: ContextVar[frozenset[Path]] = ContextVar("sandbox_grants", default=frozenset())
 
     def __str__(self) -> str:
         return str(self.root)
@@ -32,9 +33,7 @@ class Sandbox:
         raw = str(path).strip()
         if not raw:
             raise SandboxError("empty path")
-        if raw.startswith("~"):
-            raise SandboxError(f"'{raw}' is outside {self.root}")
-        candidate = Path(raw)
+        candidate = Path(raw).expanduser()
         if not candidate.is_absolute():
             candidate = self.root / candidate
         resolved = self._resolve_strict(candidate)
@@ -46,7 +45,7 @@ class Sandbox:
     def permitted(self, resolved: Path) -> bool:
         """True while the user has approved this path for the running tool."""
         return any(resolved == allowed or allowed in resolved.parents
-                   for allowed in self._permitted)
+                   for allowed in self._grants.get())
 
     @contextmanager
     def permit(self, *paths: str) -> Iterator[None]:
@@ -63,11 +62,11 @@ class Sandbox:
                 granted.add(self._resolve_strict(candidate))
             except SandboxError:
                 continue
-        self._permitted |= granted
+        token = self._grants.set(self._grants.get() | granted)
         try:
             yield
         finally:
-            self._permitted -= granted
+            self._grants.reset(token)
 
     def relative(self, path: Path | str) -> str:
         """Display path relative to root."""
