@@ -2,6 +2,11 @@
 # Install the matching GitHub release without requiring Python or sudo.
 set -euo pipefail
 
+printf '\n%s\n%s\n%s\n\n' \
+    '┏━╸╻┏━┓┏━╸┏┓╻┏━╸' \
+    '┣╸ ┃┣┳┛┣╸ ┃┗┫┣╸' \
+    '┗━╸╹╹┗╸┗━╸╹ ╹┗━╸'
+
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
 repo='0v3rf3ar/Eirene'
 version=${EIRENE_VERSION:-latest}

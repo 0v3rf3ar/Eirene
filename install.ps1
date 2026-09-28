@@ -6,6 +6,8 @@ param(
     [switch]$NoPathUpdate
 )
 $ErrorActionPreference = 'Stop'
+# Unicode escapes keep the banner compatible with Windows PowerShell 5.1 file decoding.
+Write-Host ([regex]::Unescape('\n\u250f\u2501\u2578\u257b\u250f\u2501\u2513\u250f\u2501\u2578\u250f\u2513\u257b\u250f\u2501\u2578\n\u2523\u2578 \u2503\u2523\u2533\u251b\u2523\u2578 \u2503\u2517\u252b\u2523\u2578\n\u2517\u2501\u2578\u2579\u2579\u2517\u2578\u2517\u2501\u2578\u2579 \u2579\u2517\u2501\u2578\n'))
 $repo = '0v3rf3ar/Eirene'
 $onWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
 if ($onWindows) {

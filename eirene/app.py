@@ -1100,5 +1100,5 @@ def run(sandbox: Path, resume: str = "") -> int:
     app.run()
     if app.session.saved:
         sys.stdout.write(
-            f"to continue this session use: {invocation()} --resume {app.session.id}\n")
+            f"{art.BANNERS[0]}\n{invocation()} --resume {app.session.id}\n")
     return 0

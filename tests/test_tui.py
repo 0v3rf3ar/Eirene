@@ -1207,7 +1207,10 @@ async def test_exit_points_at_the_saved_session(workdir, monkeypatch, capsys):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     assert await leave(app, monkeypatch, workdir) == 0
     assert capsys.readouterr().out.strip() == (
-        f"to continue this session use: ./eirene --resume {app.session.id}")
+        "┏━╸╻┏━┓┏━╸┏┓╻┏━╸\n"
+        "┣╸ ┃┣┳┛┣╸ ┃┗┫┣╸\n"
+        "┗━╸╹╹┗╸┗━╸╹ ╹┗━╸\n\n"
+        f"./eirene --resume {app.session.id}")
 
 
 async def test_no_hint_when_nothing_was_sent(workdir, monkeypatch, capsys):
