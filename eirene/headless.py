@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .core.text import safe_text
+
 import asyncio
 import os
 import sys
@@ -120,6 +122,8 @@ async def _drive(text: str, cwd: Path, provider_key: str, model: str,
         _err(f"task exceeded {task_timeout}s and was stopped")
         return 124
     finally:
+        from .tools import processes
+        await processes.stop_all()
         await runner.close()
         session.close()
     return 1 if failed else 0
@@ -128,13 +132,13 @@ async def _drive(text: str, cwd: Path, provider_key: str, model: str,
 def _emit(event, quiet: bool) -> bool:
     """Print an event; True when it is a failure."""
     if isinstance(event, agent_mod.Answer):
-        sys.stdout.write(event.text)
+        sys.stdout.write(safe_text(event.text))
         sys.stdout.flush()
     elif isinstance(event, agent_mod.ToolStarted) and not quiet:
         _err(f"· {event.name} {event.label}")
-    elif isinstance(event, agent_mod.ToolFinished) and event.is_error:
+    elif isinstance(event, agent_mod.ToolFinished) and event.is_error and not event.reused:
         _err(f"! {event.name}: {event.result[:200]}")
-    elif isinstance(event, agent_mod.Notice) and not quiet:
+    elif isinstance(event, agent_mod.Notice) and not event.transient and not quiet:
         _err(f"· {event.text}")
     elif isinstance(event, agent_mod.Failed):
         _err(f"error: {event.text}")
@@ -147,5 +151,5 @@ def _emit(event, quiet: bool) -> bool:
 
 
 def _err(text: str) -> None:
-    sys.stderr.write(text + "\n")
+    sys.stderr.write(safe_text(text) + "\n")
     sys.stderr.flush()

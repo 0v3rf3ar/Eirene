@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import os
 import sys
 import textwrap
@@ -13,6 +14,7 @@ from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from .ui.shortcuts import SHORTCUTS
 from textual.css.query import NoMatches
 
 from . import __version__, commands
@@ -21,12 +23,11 @@ from .core import notify, paths, questions
 from .core import skills as skills_mod
 from .core import plans as plan_mod
 from .core.config import Config
-from .core.compact import compact as compact_history
 from .core import logging as runtime_logging
 from .core.errors import EireneError, ProviderError
 from .core.modes import Mode, next_mode
 from .core.session import Session, clean_title, name_from
-from .core.usage import Usage as UsageTotals, human_count
+from .core.usage import Usage as UsageTotals
 from .providers import registry as providers
 from .tools import registry as tool_registry
 from .tools import processes
@@ -46,6 +47,7 @@ from .ui.permission import PermissionBar
 from .ui.picker import Picker
 from .ui.processes import ProcessBar
 from .ui.status import StatusLine
+from .ui.splash import StartupSplash
 from .ui.tasks import TaskList
 
 TAB_TICK = 0.25
@@ -71,7 +73,7 @@ class Eirene(App):
     CSS = """
     Screen {
         background: $background;
-        layers: base overlay;
+        layers: base overlay splash;
     }
     """
 
@@ -82,7 +84,8 @@ class Eirene(App):
         Binding("ctrl+shift+c", "copy_selection", "copy", priority=True, show=False),
         Binding("ctrl+c", "copy_selection(True)", "copy", priority=True, show=False),
         Binding("ctrl+e", "jump_to_end", "jump to bottom", priority=True, show=False),
-    ]
+    ] + [Binding(key, action, hint, priority=True, show=False)
+         for key, action, _, hint in SHORTCUTS]
 
     def __init__(self, sandbox: Path, resume: str = ""):
         super().__init__()
@@ -93,8 +96,8 @@ class Eirene(App):
             self.config.set("reduce_motion", True)
         art.set_accessible(bool(self.config.get("accessible_icons", False)))
         self.runtime_logger = runtime_logging.configure(self.config)
-        self.session = (Session.resume(resume) if resume
-                        else Session.create(self.sandbox.root))
+        self.session = Session.create(self.sandbox.root, resume or None)
+        self._resume_id = resume
         self.agent = agent_mod.Agent(self.session, self.config, self.sandbox)
         self.agent.approve = self._approve
         self.agent.choose = self._choose
@@ -102,11 +105,11 @@ class Eirene(App):
         self.command: asyncio.Task | None = None
         self.asides: set[asyncio.Task] = set()
         self._text_future: asyncio.Future[str | None] | None = None
+        self._new_session = not resume
         self._banner: str | None = None
         self._tip = art.tip()
         self._titled = bool(self.session.name)
         self._busy = False
-        self._warned_context = False
         self._tab_tick = 0
         self._tab_timer = None
         self._flusher = None
@@ -126,6 +129,7 @@ class Eirene(App):
         yield AsidePanel()
         yield Composer(Picker(), PermissionBar(), SlashMenu(), StatusLine(),
                        TaskList(self.sandbox.root, self.session.id))
+        yield StartupSplash()
 
     @property
     def transcript(self) -> Transcript:
@@ -248,8 +252,10 @@ class Eirene(App):
 
     async def _show_intro(self) -> None:
         """Banner, then anything the session already holds."""
-        await self.push(ArtBlock(self._banner_text(), reflow=self._banner_text))
-        await self.replay_transcript()
+        if self._resume_id:
+            await self.switch_session(self._resume_id, initial=True)
+        else:
+            await self.push(ArtBlock(self._banner_text(), reflow=self._banner_text))
 
     async def replay_transcript(self) -> int:
         """Redraw a resumed conversation."""
@@ -281,7 +287,9 @@ class Eirene(App):
                     elif call.get("name") in SHELL_TOOLS:
                         card = await self.push(CommandBlock(call.get("name", ""), label))
                     else:
-                        card = await self.push(ToolBlock(call.get("name", ""), label))
+                        card = await self.push(ToolBlock(call.get("name", ""), label,
+                            hide_output=call.get("name") == "web_search" and
+                            getattr(self.agent.provider, "profile", None) is not None))
                     cards[str(call.get("id", ""))] = card
                     shown += 1
             elif role == "tool":
@@ -364,9 +372,6 @@ class Eirene(App):
         detail = ""
         if self.agent.provider_key:
             detail = f"{self.agent.provider_key} {self.agent.model}"
-            profile = getattr(self.agent.provider, "profile", None)
-            if profile is not None:
-                detail += f" · {profile.tier}"
         self.mode_line.show(self.agent.mode, detail)
 
     # input
@@ -581,7 +586,9 @@ class Eirene(App):
                             and event.id not in cards):
                         block = (CommandBlock(event.name, event.label)
                                  if event.name in SHELL_TOOLS
-                                 else ToolBlock(event.name, event.label))
+                                 else ToolBlock(event.name, event.label,
+                                     hide_output=event.name == "web_search" and
+                                     getattr(self.agent.provider, "profile", None) is not None))
                         cards[event.id] = await self.push(block, live=True)
                 elif isinstance(event, agent_mod.ToolOutput):
                     card = cards.get(event.id)
@@ -590,6 +597,8 @@ class Eirene(App):
                         if event.artifact_id:
                             card.artifact_id = event.artifact_id
                 elif isinstance(event, agent_mod.ToolFinished):
+                    if event.reused:
+                        continue
                     if event.name in {"plan_update", "plan_set_status", "plan_clear"}:
                         self.refresh_plan()
                         continue
@@ -597,17 +606,22 @@ class Eirene(App):
                     if card is None:
                         block = (CommandBlock(event.name, event.label)
                                  if event.name in SHELL_TOOLS
-                                 else ToolBlock(event.name, event.label))
+                                 else ToolBlock(event.name, event.label,
+                                     hide_output=event.name == "web_search" and
+                                     getattr(self.agent.provider, "profile", None) is not None))
                         card = await self.push(block)
                     card.finish(event.result, event.is_error, event.seconds)
                     card.artifact_id = event.artifact_id
                     card.flush()
                 elif isinstance(event, agent_mod.Notice):
+                    if event.transient:
+                        self.status.set_phase(event.phase)
+                        continue
                     answer = None
-                    await self.push(NoticeBlock(event.text, "warn"))
+                    await self.push(NoticeBlock(event.text))
                 elif isinstance(event, agent_mod.Failed):
                     answer = None
-                    await self.push(NoticeBlock(event.text, "fail"))
+                    await self.push(NoticeBlock(self._friendly_failure(event.text)))
                 elif isinstance(event, agent_mod.TurnDone):
                     self.transcript.settle()
                     self.status.stop(self._turn_note(event))
@@ -784,24 +798,15 @@ class Eirene(App):
         await self.push(UserBlock(chosen))
         self.turn = asyncio.create_task(self._run_turn(chosen))
 
-    async def _manage_context(self) -> None:
-        """Automatically compact or suggest it once history gets big."""
-        if self._warned_context or not self.agent.context_is_heavy():
-            return
-        self._warned_context = True
-        size = human_count(self.agent.context_size())
-        if self.config.get("auto_compact", False) and self.agent.ready:
-            try:
-                before, after, _ = await compact_history(
-                    self.session, self.agent.provider, self.agent.model)
-                self.say(f"context auto-compacted {human_count(before)} → "
-                         f"{human_count(after)} tokens")
-                self._warned_context = False
-                return
-            except EireneError as exc:
-                self.say(f"automatic compaction failed: {exc.user_message()}", "warn")
-        self.say(f"this chat is about {size} tokens - /compact will shrink it "
-                 "and keep the agent sharp (optional)", "warn")
+    @staticmethod
+    def _friendly_failure(detail: str) -> str:
+        lowered = detail.lower()
+        if "context" in lowered or "budget" in lowered:
+            return "Your progress is saved. This model needs a shorter request or a larger context setting to continue."
+        if any(word in lowered for word in ("connection", "unreachable", "timed out", "offline")):
+            return "I couldn’t reach the model. Your progress is saved; reconnect and continue when it’s available."
+        # Configuration and permission failures still need their actionable reason.
+        return detail
 
     def _change_action(self, label: str) -> str:
         """Create or Update, from what is on disk."""
@@ -886,12 +891,13 @@ class Eirene(App):
             self.prompt.focus()
 
     def action_copy_selection(self, quiet: bool = False) -> None:
-        """Copy whatever the mouse selected."""
-        text = ""
-        try:
-            text = self.screen.get_selected_text() or ""
-        except NoMatches:
-            text = ""
+        """Copy the editor selection or selected transcript text."""
+        text = self.prompt.selected_text if self.prompt.has_focus else ""
+        if not text:
+            try:
+                text = self.screen.get_selected_text() or ""
+            except NoMatches:
+                text = ""
         if not text:
             if not quiet:
                 self.say("nothing selected - drag over the text first", "warn")
@@ -919,7 +925,6 @@ class Eirene(App):
             return
         self.session.clear()
         self._titled = False
-        self._warned_context = False
         self.agent.usage = UsageTotals()
         plan_mod.clear(self.sandbox.root, self.session.id)
         self.refresh_plan()
@@ -930,35 +935,79 @@ class Eirene(App):
         self.call_later(self.push, ArtBlock(
             self._banner_text(), reflow=self._banner_text))
 
-    async def switch_session(self, session_id: str) -> None:
+    async def switch_session(self, session_id: str, *, initial: bool = False) -> None:
         """Replace the active session and redraw its saved conversation."""
         self.clear_prompt_suggestion()
-        if session_id == self.session.id:
+        if session_id == self.session.id and not initial:
             self.say("already in that session")
             return
         if self.turn and not self.turn.done():
             self.say("still working - press esc first", "warn")
             return
         previous = self.session
+        splash = self.query_one(StartupSplash)
+        splash.start()
+        await asyncio.sleep(0)
         try:
-            resumed = Session.resume(session_id)
+            with ThreadPoolExecutor(max_workers=1) as loader:
+                resumed = await asyncio.get_running_loop().run_in_executor(
+                    loader, Session.resume, session_id)
         except EireneError as exc:
+            splash.finish()
             self.say(exc.user_message(), "warn")
             return
-        previous.close()
-        self.session = resumed
-        self.agent.session = resumed
-        self.agent.usage = UsageTotals()
-        reset_provider = getattr(self.agent.provider, "reset_thread", None)
-        if reset_provider:
-            reset_provider()
-        self._titled = bool(resumed.name)
-        self._warned_context = False
-        self.refresh_plan()
-        self.transcript.reset()
-        await self.push(ArtBlock(self._banner_text(), reflow=self._banner_text))
-        await self.replay_transcript()
-        self.name_the_tab()
+        except Exception:
+            splash.finish()
+            raise
+        try:
+            previous.close()
+            self.session = resumed
+            self.agent.session = resumed
+            self.agent.usage = UsageTotals()
+            reset_provider = getattr(self.agent.provider, "reset_thread", None)
+            if reset_provider:
+                reset_provider()
+            self._titled = bool(resumed.name)
+            self.refresh_plan()
+            self.transcript.reset()
+            await self.push(ArtBlock(self._banner_text(), reflow=self._banner_text))
+            await self.replay_transcript()
+            self.name_the_tab()
+        finally:
+            splash.finish()
+
+    def _shortcut_command(self, command: str) -> None:
+        # Leave active choices and secret/text-entry requests undisturbed.
+        if (len(self.screen_stack) > 1 or self.picker.waiting or self.permission.waiting
+                or self._text_future and not self._text_future.done()):
+            return
+        self.slash.close()
+        self.prompt.menu_open = False
+        self._start_command(command)
+
+    def action_help_menu(self) -> None:
+        self._shortcut_command("/help")
+
+    def action_keybindings(self) -> None:
+        self._shortcut_command("/keybindings")
+
+    def action_pick_model(self) -> None:
+        self._shortcut_command("/model")
+
+    def action_pick_session(self) -> None:
+        self._shortcut_command("/sessions")
+
+    def action_pick_theme(self) -> None:
+        self._shortcut_command("/theme")
+
+    def action_toggle_suggestions(self) -> None:
+        if (len(self.screen_stack) > 1 or self.picker.waiting or self.permission.waiting
+                or self._text_future and not self._text_future.done()):
+            return
+        self.set_prompt_suggestions(not self.config.get("prompt_suggest", False))
+        if not (self.aside.open and self.aside._toggle_callback == self.set_prompt_suggestions):
+            state = "ON" if self.config.get("prompt_suggest", False) else "OFF"
+            self.say(f"prompt suggestions {state}")
 
     def action_jump_to_end(self) -> None:
         try:

@@ -12,6 +12,7 @@ from pathlib import Path
 COMPACT_TOOLS = {
     "ask_user", "read_file", "list_dir", "glob", "search_text",
     "write_file", "edit_file", "apply_patch", "run_command", "web_search", "web_fetch",
+    "read_output", "start_process", "poll_process", "stop_process", "list_processes",
 }
 BALANCED_TOOLS = COMPACT_TOOLS | {
     "read_image", "git_status", "git_diff", "project_info",
@@ -80,10 +81,15 @@ class LocalProfile:
 Sandbox: {sandbox}
 Mode: {mode}
 
-Use tools to inspect or change the project. For simple questions, use the single
-most direct tool and answer immediately from its result. Never inspect an entry
+Use tools to inspect or change the project. Answer simple questions from one direct tool. Never inspect an entry
 the user did not ask about. Keep commands bounded and non-interactive. Stay in the
 sandbox. In manual mode, wait for approval before writes or commands. Be concise.
+Use recorded results; never repeat an unchanged failed call or completed work.
+read_file checks size; use pattern/context, tail, offset/limit, byte_offset and
+follow continuation hints. Shell: wc -lc/file, then head/tail, sed -n or rg -n -I -m.
+Quote paths; use bounded od/xxd for binaries. Keep stderr.
+Send data through stdin; use pipes only when their exit status preserves failures.
+Continue other work, then poll managed processes; never restart them.
 For current or unfamiliar facts, make one precise web_search. Fetch at most one
 promising result only when its snippet is insufficient, then answer with source URLs.
 """

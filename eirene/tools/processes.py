@@ -14,10 +14,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..core.errors import ToolError
+from ..core import artifacts
 from . import activity, shell
 
 MAX_PROCESSES = 8
 MAX_CAPTURE = 400_000
+DEFAULT_LIFETIME = 3600
 
 
 @dataclass
@@ -31,10 +33,13 @@ class ManagedProcess:
     cursor: int = 0
     pump: asyncio.Task | None = None
     stop_timer: asyncio.Task | None = None
+    artifact: artifacts.Writer | None = None
+    stop_reason: str = ""
+    last_poll: float = 0.0
 
     @property
     def running(self) -> bool:
-        return self.process.returncode is None
+        return self.process.returncode is None or (self.pump is not None and not self.pump.done())
 
 
 _processes: dict[str, ManagedProcess] = {}
@@ -57,19 +62,51 @@ async def start(command: str, cwd: Path, *, pty: bool = False,
                                      write_paths=write_paths)
     except (OSError, ValueError) as exc:
         raise ToolError(f"cannot start process: {exc}") from exc
-    process_id = uuid.uuid4().hex[:10]
-    item = ManagedProcess(process_id, command, cwd, process)
-    item.pump = asyncio.create_task(_pump(item))
-    if auto_stop > 0:
-        item.stop_timer = asyncio.create_task(_stop_later(item, min(auto_stop, 86_400)))
-    _processes[process_id] = item
-    activity.changed()
+    try:
+        process_id = adopt(process, command, cwd, auto_stop=auto_stop)
+    except BaseException:
+        await shell._kill_tree(process)
+        raise
     await asyncio.sleep(0)
     return f"started {process_id} (pid {process.pid})"
 
 
+def has_capacity() -> bool:
+    reap()
+    return sum(item.running for item in _processes.values()) < MAX_PROCESSES
+
+
+def matching(command: str, cwd: Path) -> str | None:
+    """Find an already-running command so the agent does not launch it twice."""
+    return next((item.id for item in _processes.values()
+                 if item.running and item.cwd == cwd and item.command == command), None)
+
+
+def adopt(process, command: str, cwd: Path, *, initial_output="", auto_stop=0) -> str:
+    """Take ownership of a running command without executing it a second time."""
+    if not has_capacity():
+        raise ToolError(f"at most {MAX_PROCESSES} managed processes may run")
+    process_id = uuid.uuid4().hex[:10]
+    item = ManagedProcess(process_id, command, cwd, process)
+    item.artifact = artifacts.Writer()
+    item.artifact.feed(initial_output)
+    item.output.extend(initial_output.encode()[-MAX_CAPTURE:])
+    item.cursor = len(item.output)
+    _processes[process_id] = item
+    lifetime = shell._clamp_timeout(auto_stop or DEFAULT_LIFETIME)
+    item.pump = asyncio.create_task(_pump(item))
+    item.stop_timer = asyncio.create_task(_stop_later(item, lifetime))
+    activity.changed()
+    return process_id
+
+
 async def poll(process_id: str, *, all_output: bool = False) -> str:
     item = _get(process_id)
+    # Fast empty polls should not turn into a hot model/tool loop.
+    delay = min(1.0, max(0.0, item.last_poll + 1.0 - time.monotonic()))
+    if delay and item.running and item.cursor == len(item.output):
+        await asyncio.sleep(delay)
+    item.last_poll = time.monotonic()
     await asyncio.sleep(0)
     begin = 0 if all_output else item.cursor
     data = bytes(item.output[begin:]).decode("utf-8", "replace")
@@ -77,7 +114,13 @@ async def poll(process_id: str, *, all_output: bool = False) -> str:
     state = "running" if item.running else f"exited {item.process.returncode}"
     elapsed = max(time.time() - item.started, 0)
     header = f"{item.id}: {state} for {elapsed:.1f}s (pid {item.process.pid})"
-    return header + (("\n" + data.rstrip()) if data else "\n(no new output)")
+    if item.stop_reason:
+        header += f"; {item.stop_reason}"
+    if len(data) > 6000:
+        from ..core.tool_memory import compact_output
+        data = compact_output(data, 6000, item.artifact.id)
+    note = "\n(no new output; continue independent work before polling again)" if item.running else "\n(no new output)"
+    return header + (("\n" + data.rstrip()) if data else note)
 
 
 async def stop(process_id: str) -> str:
@@ -135,6 +178,19 @@ def running() -> list[tuple[str, str]]:
 
 
 async def _pump(item: ManagedProcess) -> None:
+    try:
+        await _drain(item)
+    except asyncio.CancelledError:
+        await shell._kill_tree(item.process)
+        raise
+    finally:
+        if item.artifact:
+            item.artifact.close()
+        if item.stop_timer and not item.stop_reason and item.stop_timer is not asyncio.current_task():
+            item.stop_timer.cancel()
+
+
+async def _drain(item: ManagedProcess) -> None:
     stream = item.process.stdout
     if stream is None:
         await item.process.wait()
@@ -145,6 +201,8 @@ async def _pump(item: ManagedProcess) -> None:
         if not chunk:
             break
         item.output.extend(chunk)
+        if item.artifact:
+            item.artifact.feed(chunk.decode("utf-8", "replace"))
         if len(item.output) > MAX_CAPTURE:
             removed = len(item.output) - MAX_CAPTURE
             del item.output[:removed]
@@ -156,6 +214,7 @@ async def _pump(item: ManagedProcess) -> None:
 async def _stop_later(item: ManagedProcess, seconds: float) -> None:
     await asyncio.sleep(seconds)
     if item.running:
+        item.stop_reason = "time limit reached"
         await stop(item.id)
 
 

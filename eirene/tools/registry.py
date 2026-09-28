@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -35,12 +36,16 @@ class Tool:
 
 
 TOOLS: list[Tool] = [
-    Tool("read_file", READ, "Read a text file from the sandbox.", {
+    Tool("read_file", READ, "Check file size and read bounded text with line numbers; use pattern/context, tail, or offset/limit to focus. Oversized lines support byte_offset continuation.", {
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "File path, relative to the sandbox."},
             "offset": {"type": "integer", "description": "First line to read, 0-based."},
             "limit": {"type": "integer", "description": "Max lines to read."},
+            "tail": {"type": "boolean", "description": "Read the last limit lines."},
+            "pattern": {"type": "string", "description": "Regex to select matching lines (grep-style)."},
+            "context": {"type": "integer", "description": "Neighboring lines around matches; default 2."},
+            "byte_offset": {"type": "integer", "description": "Continue an oversized physical line at this byte position."},
         },
         "required": ["path"],
     }, ""),
@@ -83,12 +88,13 @@ TOOLS: list[Tool] = [
         "required": ["pattern"],
     }, ""),
     Tool("run_command", EXEC,
-         "Run a shell command in the sandbox. It must terminate on its own.", {
+         "Run a bounded, non-interactive shell command. Long commands return a managed process id; poll it instead of restarting.", {
              "type": "object",
              "properties": {
                  "command": {"type": "string", "description": "Command line to execute."},
                  "timeout": {"type": "integer",
-                             "description": "Seconds before it is killed. Default 120."},
+                             "description": "Total time limit in seconds, including background work. Defaults adapt to the command; maximum 3600."},
+                 "stdin": {"type": "string", "description": "Optional exact input text; stdin closes after sending it."},
                  "powershell": {"type": "boolean",
                                 "description": "Use PowerShell instead of cmd on Windows."},
                  "pty": {"type": "boolean",
@@ -160,7 +166,7 @@ TOOLS: list[Tool] = [
                  "command": {"type": "string"},
                  "pty": {"type": "boolean", "description": "Use terminal emulation."},
                  "auto_stop": {"type": "integer",
-                               "description": "Optional seconds before automatic termination."},
+                               "description": "Seconds before automatic termination; defaults to 3600."},
              }, "required": ["command"],
          }),
     Tool("poll_process", READ, "Read output and state from a managed process.", {
@@ -346,6 +352,31 @@ def kind_of(name: str) -> str:
     return tool.kind if tool else EXEC
 
 
+def validate_arguments(name: str, arguments: dict) -> None:
+    """Reject malformed model calls before previews, permissions or execution."""
+    tool = BY_NAME.get(name)
+    if tool is None:
+        raise ToolError(f"unknown tool '{name}'")
+    if not isinstance(arguments, dict):
+        raise ToolError("arguments must be an object")
+    for key in tool.schema.get("required", []):
+        if key not in arguments:
+            raise ToolError(f"{name}: {key} is required")
+    types = {"string": str, "integer": int, "number": (int, float),
+             "boolean": bool, "array": list, "object": dict}
+    for key, value in arguments.items():
+        schema = tool.schema.get("properties", {}).get(key, {})
+        expected = schema.get("type")
+        if expected in types and (not isinstance(value, types[expected]) or
+                                  (expected in {"integer", "number"} and isinstance(value, bool))):
+            raise ToolError(f"{name}: {key} must be {expected}")
+        if expected in {"integer", "number"} and not math.isfinite(value):
+            raise ToolError(f"{name}: {key} must be finite")
+        item_type = schema.get("items", {}).get("type")
+        if expected == "array" and item_type in types and any(not isinstance(item, types[item_type]) for item in value):
+            raise ToolError(f"{name}: {key} must contain {item_type} values")
+
+
 def describe(name: str, args: dict[str, Any], box: Sandbox) -> str:
     """One-line human summary of a call."""
     if name == "run_command":
@@ -411,8 +442,10 @@ async def _execute(name: str, args: dict[str, Any], box: Sandbox, *,
         if not command:
             raise ToolError("command is empty")
         result = await shell.run(command, box.root,
-                                 timeout=_number(args.get("timeout"), timeout),
+                                 timeout=_number(args.get("timeout"), shell.command_timeout(command, timeout)),
                                  max_bytes=max_bytes, on_output=on_output,
+                                 input_text=args.get("stdin"), yield_after=10,
+                                 stall=0,
                                  powershell=bool(args.get("powershell")),
                                  pty=bool(args.get("pty")), isolation=isolation,
                                  isolate_network=isolate_network and not args.get("network_access", False),
@@ -553,15 +586,20 @@ async def _execute(name: str, args: dict[str, Any], box: Sandbox, *,
     if name == "git_worktree_remove":
         return git_ops.remove_worktree(box.root, _text(args, "path"))
 
-    return _run_file_tool(name, args, box)
+    return _run_file_tool(name, args, box, max_chars=min(24000, max_bytes))
 
 
-def _run_file_tool(name: str, args: dict[str, Any], box: Sandbox) -> str:
+def _run_file_tool(name: str, args: dict[str, Any], box: Sandbox, *, max_chars: int = 24000) -> str:
     if name == "read_file":
+        scoped = project_ops.scoped_instructions(box.root, box.resolve(_text(args, "path")))
+        allowance = max(0, max_chars - len(scoped) - (2 if scoped else 0))
         body = files.read_file(box, _text(args, "path"),
                                int(_number(args.get("offset"), 0) or 0),
-                               int(_number(args.get("limit"), 0) or 0))
-        scoped = project_ops.scoped_instructions(box.root, box.resolve(_text(args, "path")))
+                               int(_number(args.get("limit"), 0) or 0),
+                               max_chars=allowance, tail=bool(args.get("tail")),
+                               pattern=str(args.get("pattern") or ""),
+                               context=int(_number(args.get("context"), 2)),
+                               byte_offset=args.get("byte_offset"))
         return body + ("\n\n" + scoped if scoped else "")
     if name == "read_image":
         from ..core.attachments import prepare_image

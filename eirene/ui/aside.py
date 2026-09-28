@@ -6,7 +6,8 @@ from rich.cells import cell_len
 from rich.text import Text
 from textual import events
 from textual.containers import Container, VerticalScroll, Horizontal
-from textual.widgets import Static, Switch
+from textual.widgets import Static
+from textual.message import Message
 
 from . import art, markup, theme
 from .format import strip_escapes
@@ -36,6 +37,51 @@ class CloseButton(Static):
         text-style: bold;
     }}
     """
+
+
+class TextToggle(Static):
+    """Immediate, one-line toggle without switch animation."""
+
+    can_focus = True
+    BINDINGS: list = []
+    DEFAULT_CSS = """
+    TextToggle { width: 11; height: 1; padding: 0; background: transparent; }
+    TextToggle:hover, TextToggle:focus { text-style: bold reverse; }
+    """
+
+    class Changed(Message):
+        def __init__(self, toggle, value: bool):
+            super().__init__()
+            self.toggle = toggle
+            self.value = value
+
+    def __init__(self, value: bool = False, **kwargs):
+        super().__init__(**kwargs)
+        self.value = value
+
+    @property
+    def value(self) -> bool:
+        return self._value
+
+    @value.setter
+    def value(self, value: bool) -> None:
+        self._value = bool(value)
+        self.update(Text("<  ON  >" if self._value else "<  OFF  >"))
+
+    def action_toggle(self) -> None:
+        self.value = not self.value
+        self.post_message(self.Changed(self, self.value))
+
+    async def _on_key(self, event: events.Key) -> None:
+        if event.key in {"enter", "space", "left", "right"}:
+            event.stop()
+            event.prevent_default()
+            self.action_toggle()
+
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
+        self.focus()
+        self.action_toggle()
 
 
 class AsideBody(VerticalScroll):
@@ -69,8 +115,7 @@ class AsidePanel(Container):
         border: round $primary;
         display: none;
     }}
-    #aside-toggle-row {{ height: 3; display: none; align: left middle; }}
-    #aside-toggle-label {{ width: 1fr; height: 1; margin-top: 1; }}
+    #aside-toggle-row {{ height: 1; margin-top: 1; display: none; }}
     """
 
     def __init__(self) -> None:
@@ -88,8 +133,7 @@ class AsidePanel(Container):
         with AsideBody():
             yield Static(Text(""), id="aside-body")
             with Horizontal(id="aside-toggle-row"):
-                yield Static("Prompt suggestions", id="aside-toggle-label")
-                yield Switch(False, id="aside-toggle")
+                yield TextToggle(False, id="aside-toggle")
         yield CloseButton(Text(CLOSE, style="bold"))
 
     def on_mount(self) -> None:
@@ -156,10 +200,12 @@ class AsidePanel(Container):
         self.refresh_body()
 
     def show_toggle(self, content: Text, enabled: bool, callback) -> None:
-        self.show_content(content)
-        switch = self.query_one("#aside-toggle", Switch)
-        with self.prevent(Switch.Changed):
-            switch.value = enabled
+        if self.open and self._toggle_callback == callback:
+            self._content = content
+            self.refresh_body()
+        else:
+            self.show_content(content)
+        self.query_one("#aside-toggle", TextToggle).value = enabled
         self._toggle_callback = callback
         self.query_one("#aside-toggle-row").display = True
         self.call_after_refresh(self._place)
@@ -168,8 +214,8 @@ class AsidePanel(Container):
         self._toggle_callback = None
         self.query_one("#aside-toggle-row").display = False
 
-    def on_switch_changed(self, event: Switch.Changed) -> None:
-        if event.switch.id == "aside-toggle" and self._toggle_callback:
+    def on_text_toggle_changed(self, event: TextToggle.Changed) -> None:
+        if event.toggle.id == "aside-toggle" and self._toggle_callback:
             event.stop()
             self._toggle_callback(event.value)
 

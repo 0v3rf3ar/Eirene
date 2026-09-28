@@ -735,3 +735,95 @@ def test_notices_never_carry_control_characters_into_the_transcript():
     assert safe_notice("keeps\nits\nlines") == "keeps\nits\nlines", "height must survive"
     long = safe_notice("word " * 200)
     assert len(long) <= 401 and long.endswith("…")
+
+
+@pytest.mark.parametrize("draft", ["word " * 60, "漢字سلام " * 40, "first\n" + "word " * 60])
+async def test_arrows_navigate_visual_wraps_before_history(workdir, draft):
+    app, pilot, context = await start(workdir, size=(36, 24))
+    try:
+        app.prompt.remember("older prompt")
+        app.prompt.value = draft
+        await pilot.pause()
+        assert app.prompt.wrapped_document.height > app.prompt.document.line_count
+        end = app.prompt.cursor_location
+        await pilot.press("up")
+        assert app.prompt.cursor_location < end
+        assert app.prompt.text == draft
+        await pilot.press("down")
+        assert app.prompt.cursor_location == end
+        assert app.prompt.text == draft
+        # Only the first visual row hands Up back to history.
+        app.prompt.move_cursor((0, 0))
+        await pilot.press("up")
+        assert app.prompt.text == "older prompt"
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("shortcut", ["ctrl+c", "ctrl+shift+c", "right-click"])
+async def test_copy_prompt_selection(workdir, monkeypatch, shortcut):
+    from textual.document._document import Selection
+
+    copied = []
+    monkeypatch.setattr("eirene.app.copy_to_system",
+                        lambda text: copied.append(text) or "test-clipboard")
+    app, pilot, context = await start(workdir)
+    try:
+        app.prompt.value = "first line\nsecond line"
+        await settle(pilot)
+        selection = Selection((0, 6), (1, 6))
+        app.prompt.selection = selection
+        if shortcut == "right-click":
+            await pilot.click("#prompt", button=3)
+        else:
+            await pilot.press(shortcut)
+        await pilot.pause()
+        assert app.clipboard == "line\nsecond"
+        assert copied == ["line\nsecond"]
+        assert app.prompt.text == "first line\nsecond line"
+        assert app.prompt.selection == selection
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("key,offset", [
+    ("backspace", -1), ("delete", 0),
+    ("backspace", 5), ("delete", 5), ("ctrl+w", -1),
+])
+async def test_folded_paste_deletes_as_one_unit(workdir, key, offset):
+    app, pilot, context = await start(workdir)
+    try:
+        pasted = "\n".join(f"line {n}" for n in range(10))
+        app.prompt.value = "before "
+        app.prompt.post_message(events.Paste(pasted))
+        await settle(pilot)
+        token = pasted_label(pasted)
+        app.prompt.insert(" after")
+        column = len("before ") + (len(token) if offset == -1 else offset)
+        app.prompt.move_cursor((0, column))
+        await pilot.press(key)
+        await settle(pilot)
+        assert app.prompt.text == "before  after"
+        assert app.prompt.unfold(app.prompt.text) == "before  after"
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_deleting_next_to_folded_paste_preserves_it(workdir):
+    app, pilot, context = await start(workdir)
+    try:
+        pasted = "a\nb\nc\nd"
+        app.prompt.post_message(events.Paste(pasted))
+        await settle(pilot)
+        app.prompt.insert("x")
+        await pilot.press("backspace")
+        assert app.prompt.text == pasted_label(pasted)
+        assert app.prompt.unfold(app.prompt.text) == pasted
+        app.prompt.history.checkpoint()
+        await pilot.press("backspace")
+        assert app.prompt.text == ""
+        await pilot.press("ctrl+z")
+        assert app.prompt.text == pasted_label(pasted)
+        assert app.prompt.unfold(app.prompt.text) == pasted
+    finally:
+        await context.__aexit__(None, None, None)

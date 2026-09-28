@@ -278,3 +278,36 @@ def test_a_very_wide_cell_is_trimmed():
     drawn = [line.plain for line in Markdown(body).lines()]
     assert all(len(line) <= MAX_CELL + 6 for line in drawn)
     assert "…" in drawn[3]
+
+
+def test_wrapped_numbered_items_align_beneath_the_text_and_have_space():
+    source = ("Common motivations include:\n"
+              "10. **Emotional connection:** A desire for intimacy, affection, or companionship.\n"
+              "11. **Novelty:** The excitement of discovering something new.\n"
+              "Every situation is different.")
+    lines = Markdown(source, 38).lines()
+    plain = [line.plain for line in lines]
+    first = next(i for i, line in enumerate(plain) if line.startswith("10."))
+    second = next(i for i, line in enumerate(plain) if line.startswith("11."))
+    assert plain[first - 1] == plain[second - 1] == ""
+    assert all(line.startswith("    ") for line in plain[first + 1:second - 1])
+    assert plain[-2] == "" and plain[-1] == "Every situation is different."
+    assert all(line.cell_len <= 38 for line in lines)
+    assert any("bold" in str(span.style) for line in lines for span in line.spans)
+
+
+def test_short_lists_stay_compact_and_nested_lists_keep_hanging_indent():
+    source = "- first\n- second\n    - nested detail " + "説明 " * 20
+    lines = Markdown(source, 32).lines()
+    assert [line.plain for line in lines[:2]] == ["• first", "• second"]
+    nested = next(i for i, line in enumerate(lines) if line.plain.startswith("    •"))
+    assert all(line.plain.startswith("      ") for line in lines[nested + 1:])
+    assert all(line.cell_len <= 32 for line in lines)
+
+
+def test_prose_has_a_readable_measure_and_blank_lines_do_not_accumulate():
+    lines = Markdown("word " * 100 + "\n\n\n\nNext paragraph.", 180).lines()
+    assert all(line.cell_len <= 88 for line in lines)
+    plain = "\n".join(line.plain for line in lines)
+    assert "\n\n\n" not in plain
+    assert all(line.plain == line.plain.rstrip() for line in lines)

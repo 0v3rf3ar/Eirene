@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import re
 import shlex
@@ -188,12 +189,17 @@ class ShellResult:
     truncated: bool = False
     refused: str = ""
     stalled: bool = False
+    process_id: str = ""
 
     @property
     def ok(self) -> bool:
-        return self.exit_code == 0 and not self.timed_out and not self.refused
+        return bool(self.process_id) or (self.exit_code == 0 and not self.timed_out and not self.refused)
 
     def summary(self) -> str:
+        if self.process_id:
+            return (f"Still running as managed process {self.process_id}. It has not finished. "
+                    "Continue independent work, then use poll_process to check the outcome; do not restart this command.\n"
+                    + self.output).rstrip()
         if self.refused:
             return f"refused: {self.refused}"
         if self.stalled:
@@ -313,7 +319,7 @@ async def _kill_tree(process: asyncio.subprocess.Process) -> None:
 
 async def _terminate_tree(process: asyncio.subprocess.Process) -> None:
     """Kill the process and its children."""
-    if process.returncode is not None:
+    if process.returncode is not None and IS_WINDOWS:
         return
     if IS_WINDOWS:
         try:
@@ -325,10 +331,10 @@ async def _terminate_tree(process: asyncio.subprocess.Process) -> None:
             pass
     else:
         for sig in (signal.SIGTERM, signal.SIGKILL):
-            if process.returncode is not None:
-                return
             try:
-                os.killpg(os.getpgid(process.pid), sig)
+                # The session/group id stays valid if the shell exits before a
+                # child that still holds stdout open.
+                os.killpg(process.pid, sig)
             except (ProcessLookupError, PermissionError, OSError):
                 try:
                     process.kill()
@@ -337,7 +343,8 @@ async def _terminate_tree(process: asyncio.subprocess.Process) -> None:
                 return
             try:
                 await asyncio.wait_for(process.wait(), timeout=3)
-                return
+                if sig == signal.SIGKILL:
+                    return
             except asyncio.TimeoutError:
                 continue
     try:
@@ -347,9 +354,20 @@ async def _terminate_tree(process: asyncio.subprocess.Process) -> None:
 
 
 def _clamp_timeout(value: float | None) -> float:
-    if not value or value <= 0:
+    if not value or not math.isfinite(value) or value <= 0:
         return DEFAULT_TIMEOUT
     return min(float(value), MAX_TIMEOUT)
+
+
+def command_timeout(command: str, fallback: float | None = None) -> float:
+    """Conservative defaults; explicit tool timeouts always take precedence."""
+    words = _tokenize(command)
+    names = {Path(word).name for word in words}
+    if names & {"pytest", "cargo", "make", "cmake", "ninja", "npm", "pnpm", "yarn", "pip", "pip3", "go"}:
+        return max(_clamp_timeout(fallback), 600 if names & {"make", "cmake", "ninja"} else 300)
+    if is_safe(command):
+        return min(_clamp_timeout(fallback), 30)
+    return _clamp_timeout(fallback)
 
 
 def _clamp_stall(value: float | None, limit: float) -> float:
@@ -403,7 +421,8 @@ async def run(command: str, cwd: Path, *, timeout: float | None = None,
               allow_blocked: bool = False,
               stall: float = DEFAULT_STALL, pty: bool = False,
               isolation: str = "none", isolate_network: bool = False,
-              read_paths=(), write_paths=(), read_only: bool = False) -> ShellResult:
+              read_paths=(), write_paths=(), read_only: bool = False,
+              input_text: str | None = None, yield_after: float | None = None) -> ShellResult:
     """Run a command, guaranteed to return."""
     loop = asyncio.get_running_loop()
     started = loop.time()
@@ -426,6 +445,7 @@ async def run(command: str, cwd: Path, *, timeout: float | None = None,
                 from .processes import _pty_command
                 actual = _pty_command(command)
             process = await _start(actual, cwd, env, powershell,
+                                   stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
                                    isolation=isolation,
                                    isolate_network=isolate_network, read_paths=read_paths,
                                    write_paths=write_paths, read_only=read_only)
@@ -437,9 +457,34 @@ async def run(command: str, cwd: Path, *, timeout: float | None = None,
         timed_out = False
         stalled = False
         quiet = _clamp_stall(stall, limit)
+        handed_off = False
+        async def communicate():
+            async def send_input():
+                if process.stdin is not None:
+                    try:
+                        process.stdin.write((input_text or "").encode())
+                        await process.stdin.drain()
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    finally:
+                        process.stdin.close()
+            await asyncio.gather(send_input(), _pump(process, capture, on_output, quiet))
+
+        pump = asyncio.create_task(communicate())
         try:
-            await asyncio.wait_for(_pump(process, capture, on_output, quiet),
-                                   timeout=limit)
+            if yield_after is not None and 0 < yield_after < limit and input_text is None:
+                done, _ = await asyncio.wait({pump}, timeout=yield_after)
+                if not done:
+                    from . import processes
+                    if processes.has_capacity():
+                        pump.cancel()
+                        await asyncio.gather(pump, return_exceptions=True)
+                        process_id = processes.adopt(process, command, cwd,
+                            initial_output=capture.text(), auto_stop=max(0.1, limit - (loop.time() - started)))
+                        handed_off = True
+                        return ShellResult(command, None, capture.text(), loop.time() - started,
+                                           truncated=capture.truncated, process_id=process_id)
+            await asyncio.wait_for(pump, timeout=max(0.1, limit - (loop.time() - started)))
             await asyncio.wait_for(process.wait(), timeout=10)
         except asyncio.TimeoutError:
             timed_out = True
@@ -449,7 +494,10 @@ async def run(command: str, cwd: Path, *, timeout: float | None = None,
             await _kill_tree(process)
             raise
         finally:
-            if process.returncode is None:
+            if not pump.done():
+                pump.cancel()
+                await asyncio.gather(pump, return_exceptions=True)
+            if process.returncode is None and not handed_off:
                 await _kill_tree(process)
 
         duration = loop.time() - started
@@ -483,7 +531,14 @@ async def _start(command: str, cwd: Path, env: dict[str, str] | None,
             exe, "-NoProfile", "-NonInteractive", "-Command", command, **kwargs)
     if IS_WINDOWS:
         return await asyncio.create_subprocess_exec("cmd", "/d", "/c", command, **kwargs)
-    return await asyncio.create_subprocess_exec("/bin/sh", "-c", command, **kwargs)
+    return await asyncio.create_subprocess_exec(*posix_argv(command), **kwargs)
+
+
+def posix_argv(command: str) -> list[str]:
+    """Preserve failed pipeline stages where the installed shell supports it."""
+    if Path("/bin/bash").is_file():
+        return ["/bin/bash", "--noprofile", "--norc", "-o", "pipefail", "-c", command]
+    return ["/bin/sh", "-c", command]
 
 
 def _has(name: str) -> bool:

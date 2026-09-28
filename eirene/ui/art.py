@@ -110,6 +110,20 @@ TIPS = [
     "Durable plans survive restarts; open the current one with /plan.",
     "Use esc to cancel the current turn without leaving the application.",
     "Press ctrl+e to jump back to the end of the transcript.",
+    "Press F1 for commands and tips, or ctrl+k for keybindings.",
+    "Press F2 to choose a model without clearing your draft.",
+    "Press F3 to pick an earlier session.",
+    "Press ctrl+t to preview and choose a theme.",
+    "Press ctrl+p to turn prompt suggestions on or off.",
+    "Tab or right arrow copies a suggestion; Enter sends it.",
+    "Type / to find commands; Tab fills one in, Enter runs it.",
+    "Click command output to expand it; click again to collapse.",
+    "Send a follow-up while working to queue the next step.",
+    "End a line with a backslash, then Enter, for multiline input.",
+    "Use /sandbox to inspect your current execution permissions.",
+    "Use /usage to check token counts and session timing.",
+    "Name a file or function in your request for a focused search.",
+    "Include the error and expected behavior when reporting a bug.",
 ]
 
 

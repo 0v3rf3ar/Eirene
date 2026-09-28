@@ -31,6 +31,15 @@ class Ollama(Provider):
         self.profile = LocalProfile.detect() if name == "ollama-local" else None
         self._model_details: dict[str, dict] = {}
 
+    async def prepare_context(self, model: str) -> int:
+        """Resolve the local budget before the agent builds a request."""
+        if self.profile is None:
+            return 0
+        details = await self._details(model)
+        self.profile = self.profile.with_model(model, details)
+        advertised = details.get("context_length", 0)
+        return min(self.profile.context_tokens, advertised) if advertised else self.profile.context_tokens
+
     @property
     def host(self) -> str:
         return urlparse(self.base_url).netloc or self.base_url
@@ -44,9 +53,9 @@ class Ollama(Provider):
     async def stream(self, messages, model, *, system="", tools=None,
                      max_tokens=8192) -> AsyncIterator:
         if self.profile is not None:
-            details = await self._details(model)
-            self.profile = self.profile.with_model(model, details)
-            system = self.profile.system(system)
+            context = await self.prepare_context(model)
+            if tools is not None:
+                system = self.profile.system(system)
             tools = self.profile.tools(tools)
             max_tokens = min(max_tokens, self.profile.max_tokens)
         payload: dict[str, Any] = {
@@ -56,13 +65,14 @@ class Ollama(Provider):
             "options": {"num_predict": max_tokens},
         }
         if self.profile is not None:
-            payload["options"]["num_ctx"] = self.profile.context_tokens
+            payload["options"]["num_ctx"] = context
         if self.think is not None:
             payload["think"] = self.think
         if tools:
             payload["tools"] = [{"type": "function", "function": spec} for spec in tools]
         calls: list[ToolCall] = []
         finish = "stop"
+        completed = False
         try:
             async with self._client() as client:
                 async with client.stream("POST", f"{self.base_url}/api/chat",
@@ -82,11 +92,14 @@ class Ollama(Provider):
                         for event in _consume(chunk, calls):
                             yield event
                         if chunk.get("done"):
+                            completed = True
                             finish = str(chunk.get("done_reason") or "stop")
                             break
         except httpx.HTTPError as exc:
             raise wrap_transport_error(exc, self.host) from exc
 
+        if not completed:
+            raise ProviderError("model response ended before completion; no tools were executed", retryable=True)
         for call in calls:
             yield call
         yield Done("tool_use" if calls and finish != "length" else finish)
@@ -100,11 +113,15 @@ class Ollama(Provider):
             async with self._client() as client:
                 response = await client.post(f"{self.base_url}/api/show",
                                              json={"model": model},
-                                             headers=self.headers())
+                                             headers=self.headers(), timeout=10)
                 if response.status_code < 400:
                     body = response.json()
                     if isinstance(body, dict) and isinstance(body.get("details"), dict):
-                        details = body["details"]
+                        details = dict(body["details"])
+                        lengths = [value for key, value in (body.get("model_info") or {}).items()
+                                   if key.endswith(".context_length") and isinstance(value, int) and value > 0]
+                        if lengths:
+                            details["context_length"] = min(lengths)
         except (httpx.HTTPError, json.JSONDecodeError, ValueError):
             pass
         self._model_details[model] = details

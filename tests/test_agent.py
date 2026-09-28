@@ -1008,3 +1008,159 @@ async def test_a_cli_file_change_shows_the_diff_card(workdir):
         "the write gets a diff card"
     assert "+int main;" in previews[0].diff
     assert [e.name for e in started] == ["Bash"], "a command still gets a plain card"
+
+
+async def test_local_work_batches_continue_when_results_change(workdir):
+    from eirene.providers.local_profile import LocalProfile
+    provider = Script(
+        *[[ToolCall(str(i), "list_dir", {"path": "."}), Done("tool_use")] for i in range(3)],
+        [TextDelta("finished"), Done("stop")])
+    provider.profile = LocalProfile("compact", 3, 16, 8, 0)
+    async def prepare(model):
+        return 32768
+    provider.prepare_context = prepare
+    runner = build(workdir, provider, max_iterations=2)
+    async def choose(question, options):
+        return "Try a different approach"
+    runner.choose = choose
+    events = await drive(runner)
+    assert events[-1].status == "completed"
+    assert text(events) == "finished"
+    assert any(m.get("content", "").startswith("Try a different approach") for m in runner.session.messages)
+
+
+async def test_local_retry_exhaustion_can_resume(workdir, instant_retries):
+    from eirene.providers.local_profile import LocalProfile
+    provider = Script([ConnectionFailed("offline")], [TextDelta("recovered"), Done("stop")])
+    provider.profile = LocalProfile("compact", 3, 16, 8, 0)
+    runner = build(workdir, provider, retry_attempts=1)
+    choices = []
+    async def choose(question, options):
+        choices.append(options)
+        return "Continue"
+    runner.choose = choose
+    events = await drive(runner)
+    assert choices and text(events) == "recovered"
+    assert events[-1].status == "completed"
+
+
+async def test_duplicate_edit_is_not_executed_again(workdir):
+    (workdir / "a.txt").write_text("old")
+    args = {"path": "a.txt", "old_string": "old", "new_string": "new"}
+    provider = Script([ToolCall("one", "edit_file", args), Done("tool_use")],
+                      [ToolCall("two", "edit_file", args), Done("tool_use")],
+                      [TextDelta("finished"), Done("stop")])
+    runner = build(workdir, provider)
+    events = await drive(runner)
+    results = [e for e in events if isinstance(e, ToolFinished)]
+    assert len(results) == 2 and results[1].reused and not results[1].is_error
+    assert (workdir / "a.txt").read_text() == "new"
+    assert "not executed again" in provider.histories[-1][-1]["content"]
+
+
+async def test_bad_tool_arguments_are_corrected_without_crashing(workdir):
+    provider = Script([ToolCall("bad", "read_file", {"path": []}), Done("tool_use")],
+                      [TextDelta("I need the file path"), Done("stop")])
+    events = await drive(build(workdir, provider))
+    assert not any(isinstance(e, Failed) for e in events)
+    assert "path must be string" in provider.histories[-1][-1]["content"]
+
+
+async def test_mutation_invalidates_cached_file_read(workdir):
+    (workdir / "a.txt").write_text("old")
+    provider = Script([ToolCall("r1", "read_file", {"path": "a.txt"}), Done("tool_use")],
+                      [ToolCall("w", "write_file", {"path": "a.txt", "content": "new"}), Done("tool_use")],
+                      [ToolCall("r2", "read_file", {"path": "a.txt"}), Done("tool_use")],
+                      [TextDelta("done"), Done("stop")])
+    events = await drive(build(workdir, provider))
+    reads = [e for e in events if isinstance(e, ToolFinished) and e.name == "read_file"]
+    assert "new" in reads[-1].result and not reads[-1].reused
+
+
+async def test_truncated_tool_request_never_executes(workdir):
+    provider = Script([ToolCall("partial", "write_file", {"path": "a.txt", "content": "cut off"}),
+                       Done("length")])
+    runner = build(workdir, provider)
+    events = await drive(runner)
+    assert not (workdir / "a.txt").exists()
+    assert events[-1].status == "incomplete"
+    assert runner.session.messages[-1]["role"] == "tool"
+    assert "not executed" in runner.session.messages[-1]["content"]
+
+
+async def test_duplicate_reads_in_one_batch_execute_once(workdir, monkeypatch):
+    calls = []
+    async def execute(name, args, *rest, **kwargs):
+        calls.append((name, args))
+        return "file.txt"
+    monkeypatch.setattr(agent_mod.tools, "execute", execute)
+    provider = Script([ToolCall("a", "list_dir", {"path": "."}),
+                       ToolCall("b", "list_dir", {"path": "."}), Done("tool_use")],
+                      [TextDelta("done"), Done("stop")])
+    events = await drive(build(workdir, provider))
+    assert len(calls) == 1
+    results = [e for e in events if isinstance(e, ToolFinished)]
+    assert len(results) == 2 and results[-1].reused
+
+
+async def test_running_command_is_not_started_twice(workdir, monkeypatch):
+    from eirene.tools import processes
+    monkeypatch.setattr(processes, "matching", lambda command, cwd: "live-process")
+    provider = Script([ToolCall("duplicate", "run_command", {"command": "npm run dev"}), Done("tool_use")],
+                      [TextDelta("using the existing process"), Done("stop")])
+    events = await drive(build(workdir, provider))
+    result = next(e for e in events if isinstance(e, ToolFinished))
+    assert result.reused and "live-process" in result.result
+    assert "not started again" in result.result
+
+
+async def test_local_search_output_fits_remaining_context(workdir, monkeypatch):
+    from eirene.providers.local_profile import LocalProfile
+    from eirene.core.usage import estimate_tokens
+
+    provider = Script(
+        [ToolCall("search", "web_search", {"query": "example"}), Done("tool_use")],
+        [TextDelta("answer"), Done("stop")])
+    provider.profile = LocalProfile("compact", 3, 16, 8, 0)
+
+    async def prepare(model):
+        return 4096
+
+    provider.prepare_context = prepare
+    original = "1. Example\nhttps://example.com\n" + "snippet " * 4000
+
+    async def search(*args, **kwargs):
+        return original
+
+    monkeypatch.setattr(agent_mod.tools.browser, "search", search)
+    runner = build(workdir, provider, isolate_network=False)
+    events = await drive(runner)
+    result = next(e.result for e in events if isinstance(e, ToolFinished))
+    assert result.startswith("1. Example\nhttps://example.com\n")
+    assert len(result) <= provider.profile.context_tokens // 2
+    assert "truncated" not in result
+    assert "output artifact:" in result
+    assert events[-1].status == "completed"
+    assert estimate_tokens(result) <= 512
+
+
+async def test_local_file_read_is_bounded_before_generic_compaction(workdir):
+    from eirene.providers.local_profile import LocalProfile
+    (workdir / "large.txt").write_text("\n".join(f"row {i}" for i in range(2000)))
+    provider = Script(
+        [ToolCall("read", "read_file", {"path": "large.txt"}), Done("tool_use")],
+        [TextDelta("done"), Done("stop")])
+    provider.profile = LocalProfile("compact", 3, 16, 8, 0)
+
+    async def prepare(model):
+        return 4096
+
+    provider.prepare_context = prepare
+    runner = build(workdir, provider)
+    events = await drive(runner)
+    result = next(e.result for e in events if isinstance(e, ToolFinished))
+    assert "2000 lines" in result
+    assert len(result) <= 2048
+    assert "continue with offset=" in result
+    assert "omitted" not in result and "truncated" not in result
+    assert events[-1].status == "completed"

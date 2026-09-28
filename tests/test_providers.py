@@ -556,3 +556,29 @@ def test_error_details_are_flattened_and_capped():
     assert "\x1b" not in detail and "\n" not in detail and "\r" not in detail
     assert detail.startswith("boom second line")
     assert len(detail) <= base.DETAIL_LIMIT + 1
+
+
+async def test_local_ollama_preserves_summary_prompt_and_model_context_limit():
+    recorder = install(Recorder(OLLAMA_STREAM,
+                                headers={"content-type": "application/x-ndjson"},
+                                stream=False))
+    provider = Ollama(None, "http://localhost:11434", name="ollama-local", think=False)
+    provider._model_details["test-model"] = {"context_length": 2048}
+    events = [event async for event in provider.stream(
+        [Message.user("conversation")], "test-model", system="Summarise this conversation",
+        tools=None, max_tokens=256)]
+    assert events
+    assert recorder.payload["messages"][0]["content"] == "Summarise this conversation"
+    assert recorder.payload["options"]["num_ctx"] == 2048
+
+
+async def test_ollama_does_not_execute_calls_from_an_incomplete_stream():
+    partial = json.dumps({"message": {"tool_calls": [{"function": {
+        "name": "write_file", "arguments": {"path": "a.txt", "content": "partial"}}}]}}) + "\n"
+    install(Recorder(partial, headers={"content-type": "application/x-ndjson"}, stream=False))
+    provider = Ollama(None, "http://localhost:11434", think=False)
+    events = []
+    with pytest.raises(ProviderError, match="before completion"):
+        async for event in provider.stream(HISTORY, "test-model", tools=TOOLS):
+            events.append(event)
+    assert not any(isinstance(event, base.ToolCall) for event in events)

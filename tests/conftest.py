@@ -65,3 +65,9 @@ def outside(tmp_path):
 
 
 skip_on_windows = pytest.mark.skipif(os.name == "nt", reason="posix only")
+
+
+@pytest.fixture(autouse=True)
+def skip_startup_animation(monkeypatch):
+    """Keep ordinary UI tests immediate; splash tests opt into the real timer."""
+    monkeypatch.setattr("eirene.ui.splash.SPLASH_SECONDS", 0)

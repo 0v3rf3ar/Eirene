@@ -49,4 +49,13 @@ there or supplied through environment variables. The ChatGPT and Claude
 subscription options use the `codex` and `claude` command-line tools respectively,
 so the matching tool must already be installed and signed in.
 
-Run `/help` inside Eirene to see the available commands.
+Run `/help` or press F1 for commands and tips. `/keybindings` (Ctrl + K) lists
+shortcuts: F2 picks a model, F3 switches sessions, and Ctrl + P toggles prompt
+suggestions. These shortcuts keep your input draft.
+
+Local Ollama sessions manage context and routine recovery in the background.
+Conversation summaries include a record of observed tool results so the model can
+continue unfinished work. Repeated unchanged actions reuse their recorded result.
+Long commands continue as managed processes with time limits, leaving the agent
+free to do independent work. Full output stays available for inspection while the
+model receives a compact preview. See [execution and recovery](docs/harness.md).

@@ -10,7 +10,7 @@ from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Static
 
-from . import art, diff, markup, palette, theme, theme
+from . import art, diff, markup, palette, theme
 from .composer import PromptRow
 from .format import safe_notice, strip_escapes
 
@@ -362,6 +362,13 @@ class ThinkingBlock(Block):
 class AnswerBlock(Block):
     """Streamed assistant prose."""
 
+    DEFAULT_CSS = """
+    AnswerBlock {
+        padding: 0 3;
+        margin-bottom: 1;
+    }
+    """
+
     def __init__(self) -> None:
         self.buffer = ""
         super().__init__(Text(""))
@@ -370,8 +377,7 @@ class AnswerBlock(Block):
         self.buffer += strip_escapes(text)
 
     def _width(self) -> int:
-        return max(self.size.width or self.container_size.width
-                   or markup.DEFAULT_WIDTH, 20)
+        return max(self.content_size.width, 4) if self.size.width else markup.DEFAULT_WIDTH
 
     def on_resize(self, event) -> None:
         self.flush()
@@ -393,7 +399,8 @@ class AnswerBlock(Block):
 class ToolBlock(Block):
     """A tool call with live output."""
 
-    def __init__(self, name: str, label: str):
+    def __init__(self, name: str, label: str, *, hide_output: bool = False):
+        self.hide_output = hide_output
         self.tool = name
         self.label = strip_escapes(label)
         self.output = ""
@@ -420,8 +427,8 @@ class ToolBlock(Block):
     def flush(self) -> None:
         body = Text()
         mark = art.icon("ok") if self.finished and not self.is_error else (
-            art.icon("fail") if self.is_error else art.icon("clock"))
-        body.append(f"{mark} ", style="bold" if self.is_error else "")
+            art.icon("dot") if self.is_error else art.icon("clock"))
+        body.append(f"{mark} ")
         body.append(f"{art.tool_icon(self.tool)} ", style="dim")
         if self.tool in FILE_TOOLS and self.tool not in {"write_file", "edit_file"} \
                 and self.label:
@@ -431,10 +438,11 @@ class ToolBlock(Block):
         body.append(self.label or self.tool, style=named)
         if self.finished and self.seconds >= 1:
             body.append(f"  {self.seconds:.0f}s", style="dim")
-        detail = self.result if self.finished else self.output
+        detail = "" if self.hide_output and not self.is_error else (
+            self.result if self.finished else self.output)
         for line in _tail(detail):
             body.append("\n  ")
-            body.append(line, style="bold" if self.is_error else "dim")
+            body.append(line, style="dim")
         self.update(body)
 
 
@@ -477,7 +485,9 @@ class CommandBlock(ToolBlock):
         if not self.finished:
             color, action = palette.YELLOW, "Running"
         elif self.is_error:
-            color, action = palette.RED, "Ran"
+            color, action = palette.YELLOW, "Ran"
+        elif self.result.startswith("Still running as managed process"):
+            color, action = palette.YELLOW, "Working"
         else:
             color, action = palette.GREEN, "Ran"
         body.append(f"{art.icon('bullet')} ", style=color)
@@ -494,7 +504,7 @@ class CommandBlock(ToolBlock):
         for index, line in enumerate(lines):
             body.append("\n")
             body.append(f"{art.icon('corner')} " if index == 0 else "  ", style="dim")
-            body.append(line, style="bold" if self.is_error else "dim")
+            body.append(line, style="dim")
         self.update(body)
 
 

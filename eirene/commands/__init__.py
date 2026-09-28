@@ -40,7 +40,7 @@ def lookup(name: str) -> Command | None:
 
 def _load() -> None:
     from . import (agents, btw, clear, compact, connect, exit as exit_cmd, git, plan, plugins,
-                   help as help_cmd, model, notification, schedule, sessions, skills,
+                   help as help_cmd, keybindings, model, notification, schedule, sessions, skills,
                    review, sandbox, prompt_suggest, tasks, theme, think, usage)  # noqa: F401
 
 

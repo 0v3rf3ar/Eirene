@@ -16,46 +16,143 @@ SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cach
              ".pytest_cache", "dist", "build", ".tox", "target", ".idea", ".next"}
 
 
-def read_file(box: Sandbox, path: str, offset: int = 0, limit: int = 0) -> str:
-    """Read a text file with line numbers."""
+def read_file(box: Sandbox, path: str, offset: int = 0, limit: int = 0, *,
+              max_chars: int = 24000, tail: bool = False, pattern: str = "",
+              context: int = 2, byte_offset: int | None = None) -> str:
+    """Size-aware head/tail or grep-style text reads, bounded before rendering."""
+    from collections import deque
+    from ..core.text import safe_text
+
     resolved = box.resolve(path)
-    if not resolved.exists():
-        raise ToolError(f"{box.relative(resolved)} does not exist")
-    if resolved.is_dir():
-        raise ToolError(f"{box.relative(resolved)} is a directory; use list_dir")
-    if _is_binary(resolved):
-        size = resolved.stat().st_size
-        raise ToolError(f"{box.relative(resolved)} is binary ({size} bytes)")
     try:
-        start = max(offset, 0)
-        wanted = limit if limit > 0 else 2000
-        chunk = []
+        if not resolved.exists():
+            raise ToolError(f"{box.relative(resolved)} does not exist")
+        if not resolved.is_file():
+            raise ToolError(f"{box.relative(resolved)} is not a regular file; use list_dir")
+        size = resolved.stat().st_size
+        if _is_binary(resolved):
+            raise ToolError(f"{box.relative(resolved)} is binary ({size} bytes); use read_image or a bounded hex dump")
+        maximum = max(0, min(int(max_chars), MAX_READ_BYTES))
+        if maximum < 256:
+            return "File read deferred: insufficient context; compact history or request a smaller response."[:maximum]
+        # Equivalent to wc -lc, without shell interpolation or unbounded memory.
+        total = 0
+        last = b""
+        with resolved.open("rb") as handle:
+            while data := handle.read(65536):
+                total += data.count(b"\n")
+                last = data[-1:]
+        total += bool(size and last != b"\n")
+        header = f"File: {box.relative(resolved)} ({size} bytes, {total} lines)\n"
+        footer_room = 220
+        room = max(0, maximum - len(header) - footer_room)
+        if byte_offset is not None:
+            with resolved.open("rb") as handle:
+                handle.seek(max(0, byte_offset))
+                data = handle.read(max(1, room // 4))
+                next_byte = handle.tell()
+            text, consumed = _decode_fragment(data, final=next_byte >= size)
+            next_byte -= len(data) - consumed
+            text = safe_text(text)
+            note = f"\nContinue with byte_offset={next_byte}; byte ranges may split UTF-8 characters." if next_byte < size else "\n(end of file)"
+            return (header + text + note)[:maximum]
+        try:
+            expression = re.compile(pattern) if pattern else None
+        except re.error as exc:
+            raise ToolError(f"bad regular expression: {exc}") from exc
+        start = max(0, offset)
+        wanted = max(1, limit) if limit > 0 else (20 if tail else total)
+        if tail:
+            start = max(start, total - wanted)
+        before = deque(maxlen=max(0, min(context, 20)))
+        rows = []
         used = 0
+        through = 0
+        next_line = start
+        next_byte = None
         more = False
-        with resolved.open("r", encoding="utf-8", errors="replace") as handle:
-            for index, (line, clipped) in enumerate(_bounded_lines(handle)):
-                if index < start:
+        with resolved.open("rb") as handle:
+            number = 0
+            while handle.tell() < size:
+                position = handle.tell()
+                raw = handle.readline(MAX_READ_BYTES)
+                number += 1
+                partial = not raw.endswith(b"\n") and handle.tell() < size
+                line = safe_text(raw.decode("utf-8", "replace").rstrip("\r\n"))
+                row = f"{number}\t{line}"
+                if partial:
+                    # Drain this physical line with bounded allocations.
+                    ending = raw[-max(1, room // 4):]
+                    while rest := handle.readline(MAX_READ_BYTES):
+                        ending = (ending + rest)[-max(1, room // 4):]
+                        if rest.endswith(b"\n"):
+                            break
+                    if tail:
+                        row = f"{number}\t… " + safe_text(ending.decode("utf-8", "replace").rstrip("\r\n"))
+                if number <= start:
                     continue
-                if len(chunk) >= wanted or used + len(line.encode("utf-8")) > MAX_READ_BYTES:
-                    more = True
-                    if not chunk:
-                        chunk.append(line[:MAX_READ_BYTES])
+                matched = expression is None or expression.search(line) is not None
+                if matched and expression:
+                    through = number + max(0, min(context, 20))
+                    pending = list(before) + [(number, row, position, raw)]
+                    before.clear()
+                elif matched or number <= through:
+                    pending = [(number, row, position, raw)]
+                else:
+                    before.append((number, row, position, raw))
+                    continue
+                if tail:
+                    # Like tail piped into a byte bound: retain the ending even
+                    # when the requested number of lines exceeds the budget.
+                    if len(row) + 1 > room:
+                        row = f"{number}\t… " + row[-max(0, room - len(str(number)) - 6):]
+                    rows.append((number, row))
+                    used += len(row) + 1
+                    while rows and (used > room or len(rows) > wanted):
+                        used -= len(rows.pop(0)[1]) + 1
+                    continue
+                for n, value, pos, source in pending:
+                    if rows and n <= rows[-1][0]:
+                        continue
+                    if len(rows) >= wanted or used + len(value) + 1 > room:
+                        more = True
+                        next_line = n - 1
+                        if not rows:
+                            # A long line is paged by bytes rather than silently lost.
+                            fragment = source[:max(1, room // 4)]
+                            text, consumed = _decode_fragment(fragment)
+                            rows.append((n, f"{n}\t" + safe_text(text)))
+                            next_byte = pos + consumed
+                        break
+                    rows.append((n, value))
+                    used += len(value) + 1
+                    next_line = n
+                    if partial:
+                        more = True
+                        next_byte = position + len(raw)
+                if more:
                     break
-                chunk.append(line.rstrip("\r\n"))
-                used += len(line.encode("utf-8"))
-                if clipped:
-                    more = True
-                    chunk[-1] += " [line truncated at read limit]"
-                    break
+        body = "\n".join(row for _, row in rows) or ("no matches" if expression else "(empty)")
+        if more:
+            resume = f"byte_offset={next_byte}" if next_byte is not None else f"offset={next_line}"
+            note = f"\n… more lines; continue with {resume}. Use pattern with context, tail=true, or a smaller line range for focused evidence."
+        elif tail:
+            first = rows[0][0] if rows else total + 1
+            note = f"\n(end of file; earlier lines omitted, inspect offset/limit or pattern/context before line {first})" if first > 1 else "\n(end of file)"
+        else:
+            note = "\n(end of selected range)" if start or expression else "\n(end of file)"
+        return (header + body + note)[:maximum]
     except OSError as exc:
         raise ToolError(f"cannot read {box.relative(resolved)}: {exc}") from exc
-    if not chunk:
-        return "(empty)" if start == 0 else f"(no lines at offset {start})"
-    width = len(str(start + len(chunk)))
-    body = "\n".join(f"{start + i + 1:>{width}}\t{line}" for i, line in enumerate(chunk))
-    if more:
-        body += f"\n… more lines; continue with offset={start + len(chunk)}"
-    return body
+
+
+def _decode_fragment(data: bytes, *, final: bool = False) -> tuple[str, int]:
+    """Keep continuation byte offsets on UTF-8 boundaries."""
+    import codecs
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    text = decoder.decode(data, final=final)
+    pending, _ = decoder.getstate()
+    return text, len(data) - len(pending)
 
 
 def _bounded_lines(handle):
@@ -273,5 +370,6 @@ def _is_binary(path: Path) -> bool:
         return True
     if not chunk:
         return False
-    printable = sum(1 for b in chunk if b in (9, 10, 13) or 32 <= b < 127)
-    return printable / len(chunk) < 0.7
+    text = chunk.decode("utf-8", "replace")
+    printable = sum(1 for char in text if char.isprintable() or char in "\t\n\r")
+    return printable / len(text) < 0.7 or text.count("\ufffd") / len(text) > 0.1

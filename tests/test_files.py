@@ -175,3 +175,58 @@ def test_specs_hide_exec_in_plan_mode():
     names = {spec["name"] for spec in registry.specs(include_exec=False)}
     assert "run_command" not in names
     assert "read_file" in names
+
+
+def test_size_aware_read_and_focused_tail(box, workdir):
+    (workdir / "large.txt").write_text("\n".join(f"row {i}" for i in range(500)))
+    body = files.read_file(box, "large.txt", max_chars=1000)
+    assert len(body) <= 1000
+    assert "500 lines" in body and "bytes" in body
+    assert "continue with offset=" in body
+    tail = files.read_file(box, "large.txt", tail=True, limit=3, max_chars=1000)
+    assert "498\trow 497" in tail and "500\trow 499" in tail
+    assert "row 0\n" not in tail
+
+
+def test_pattern_read_includes_neighbors(box, workdir):
+    (workdir / "a.txt").write_text("before\ntarget\nafter\nunrelated\n")
+    body = files.read_file(box, "a.txt", pattern="target", context=1)
+    assert "1\tbefore" in body and "2\ttarget" in body and "3\tafter" in body
+    assert "unrelated" not in body
+
+
+@pytest.mark.parametrize("unit", ["abcdef", "سلام漢字"])
+def test_long_line_can_be_read_without_losing_bytes(box, workdir, unit):
+    import re
+    data = unit * 1000
+    (workdir / "long.txt").write_text(data)
+    body = files.read_file(box, "long.txt", max_chars=700)
+    fragments = [body.split("1\t", 1)[1].split("\n…", 1)[0]]
+    while match := re.search(r"byte_offset=(\d+)", body):
+        body = files.read_file(box, "long.txt", max_chars=700, byte_offset=int(match[1]))
+        fragments.append(body.split("\n", 1)[1].split("\nContinue", 1)[0].split("\n(end", 1)[0])
+        assert len(body) <= 700
+    assert "".join(fragments) == data
+
+
+def test_unicode_text_is_readable_and_controls_are_removed(box, workdir):
+    (workdir / "unicode.txt").write_text("سلام دنیا\n漢字\n\x1b]52;c;unsafe\x07text\n")
+    body = files.read_file(box, "unicode.txt")
+    assert "سلام دنیا" in body and "漢字" in body
+    assert "\x1b" not in body and "\x07" not in body and "unsafe" not in body
+
+
+def test_small_file_with_many_short_lines_is_read_fully(box, workdir):
+    (workdir / "short.txt").write_text("x\n" * 2100)
+    body = files.read_file(box, "short.txt")
+    assert "2100\tx" in body
+    assert "(end of file)" in body
+    assert "continue" not in body
+
+
+def test_tail_retains_end_when_requested_lines_exceed_budget(box, workdir):
+    (workdir / "tail.txt").write_text("\n".join(f"row {i} " + "x" * 100 for i in range(100)))
+    body = files.read_file(box, "tail.txt", tail=True, limit=100, max_chars=700)
+    assert len(body) <= 700
+    assert "100\trow 99" in body
+    assert "earlier lines omitted" in body

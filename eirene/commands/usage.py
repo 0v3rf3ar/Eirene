@@ -7,6 +7,7 @@ from rich.text import Text
 
 from ..core.usage import estimate_messages, human_count, human_duration
 from ..ui import art, theme
+from ..ui.progress import progress_bar
 from . import register
 
 
@@ -23,28 +24,23 @@ def _styles(app) -> dict[str, str]:
             "muted": "dim",
             "heading": "bold",
             "value": "bold",
-            "bar": "bold",
         }
     return {
         "frame": accent.rule,
         "muted": accent.detail,
         "heading": f"bold {accent.marker}",
         "value": f"bold {accent.on_surface}",
-        "bar": f"bold {accent.tool or accent.marker}",
     }
 
 
-def _token_bar(input_tokens: int, output_tokens: int) -> tuple[str, str]:
+def _token_bar(input_tokens: int, output_tokens: int,
+               width: int = BAR_WIDTH) -> tuple[Text, str]:
     """Return a compact visual split of input and output tokens."""
     total = input_tokens + output_tokens
-    if not total:
-        return "░" * BAR_WIDTH, "0% in · 0% out"
-    input_width = round(input_tokens / total * BAR_WIDTH)
-    input_width = min(max(input_width, 0), BAR_WIDTH)
-    output_width = BAR_WIDTH - input_width
-    bar = "█" * input_width + "░" * output_width
-    split = f"{input_tokens / total:.0%} in · {output_tokens / total:.0%} out"
-    return bar, split
+    ratio = input_tokens / total if total else 0
+    split = (f"{ratio:.0%} in · {output_tokens / total:.0%} out"
+             if total else "0% in · 0% out")
+    return progress_bar(ratio, width), split
 
 
 def _content_width(session_id: str, model_rows: list[str]) -> int:
@@ -81,7 +77,7 @@ async def run(app, args: str) -> None:
         for name, (got_in, got_out) in sorted(by_model.items())
     ]
     width = _content_width(str(app.session.id), model_rows)
-    bar, split = _token_bar(stats.input_tokens, stats.output_tokens)
+    bar, split = _token_bar(stats.input_tokens, stats.output_tokens, width - 2)
     styles = _styles(app)
     body = Text()
     body.append(f"╭─ {art.icon('tokens')} usage ", style=styles["heading"])
@@ -114,10 +110,9 @@ async def run(app, args: str) -> None:
         line.append(f"{right_value:>8}", style=styles["value"])
         _append_box_line(body, line, width, styles)
 
-    graph = Text("  ")
-    graph.append(bar, style=styles["bar"])
-    graph.append(f"  {split}", style=styles["muted"])
-    _append_box_line(body, graph, width, styles)
+    label = Text(split.center(width - 2), style=styles["muted"])
+    _append_box_line(body, label, width, styles)
+    _append_box_line(body, bar, width, styles)
 
     if model_rows:
         _append_rule(body, width, styles)

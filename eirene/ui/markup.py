@@ -17,6 +17,8 @@ LABEL_STYLE = "dim"
 LINK_STYLE = f"underline {CYAN}"
 QUOTE_STYLE = "dim italic"
 DEFAULT_WIDTH = 88
+PROSE_WIDTH = 88
+WRAP_CONSOLE = Console(color_system=None)
 
 FENCE = re.compile(r"^\s*(?:```|~~~)\s*([\w+#.-]*)\s*$")
 HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
@@ -247,32 +249,72 @@ def _pad(line: Text, width: int) -> None:
         line.append(" " * room)
 
 
+def prose_lines(line: str, width: int) -> list[Text]:
+    """Wrap styled prose, keeping list and quote continuation lines aligned."""
+    body = block(line)
+    bullet = BULLET.match(line)
+    ordered = ORDERED.match(line)
+    quote = QUOTE.match(line)
+    prefix_length = (len(bullet.group(1)) + 2 if bullet else
+                     len(ordered.group(1)) + len(ordered.group(2)) + 1 if ordered else
+                     2 if quote else len(body.plain) - len(body.plain.lstrip()))
+    prefix = body[:prefix_length]
+    # Preserve room for text even in a deeply nested list on a narrow terminal.
+    if prefix.cell_len >= width:
+        prefix = Text(" " * max(0, width - 3))
+    continuation = Text("│ ", style="dim") if quote else Text(" " * prefix.cell_len)
+    wrapped = body[prefix_length:].wrap(WRAP_CONSOLE, max(1, width - prefix.cell_len),
+                                         overflow="fold", no_wrap=False)
+    rows = []
+    for index, part in enumerate(wrapped):
+        part.rstrip()
+        rows.append((prefix.copy() if index == 0 else continuation.copy()).append_text(part))
+    return rows or [Text("")]
+
+
 class Markdown:
     """Prose with markdown applied and fenced code highlighted."""
 
     def __init__(self, body: str, width: int = DEFAULT_WIDTH):
         self.body = body
-        self.width = max(int(width or DEFAULT_WIDTH), 20)
+        self.width = max(int(width or DEFAULT_WIDTH), 4)
 
     def lines(self) -> list[Text]:
         """Every rendered line, in order."""
         out: list[Text] = []
         source = self.body.splitlines() or [""]
         index = 0
+        previous_list = False
+        previous_wrapped = False
         while index < len(source):
             line = source[index]
             if FENCE.match(line):
                 rendered, used = code_block(source, index, self.width)
                 out.extend(rendered)
                 index += used
+                previous_list = False
                 continue
             drawn = table(source, index)
             if drawn is not None:
                 rendered, used = drawn
                 out.extend(rendered)
                 index += used
+                previous_list = False
                 continue
-            out.append(block(line))
+            rendered = prose_lines(line, min(self.width, PROSE_WIDTH))
+            is_list = bool((BULLET.match(line) or ORDERED.match(line)) and not RULE.match(line))
+            if out and out[-1].plain.strip() and line.strip():
+                # Long list items need breathing room. Short checklists stay compact.
+                if ((is_list and previous_list and (previous_wrapped or len(rendered) > 1))
+                        or (is_list and not previous_list)
+                        or (previous_list and not is_list and not line[:1].isspace())):
+                    out.append(Text(""))
+            if line.strip() or not out or out[-1].plain.strip():
+                out.extend(rendered)
+            if HEADING.match(line) and index + 1 < len(source):
+                out.append(Text(""))
+            previous_list = is_list
+            previous_wrapped = len(rendered) > 1
             index += 1
         return out
 
@@ -291,7 +333,7 @@ class Markdown:
 
     def __rich_console__(self, console: Console,
                          options: ConsoleOptions) -> RenderResult:
-        yield from self.lines()
+        yield from Markdown(self.body, min(self.width, options.max_width)).lines()
 
 
 def render(body: str, width: int = DEFAULT_WIDTH) -> Text:

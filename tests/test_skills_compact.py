@@ -245,3 +245,68 @@ def test_the_shipped_examples_describe_themselves(eirene_home):
     assert "systemd" in found["systemd-service"].description.lower()
     assert found["python-project"].description
     assert all(s.title and s.description for s in found.values())
+
+
+async def test_local_compaction_bounds_summary_requests_and_preserves_latest(workdir):
+    from eirene.core.usage import estimate_messages
+    session = Session.create(workdir)
+    for _ in range(30):
+        session.add_user("obsolete detail " * 200)
+        session.add_assistant("completed " * 100)
+    session.add_user("Continue the original task; preserve the database.")
+
+    class BoundedSummariser(Summariser):
+        calls = 0
+        async def stream(self, messages, model, **kwargs):
+            self.calls += 1
+            assert estimate_messages(messages) + kwargs["max_tokens"] < 4096
+            async for event in super().stream(messages, model, **kwargs):
+                yield event
+
+    provider = BoundedSummariser()
+    before, after, _ = await compact(session, provider, "m", target_tokens=700, context_tokens=4096)
+    assert provider.calls > 1
+    assert after <= 700 < before
+    assert session.messages[-1]["content"] == "Continue the original task; preserve the database."
+    session.close()
+
+
+async def test_compaction_keeps_observed_edits_even_when_summary_omits_them(workdir):
+    session = Session.create(workdir)
+    session.add_user("Fix the bug, then test it")
+    session.add_assistant("", [{"id": "edit", "name": "edit_file", "arguments": {"path": "app.py"}}])
+    session.add_tool_result("edit", "edit_file", "replaced one occurrence", artifact_id="a" * 32)
+    for _ in range(8):
+        session.add_assistant("old chatter " * 100)
+    session.add_user("Continue with the tests")
+    await compact(session, Summariser("Pending: tests"), "m", target_tokens=700, context_tokens=4096)
+    memory = session.messages[1]["content"]
+    assert "edit_file app.py" in memory and "replaced one occurrence" in memory
+    assert "Do not repeat" in memory
+    session.close()
+    resumed = Session.resume(session.id)
+    await compact(resumed, Summariser("Pending: tests"), "m", target_tokens=700, context_tokens=4096)
+    assert "edit_file app.py" in resumed.messages[1]["content"]
+    resumed.close()
+
+
+async def test_automatic_compaction_falls_back_without_losing_latest_request(workdir):
+    session = Session.create(workdir)
+    for _ in range(10):
+        session.add_user("old request " * 100)
+        session.add_assistant("old answer " * 100)
+    session.add_user("Preserve the database; finish the tests")
+    _, after, _ = await compact(session, Summariser(""), "m", target_tokens=700,
+                                context_tokens=4096, automatic=True)
+    assert after <= 700
+    assert session.messages[-1]["content"] == "Preserve the database; finish the tests"
+    session.close()
+
+
+def test_execution_memory_handles_rejected_arguments_and_tiny_limits():
+    from eirene.core.tool_memory import execution_memory, shorten
+    history = [Message.assistant("", [{"id": "bad", "name": "read_file", "arguments": ["bad"]}]),
+               Message.tool("bad", "read_file", "arguments must be an object", True)]
+    assert "FAILED" in execution_memory(history)
+    for limit in (0, 1, 5, 20):
+        assert len(shorten("long content " * 20, limit)) <= limit

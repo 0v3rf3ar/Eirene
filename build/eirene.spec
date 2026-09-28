@@ -14,6 +14,7 @@ hiddenimports += extra_hidden
 
 datas += [(str(ROOT / "pyproject.toml"), ".")]
 datas += [(str(ROOT / "img" / "Eirene.png"), "img")]
+datas += [(str(ROOT / "eirene" / "ui" / "logo.gray.zlib"), "eirene/ui")]
 datas += [(str(ROOT / "skills"), "skills")]
 
 hiddenimports += [
@@ -24,6 +25,7 @@ hiddenimports += [
     "eirene.commands.connect",
     "eirene.commands.exit",
     "eirene.commands.help",
+    "eirene.commands.keybindings",
     "eirene.commands.model",
     "eirene.commands.notification",
     "eirene.commands.processes",

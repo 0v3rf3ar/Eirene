@@ -12,13 +12,14 @@ from ..core.errors import ToolError
 def command(command: str, root: Path, *, backend: str = "auto",
             network: bool = False, read_paths=(), write_paths=(),
             read_only: bool = False) -> list[str]:
+    from .shell import posix_argv
     root = root.resolve()
     if backend == "auto":
         backend = "bubblewrap"
     if backend == "none":
         if read_only:
             raise ToolError("read-only execution requires an isolation backend")
-        return ["/bin/sh", "-c", command]
+        return posix_argv(command)
     reads = [(root / Path(p).expanduser()).resolve() for p in read_paths]
     writes = [(root / Path(p).expanduser()).resolve() for p in write_paths]
     if read_only and writes:
@@ -52,7 +53,7 @@ def command(command: str, root: Path, *, backend: str = "auto",
             argv += ["--bind" if writable else "--ro-bind", str(path), str(path)]
         argv += ["--setenv", "HOME", "/tmp/eirene-home",
                  "--setenv", "TMPDIR", "/tmp", "--chdir", str(root)]
-        return argv + ["/bin/sh", "-c", command]
+        return argv + posix_argv(command)
     raise ToolError(f"unknown isolation backend: {backend}")
 
 

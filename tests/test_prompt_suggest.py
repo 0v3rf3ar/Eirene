@@ -130,7 +130,7 @@ async def test_suggestion_generation_uses_isolated_tool_free_request(workdir):
 
 
 async def test_popup_switch_generates_for_existing_reply(workdir, monkeypatch):
-    from textual.widgets import Switch
+    from eirene.ui.aside import TextToggle
     app, pilot, context = await start(workdir, Script([Done("stop")]))
     ready = asyncio.Event()
     calls = []
@@ -145,7 +145,7 @@ async def test_popup_switch_generates_for_existing_reply(workdir, monkeypatch):
         await dispatch(app, "/prompt-suggest")
         await pilot.pause()
         assert app.aside.open and not app.config.get("prompt_suggest")
-        switch = app.aside.query_one("#aside-toggle", Switch)
+        switch = app.aside.query_one("#aside-toggle", TextToggle)
         await pilot.click(switch)
         await pilot.pause()
         assert app.config.get("prompt_suggest") and switch.value
@@ -325,4 +325,66 @@ async def test_cancelled_answer_never_reveals_prepared_suggestion(workdir, monke
         assert app._suggestion_task is None
     finally:
         release.set()
+        await context.__aexit__(None, None, None)
+
+
+async def test_text_toggle_is_one_line_and_keyboard_operable(workdir):
+    from eirene.ui.aside import TextToggle
+    app, pilot, context = await start(workdir, size=(48, 20))
+    try:
+        await dispatch(app, "/prompt-suggest")
+        await pilot.pause()
+        toggle = app.aside.query_one("#aside-toggle", TextToggle)
+        assert content(toggle) == "<  OFF  >"
+        assert toggle.region.height == 1
+        assert app.aside.region.width < 48
+        toggle.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.config.get("prompt_suggest")
+        assert content(toggle) == "<  ON  >"
+        assert app.focused is toggle
+        await pilot.press("space")
+        await pilot.pause()
+        assert not app.config.get("prompt_suggest")
+        assert content(toggle) == "<  OFF  >"
+        await pilot.press("escape")
+        assert not app.aside.open
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("draft,accepted", [
+    ("Could you tell me which specific project you are referring to so i can have a properr explanation?", False),
+    ("Please provide more details so I can help you.", False),
+    ("Would you like me to explain the implementation?", False),
+    ("How can I help you with this project?", False),
+    ("I need more context before proceeding.", False),
+    ("Explain how the components of this project fit together.", True),
+    ("Could you tell me how the parser works?", True),
+    ("Check my implementation and explain any mistakes.", True),
+    ("Explain this project so I can understand it.", True),
+])
+async def test_suggestion_is_a_user_request_not_an_assistant_reply(workdir, draft, accepted):
+    import json
+    from eirene.core.prompt import SUGGESTION_PROMPT
+
+    class Provider(Script):
+        async def isolated_stream(self, messages, model, **kwargs):
+            assert kwargs["system"] == SUGGESTION_PROMPT
+            assert "sent with role=user" in kwargs["system"]
+            assert json.loads(messages[0]["content"]) == {
+                "previous_user_message": "Explain the project",
+                "assistant_reply_so_far": "Which project do you mean?"}
+            assert kwargs["tools"] is None
+            yield TextDelta(draft)
+            yield Done("stop")
+
+    app, pilot, context = await start(workdir, Provider([Done("stop")]))
+    try:
+        before = list(app.session.messages)
+        result = await app.agent.suggest_prompt("Explain the project", "Which project do you mean?")
+        assert result == (draft if accepted else "")
+        assert app.session.messages == before
+    finally:
         await context.__aexit__(None, None, None)

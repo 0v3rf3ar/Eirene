@@ -212,3 +212,28 @@ async def test_the_stall_watch_can_be_switched_off(workdir, python_command):
                              timeout=10, stall=0)
     assert result.stalled is False
     assert result.ok
+
+
+async def test_explicit_stdin_and_stderr_are_captured(workdir, python_command):
+    result = await shell.run(python_command(
+        "import sys; print(sys.stdin.read()); print('diagnostic', file=sys.stderr)"),
+        workdir, input_text="literal $data\nsecond line", timeout=3)
+    assert result.ok
+    assert "literal $data" in result.output and "diagnostic" in result.output
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX pipeline")
+async def test_pipeline_preserves_producer_failure(workdir):
+    from pathlib import Path
+    if not Path("/bin/bash").is_file():
+        pytest.skip("pipefail shell unavailable")
+    result = await shell.run("(echo diagnostic >&2; exit 7) | cat", workdir, timeout=3)
+    assert result.exit_code == 7
+    assert "diagnostic" in result.output
+
+
+def test_timeout_defaults_are_finite_and_workload_aware():
+    assert shell.command_timeout("rg pattern src") == 30
+    assert shell.command_timeout("pytest -q") == 300
+    assert shell.command_timeout("make all") == 600
+    assert shell._clamp_timeout(float("nan")) == shell.DEFAULT_TIMEOUT

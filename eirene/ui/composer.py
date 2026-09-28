@@ -249,6 +249,31 @@ class Prompt(TextArea):
 
     # events
 
+    def _delete_via_keyboard(self, start, end):
+        """Delete folded pastes as a unit when a deletion touches their label."""
+        start, end = sorted((start, end))
+        if start != end:
+            tokens = {token for token, _ in self._pastes}
+            for row, line in enumerate(self.document.lines):
+                for token in tokens:
+                    column = line.find(token)
+                    while column >= 0:
+                        token_start = (row, column)
+                        token_end = (row, column + len(token))
+                        if start < token_end and end > token_start:
+                            start = min(start, token_start)
+                            end = max(end, token_end)
+                        column = line.find(token, column + len(token))
+        return super()._delete_via_keyboard(start, end)
+
+    async def _on_mouse_down(self, event: events.MouseDown) -> None:
+        if event.button == 3:
+            event.stop()
+            event.prevent_default()
+            self.app.action_copy_selection()
+            return
+        await super()._on_mouse_down(event)
+
     def _load(self, text: str) -> None:
         """Set the text without reopening the menu."""
         self._silent = text
@@ -336,15 +361,13 @@ class Prompt(TextArea):
         if self.menu_open:
             self.post_message(self.Navigate(delta))
             return
-        rows = self.document.line_count
-        row = self.cursor_location[0]
-        if rows > 1:
-            if delta < 0 and row > 0:
-                self.action_cursor_up()
-                return
-            if delta > 0 and row < rows - 1:
-                self.action_cursor_down()
-                return
+        location = self.cursor_location
+        if delta < 0 and not self.navigator.is_first_wrapped_line(location):
+            self.action_cursor_up()
+            return
+        if delta > 0 and not self.navigator.is_last_wrapped_line(location):
+            self.action_cursor_down()
+            return
         self._recall(delta)
 
     def _recall(self, delta: int) -> None:

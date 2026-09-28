@@ -65,6 +65,18 @@ artifact is capped at 20 MB with an explicit truncation marker. Transcript and
 model context use shorter previews; `read_output` retrieves artifact byte ranges.
 External CLI output is limited by what that CLI exposes.
 
+`read_file` checks file size and counts lines with bounded buffers before choosing
+its output. Small files are read fully when they fit; larger reads give numbered
+ranges and continuation offsets. `pattern`/`context` selects grep-style evidence,
+`tail` retains the ending, and `byte_offset` pages oversized lines without splitting
+UTF-8 characters. Local models receive a smaller allowance based on remaining
+estimated context, instructions, tool schemas and reply reserve. Shell guidance
+uses `wc -lc`, `file`, `head`/`tail`, `sed -n` and bounded `rg` searches.
+Binary files are rejected by text reads; use image tools or bounded `od`/`xxd`.
+Terminal displays and headless output strip control and escape sequences while
+preserving printable Unicode. Local web search cards show status and errors while
+keeping successful result bodies hidden.
+
 Ordinary messages sent while working are queued for the next execution boundary.
 Reasoning activity appears only in the live status line, not as transcript entries.
 `/sandbox` opens a structured status popup like `/usage`.
@@ -78,10 +90,14 @@ use neutral gray, including in the ANSI theme, and truncated fragments are rejec
 The feature is off by default and uses extra model requests. With an empty composer,
 Tab or Right Arrow copies the suggestion into an editable draft; Enter sends it.
 Typing your own draft dismisses the suggestion. `/prompt-suggest off` disables it;
-the command without arguments opens a settings popup with an on/off switch.
+the command without arguments opens a compact popup with an immediate
+`<  ON  >` / `<  OFF  >` control. Click it or focus it and press Enter or Space.
 Enabling it also requests a suggestion for the latest completed reply. The popup
 shows generation status; failures and empty responses are reported there rather than
-silently hidden. Turn the switch off and on to retry.
+silently hidden. Turn suggestions off and on to retry. Ctrl + P toggles them directly.
+`/keybindings` or Ctrl + K opens the shortcut reference; F1 shows commands and
+tips, F2 picks a model, and F3 switches sessions. Shortcuts preserve input drafts
+and leave active pickers and text requests undisturbed.
 Pending sequential tool calls are skipped when new instructions arrive. Already
 running commands and parallel read batches finish unless interrupted. Auto mode
 can ask consequential requirement questions. Unattended runs stop when an answer
@@ -107,7 +123,29 @@ Context is budgeted before every native model call, including headless runs.
 Instructions, tool schemas, and response reserve count against configured model
 limits. Counts are estimates; configure `model_context_limits` for your model.
 Compaction prioritizes recent corrections and preserves complete recent tool
-groups. It stops with a clear error if compaction cannot make the context fit.
+groups. Ollama local budgets also include the advertised model context limit.
+Routine compaction and connection retries use the live status line, without warning
+cards. A request that cannot fit still receives an actionable explanation.
+
+Compaction carries a bounded execution record derived from tool results alongside
+the model's summary. Earlier evidence is saved as an output artifact, and the
+latest user request remains verbatim. An empty or timed-out automatic summary
+falls back to quoted instructions and observed results. Duplicate unchanged calls
+within a turn reuse previous results; mutations invalidate cached observations.
+Active processes and hooks bypass caching. Malformed and truncated tool requests
+are returned to the model for correction without executing them.
+
+Foreground commands get workload-based deadlines (30 seconds for simple reads,
+120 by default, 300 for tests/package work, 600 for builds), capped at one hour.
+Explicit timeouts override these defaults. After 10 seconds, commands without
+explicit stdin hand off to the process manager without restarting; their original
+deadline remains in force. A handed-off command is still pending, not successful.
+Managed processes default to a one-hour lifetime and stop when Eirene exits.
+On systems with `/bin/bash`, pipelines enable `pipefail`. Commands can receive
+literal text through the `stdin` argument, which closes after writing; stderr
+remains captured alongside stdout. Output previews keep the beginning and end,
+with bounded full artifacts accessible through `read_output`.
+
 Nested AGENTS.md/EIRENE.md/CLAUDE.md files are supplied before file-tool edits;
 arbitrary shell scripts must still obey the agent's instruction-loading policy.
 

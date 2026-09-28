@@ -139,7 +139,7 @@ async def test_parallel_reads_overlap(workdir, monkeypatch):
         return "read"
     monkeypatch.setattr(agent_module.tools, "execute", execute)
     agent = build(workdir, Script([ToolCall("a", "list_dir", {"path": "."}),
-        ToolCall("b", "list_dir", {"path": "."})], [TextDelta("done")]))
+        ToolCall("b", "list_dir", {"path": "subdir"})], [TextDelta("done")]))
     events = await drive(agent)
     assert count == 2 and all(not e.is_error for e in events if isinstance(e, ToolFinished))
 

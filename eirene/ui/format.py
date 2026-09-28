@@ -70,7 +70,8 @@ def strip_escapes(text: str) -> str:
     animation) otherwise wipes the interface it is being displayed in.
     """
     # Never trim: a streamed chunk may end mid-word, and the space matters.
-    return _ESCAPES.sub("", str(text or ""))
+    from ..core.text import safe_text
+    return _ESCAPES.sub("", safe_text(text, tabs=False))
 
 
 def safe_notice(text: str, limit: int = MAX_NOTICE) -> str:

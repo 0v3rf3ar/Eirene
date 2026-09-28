@@ -1872,8 +1872,8 @@ async def test_a_heavy_chat_compacts_and_fails_closed_if_budget_is_too_small(wor
             if app.turn and app.turn.done():
                 break
         notices = [content(b) for b in blocks(app, NoticeBlock)]
-        assert any("context compacted" in text for text in notices)
-        assert any("exceeds budget" in text for text in notices)
+        assert not any("context compacted" in text or "estimated" in text for text in notices)
+        assert any("Your progress is saved" in text for text in notices)
 
         before = len(notices)
         await type_line(pilot, "again")
@@ -1882,7 +1882,7 @@ async def test_a_heavy_chat_compacts_and_fails_closed_if_budget_is_too_small(wor
             if app.turn and app.turn.done():
                 break
         again = [content(b) for b in blocks(app, NoticeBlock)]
-        assert any("exceeds budget" in text for text in again)
+        assert any("Your progress is saved" in text for text in again)
         assert len(again) >= before
     finally:
         await context.__aexit__(None, None, None)
@@ -2081,9 +2081,9 @@ async def test_dragging_selects_only_what_was_dragged(workdir):
         await pilot.pause()
 
         app.screen.clear_selection()
-        await pilot.mouse_down(offset=(4, answer.region.y))
-        await pilot.hover(offset=(23, answer.region.y))
-        await pilot.mouse_up(offset=(23, answer.region.y))
+        await pilot.mouse_down(offset=(answer.content_region.x + 4, answer.region.y))
+        await pilot.hover(offset=(answer.content_region.x + 23, answer.region.y))
+        await pilot.mouse_up(offset=(answer.content_region.x + 23, answer.region.y))
         await pilot.pause()
         picked = app.screen.get_selected_text()
         assert picked.strip() == "parser reads tokens."
@@ -3451,3 +3451,112 @@ def test_escapes_are_stripped_without_losing_the_output():
     assert strip_escapes("") == ""
     assert strip_escapes("keeps\nits\nlines") == "keeps\nits\nlines"
     assert strip_escapes("\x1b[38;2;255;0;0mred\x1b[0m") == "red"
+
+
+async def test_automatic_compaction_stays_out_of_the_chat(workdir):
+    from eirene.core.session import Message
+    provider = Script([TextDelta("Pending: finish the requested work"), Done("stop")],
+                      [TextDelta("Finished the work."), Done("stop")])
+    app, pilot, context = await start(workdir, provider)
+    try:
+        initial_notices = list(blocks(app, NoticeBlock))
+        app.config.set("context_warning", 12000)
+        app.session.messages = [Message.user("old context " * 500) for _ in range(20)]
+        await type_line(pilot, "continue")
+        for _ in range(40):
+            await pilot.pause()
+            if app.turn and app.turn.done():
+                break
+        assert blocks(app, NoticeBlock) == initial_notices
+        assert any("Finished the work" in content(b) for b in blocks(app, AnswerBlock))
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_wrapped_lists_keep_their_gutter_and_indent_after_resize(workdir):
+    app, pilot, context = await start(workdir, size=(70, 26))
+    try:
+        await app.transcript.remove_children()
+        answer = AnswerBlock()
+        answer.feed("1. **Connection:** " + "a longer explanation " * 8 + "\n2. Next item.")
+        await app.push(answer)
+        answer.flush()
+        await pilot.pause()
+        for width in (70, 44):
+            await pilot.resize_terminal(width, 26)
+            await pilot.pause()
+            shown = content(answer).splitlines()
+            second = next(i for i, line in enumerate(shown) if line.startswith("2."))
+            assert shown[second - 1] == ""
+            assert all(line.startswith("   ") for line in shown[1:second - 1])
+            assert all(len(line) <= answer.content_size.width for line in shown)
+            assert answer.content_region.x == answer.region.x + 3
+            # Physical terminal cells must match the renderer, not rewrap at x=0.
+            strips = app.screen._compositor.render_strips()
+            row = "".join(segment.text for segment in strips[answer.region.y + 1])
+            assert row.startswith(" " * (answer.content_region.x + 3))
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_hidden_search_results_keep_status_and_errors_visible(workdir):
+    app, pilot, context = await start(workdir)
+    try:
+        card = await app.push(ToolBlock("web_search", "example query", hide_output=True))
+        card.feed("private search snippet")
+        card.flush()
+        assert "private search snippet" not in content(card)
+        card.finish("private search result", False, 1)
+        card.flush()
+        assert "private search result" not in content(card)
+        assert "example query" in content(card)
+        card.finish("search failed", True, 1)
+        card.flush()
+        assert "search failed" in content(card)
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_quick_menu_shortcuts_preserve_the_draft(workdir):
+    app, pilot, context = await start(workdir)
+    try:
+        app.prompt.value = "unfinished draft"
+        await pilot.press("ctrl+k")
+        await pilot.pause()
+        assert app.aside.open
+        assert "Keybindings" in content(app.aside.body)
+        assert "F2" in content(app.aside.body)
+        assert app.prompt.value == "unfinished draft"
+        await pilot.press("escape")
+        await pilot.press("f1")
+        await pilot.pause()
+        menu = "".join(content(b) for b in app.transcript.children)
+        assert "/keybindings" in menu and "tips" in menu
+        assert app.prompt.value == "unfinished draft"
+        await pilot.press("ctrl+p")
+        await pilot.pause()
+        assert app.config.get("prompt_suggest")
+        assert app.prompt.value == "unfinished draft"
+        await pilot.press("ctrl+p")
+        await pilot.pause()
+        assert not app.config.get("prompt_suggest")
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("key,command", [("f2", "/model"), ("f3", "/sessions"), ("ctrl+t", "/theme")])
+async def test_picker_shortcuts_use_existing_commands(workdir, monkeypatch, key, command):
+    app, pilot, context = await start(workdir)
+    called = []
+    monkeypatch.setattr(app, "_start_command", called.append)
+    try:
+        app.prompt.value = "keep this draft"
+        await pilot.press(key)
+        assert called == [command]
+        assert app.prompt.value == "keep this draft"
+        app._text_future = asyncio.get_running_loop().create_future()
+        await pilot.press(key)
+        assert called == [command], "shortcuts leave active text requests alone"
+        app._text_future.cancel()
+    finally:
+        await context.__aexit__(None, None, None)
