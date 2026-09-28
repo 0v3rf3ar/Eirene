@@ -37,8 +37,8 @@ def test_release_archives_preserve_binary_and_license(target, tmp_path):
             assert set(bundle.getnames()) == {'eirene', 'LICENSE', 'NOTICE'}
             assert bundle.getmember('eirene').mode == 0o755
             assert bundle.extractfile('eirene').read() == binary.read_bytes()
-    checksum = archive.with_name(archive.name + '.sha256').read_text()
-    assert checksum == f'{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n'
+    checksum = archive.with_name(archive.name + '.sha256').read_bytes()
+    assert checksum == f'{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n'.encode('ascii')
 
 
 @pytest.fixture

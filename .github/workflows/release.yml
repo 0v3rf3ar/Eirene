@@ -38,7 +38,8 @@ jobs:
           version=${RELEASE_TAG#v}
           for asset in "eirene-Linux-amd64-$version.tar.gz" "eirene-Linux-arm64-$version.tar.gz" "eirene-MacOS-silicon-$version.tar.gz" "eirene-Windows-amd64-$version.zip"; do
             test -f "$asset"
-            sha256sum --check "$asset.sha256"
+            # Accept checksum files from older Windows builds that used CRLF.
+            tr -d '\r' < "$asset.sha256" | sha256sum --check -
           done
           cp ../install.sh ../install.ps1 .
           sha256sum eirene-*.tar.gz eirene-*.zip install.sh install.ps1 > SHA256SUMS

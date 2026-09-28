@@ -55,7 +55,9 @@ def package(target: str, binary: Path, output: Path, version: str) -> Path:
                 with source.open("rb") as data:
                     bundle.addfile(info, data)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    archive.with_name(archive.name + ".sha256").write_text(f"{digest}  {archive.name}\n", encoding="ascii")
+    # Bytes avoid Windows text-mode CRLF translation breaking Linux sha256sum.
+    archive.with_name(archive.name + ".sha256").write_bytes(
+        f"{digest}  {archive.name}\n".encode("ascii"))
     return archive
 
 

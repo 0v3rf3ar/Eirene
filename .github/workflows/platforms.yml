@@ -57,8 +57,7 @@ jobs:
         run: python build.py --no-install --skip-tests
       - name: Compress and test extracted executable
         run: python scripts/package_release.py --target ${{ matrix.target }}
-      - name: Test shell installer
-        if: runner.os != 'Windows'
+      - name: Test release archives and shell installer
         run: python -m pytest -q tests/test_release.py
       - name: Test PowerShell installer
         shell: pwsh
@@ -70,4 +69,3 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
-
