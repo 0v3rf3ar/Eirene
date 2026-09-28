@@ -3,11 +3,12 @@ param([Parameter(Mandatory = $true)][string]$Target)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $extension = if ($Target -eq 'windows-amd64') { 'zip' } else { 'tar.gz' }
-$version = (& python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])").Trim()
+# Use fixture-specific names: the mock also sees variables from install.ps1.
+$fixtureVersion = (& python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])").Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Could not read release version.' }
 $label = @{'linux-amd64' = 'Linux-amd64'; 'linux-arm64' = 'Linux-arm64'; 'macos-silicon' = 'MacOS-silicon'; 'windows-amd64' = 'Windows-amd64'}[$Target]
-$asset = "eirene-$label-$version.$extension"
-$archiveFixture = Join-Path $root "release/$asset"
+$fixtureAsset = "eirene-$label-$fixtureVersion.$extension"
+$archiveFixture = Join-Path $root "release/$fixtureAsset"
 $checksumFixture = (Get-FileHash -LiteralPath $archiveFixture -Algorithm SHA256).Hash.ToLowerInvariant()
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('eirene-installer-test-' + [guid]::NewGuid().ToString('N'))
 $installDirectory = Join-Path $testRoot 'path with spaces'
@@ -18,11 +19,11 @@ function Invoke-WebRequest {
     param([switch]$UseBasicParsing, [string]$Uri, [string]$OutFile, [int]$TimeoutSec)
     $requests.Add($Uri)
     if ($Uri.EndsWith('/releases/latest')) {
-        [IO.File]::WriteAllText($OutFile, ('{"tag_name":"v' + $version + '"}'))
-    } elseif ($Uri.EndsWith('/SHA256SUMS')) {
+        [IO.File]::WriteAllText($OutFile, ('{"tag_name":"v' + $fixtureVersion + '"}'))
+    } elseif ($Uri -ceq "https://github.com/0v3rf3ar/Eirene/releases/download/v$fixtureVersion/SHA256SUMS") {
         $hash = if ($corrupt) { '0' * 64 } else { $checksumFixture }
-        [IO.File]::WriteAllText($OutFile, "$hash  $asset`n")
-    } elseif ($Uri.EndsWith("/$asset")) {
+        [IO.File]::WriteAllText($OutFile, "$hash  $fixtureAsset`n")
+    } elseif ($Uri -ceq "https://github.com/0v3rf3ar/Eirene/releases/download/v$fixtureVersion/$fixtureAsset") {
         Copy-Item -LiteralPath $archiveFixture -Destination $OutFile
     } else {
         throw "Unexpected download: $Uri"
@@ -32,18 +33,18 @@ function Invoke-WebRequest {
 try {
     # First install and an atomic upgrade into a path with spaces.
     & "$root/install.ps1" -Version latest -InstallDir $installDirectory -NoPathUpdate
-    & "$root/install.ps1" -Version "v$version" -InstallDir $installDirectory -NoPathUpdate
+    & "$root/install.ps1" -Version "v$fixtureVersion" -InstallDir $installDirectory -NoPathUpdate
     $name = if ($Target -eq 'windows-amd64') { 'eirene.exe' } else { 'eirene' }
     $binary = Join-Path $installDirectory $name
     $originalHash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
     & $binary --version
     if ($LASTEXITCODE -ne 0) { throw 'Installed binary is not executable.' }
-    if (-not ($requests -contains "https://github.com/0v3rf3ar/Eirene/releases/download/v$version/$asset")) {
+    if (-not ($requests -contains "https://github.com/0v3rf3ar/Eirene/releases/download/v$fixtureVersion/$fixtureAsset")) {
         throw 'Installer chose the wrong release asset.'
     }
     $corrupt = $true
     $failed = $false
-    try { & "$root/install.ps1" -Version "v$version" -InstallDir $installDirectory -NoPathUpdate }
+    try { & "$root/install.ps1" -Version "v$fixtureVersion" -InstallDir $installDirectory -NoPathUpdate }
     catch {
         if ($_.Exception.Message -notmatch 'Checksum mismatch') { throw }
         $failed = $true
