@@ -385,6 +385,10 @@ class AnswerBlock(Block):
     def flush(self) -> None:
         self.update(markup.render(self.buffer.rstrip(), self._width()))
 
+    def action_open_link(self, url: str) -> None:
+        """Open a link from rendered assistant Markdown."""
+        self.app.open_url(url)
+
     def get_selection(self, selection):
         """Copy what is on screen, without the panel padding."""
         shown = markup.Markdown(self.buffer.rstrip(), self._width()).plain()
@@ -595,11 +599,13 @@ class Transcript(VerticalScroll):
         self._live: list[Widget] = []
         self._follow_token = 0
         self._programmatic_follow = False
+        self._following = True
 
     def watch_scroll_y(self, old_value: float, new_value: float) -> None:
         super().watch_scroll_y(old_value, new_value)
         if not self._programmatic_follow and old_value != new_value:
             self._follow_token += 1
+            self._following = self.max_scroll_y - new_value <= 1
         self.call_after_refresh(self.refresh_navigation)
 
     def on_resize(self, event) -> None:
@@ -632,6 +638,7 @@ class Transcript(VerticalScroll):
         bottom_link.styles.offset = (x, y)
 
     def go_to_bottom(self) -> None:
+        self._following = True
         self.scroll_end(animate=False)
         self.call_after_refresh(self.refresh_navigation)
 
@@ -657,7 +664,7 @@ class Transcript(VerticalScroll):
 
     async def push(self, block: Widget, live: bool = False) -> Widget:
         """Append a block, following it only when already at the bottom."""
-        follow = self.is_vertical_scroll_end
+        follow = self._following
         await self.mount(block)
         if live:
             self._live.append(block)
@@ -670,7 +677,7 @@ class Transcript(VerticalScroll):
         """Redraw streaming blocks."""
         if not self._live:
             return
-        follow = self.is_vertical_scroll_end
+        follow = self._following
         for block in list(self._live):
             flush = getattr(block, "flush", None)
             if flush:
@@ -686,6 +693,7 @@ class Transcript(VerticalScroll):
     def reset(self) -> None:
         """Drop every block."""
         self._live.clear()
+        self._following = True
         self.remove_children()
 
 

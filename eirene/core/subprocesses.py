@@ -20,4 +20,4 @@ def executable_argv(executable: str, *args: str) -> list[str]:
     if not IS_WINDOWS or Path(executable).suffix.lower() not in (".bat", ".cmd"):
         return argv
     command_processor = os.environ.get("COMSPEC", "cmd.exe")
-    return [command_processor, "/d", "/s", "/c", subprocess.list2cmdline(argv)]
+    return [command_processor, "/d", "/s", "/c", '"' + subprocess.list2cmdline(argv) + '"']

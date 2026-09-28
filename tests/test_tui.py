@@ -536,6 +536,35 @@ async def test_streaming_still_follows_when_reader_is_at_bottom(workdir):
         await pilot.pause()
 
         assert app.transcript.is_vertical_scroll_end
+        answer.feed("\n" + "more streamed text\n" * 15)
+        app.transcript.flush_live()
+        await pilot.pause()
+        assert app.transcript.is_vertical_scroll_end
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_streaming_reattaches_after_reader_returns_to_bottom(workdir):
+    app, pilot, context = await start(workdir, size=(70, 24))
+    try:
+        answer = AnswerBlock()
+        answer.feed("first line\n" * 30)
+        answer.flush()
+        await app.push(answer, live=True)
+        await pilot.pause()
+        app.transcript.scroll_home(animate=False, immediate=True)
+        await pilot.pause()
+        answer.feed("second line\n" * 10)
+        app.transcript.flush_live()
+        await pilot.pause()
+        assert not app.transcript.is_vertical_scroll_end
+
+        app.transcript.scroll_end(animate=False, immediate=True)
+        await pilot.pause()
+        answer.feed("third line\n" * 10)
+        app.transcript.flush_live()
+        await pilot.pause()
+        assert app.transcript.is_vertical_scroll_end
     finally:
         await context.__aexit__(None, None, None)
 

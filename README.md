@@ -13,49 +13,33 @@
 
 </div>
 
-## About
-
-Eirene is a terminal-based coding agent. You give it a project directory and talk
-to it through a Textual interface; it can read files, make changes, run commands,
-and keep sessions around for later. It also supports one-off prompts and scheduled
-tasks when an interactive session is not needed.
-
-It works with API-based providers as well as existing Codex and Claude Code
-subscriptions. File and command permissions can be switched between manual, auto,
-and read-only planning modes. Commands use kernel-enforced isolation by default.
-Commands automatically use Bubblewrap on Linux; no Docker, Podman, or images are needed.
-Bubblewrap must be installed and user namespaces enabled. `/sandbox` shows status.
-Approved edits update the actual project. Additional host paths and command network
-access require explicit grants. See [execution and recovery](docs/harness.md) for
-setup, scope, and limitations.
+A terminal coding agent. Reads files, edits code, and runs commands.
+Works with Ollama, API providers, Codex, and Claude Code.
 
 ## Install
 
-Python 3.10 or newer is required.
+Linux (AMD64/ARM64) and macOS (Apple Silicon):
 
 ```sh
-git clone https://github.com/0v3rf3ar/Eirene.git
-cd Eirene
-python -m venv .venv
-. .venv/bin/activate
-python -m pip install -e .
-eirene
+bash <(curl -fsSL https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.sh)
 ```
 
-On Windows, activate the environment with `.venv\Scripts\activate` instead.
+Windows (AMD64), in PowerShell:
 
-Once Eirene opens, run `/connect` to choose a provider. API keys can be entered
-there or supplied through environment variables. The ChatGPT and Claude
-subscription options use the `codex` and `claude` command-line tools respectively,
-so the matching tool must already be installed and signed in.
+```powershell
+irm https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.ps1 | iex
+```
 
-Run `/help` or press F1 for commands and tips. `/keybindings` (Ctrl + K) lists
-shortcuts: F2 picks a model, F3 switches sessions, and Ctrl + P toggles prompt
-suggestions. These shortcuts keep your input draft.
+No Python needed. Reopen your terminal after installing.
+Run the same command to update; close Eirene first on Windows.
+You can also download a binary from [Releases](https://github.com/0v3rf3ar/Eirene/releases).
 
-Local Ollama sessions manage context and routine recovery in the background.
-Conversation summaries include a record of observed tool results so the model can
-continue unfinished work. Repeated unchanged actions reuse their recorded result.
-Long commands continue as managed processes with time limits, leaving the agent
-free to do independent work. Full output stays available for inspection while the
-model receives a compact preview. See [execution and recovery](docs/harness.md).
+## Use
+
+Run `eirene` in your project folder, then `/connect` to choose a provider.
+Codex and Claude Code need their own CLI installed and signed in.
+Use `/help` or F1 for commands, and `/keybindings` for shortcuts.
+
+Linux command isolation needs Bubblewrap and enabled user namespaces.
+See [platform support and building from source](docs/platforms.md) or
+[permissions and recovery](docs/harness.md) for details.

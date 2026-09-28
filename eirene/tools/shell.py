@@ -526,11 +526,23 @@ async def _start(command: str, cwd: Path, env: dict[str, str] | None,
         process = await asyncio.create_subprocess_exec(*argv, **kwargs)
         return process
     if powershell and IS_WINDOWS:
-        exe = "pwsh" if _has("pwsh") else "powershell"
+        from shutil import which
+        exe = which("pwsh") or which("powershell")
+        if not exe:
+            raise ToolError("PowerShell is not installed; use cmd or install PowerShell")
+        # EncodedCommand avoids cmd quoting and preserves Unicode under Windows 5.1.
+        import base64
+        script = ("$ErrorActionPreference='Stop'; "
+                  "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); "
+                  "$global:LASTEXITCODE=0; & {\n" + command +
+                  "\n}; if (-not $?) { exit 1 }; exit $LASTEXITCODE")
+        encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
         return await asyncio.create_subprocess_exec(
-            exe, "-NoProfile", "-NonInteractive", "-Command", command, **kwargs)
+            exe, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded, **kwargs)
     if IS_WINDOWS:
-        return await asyncio.create_subprocess_exec("cmd", "/d", "/c", command, **kwargs)
+        return await asyncio.create_subprocess_exec(
+            os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c",
+            "chcp 65001 >nul & " + command, **kwargs)
     return await asyncio.create_subprocess_exec(*posix_argv(command), **kwargs)
 
 

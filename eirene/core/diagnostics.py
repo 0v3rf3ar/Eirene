@@ -47,6 +47,8 @@ def collect(config: Config | None = None) -> dict:
         "runtime_log": str(paths.runtime_log()),
         "scheduler_tools": scheduler_tools,
         "execution_isolation": config.get("execution_isolation", "none"),
+        "seatbelt_available": sys.platform == "darwin" and bool(shutil.which("sandbox-exec")),
+        "native_windows_approval_required": os.name == "nt",
         "bubblewrap_available": bool(shutil.which("bwrap")),
         "credential_store": config.get("credential_store", "file"),
         "keyring_available": credentials.available(),

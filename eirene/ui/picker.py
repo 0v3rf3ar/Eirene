@@ -154,14 +154,13 @@ class Picker(Static):
                 option.stylize("reverse")
             body.append_text(option)
             body.append("\n")
-        if len(rows) > WINDOW:
-            body.append(f"  {len(rows)} total\n", style="dim")
         detail = self._detail(rows)
         if detail:
             for line in _wrap(detail, max(self.size.width - 6, 30)):
                 body.append(f"   {line}\n", style="dim italic")
-        hint = f"type to filter: {self.filter}" if self.filter else "type to filter"
-        body.append(f"  ↑↓ move · enter select · esc cancel · {hint}", style="dim")
+        if self.filter:
+            body.append(f"  Filter: {self.filter}\n", style="dim")
+        body.remove_suffix("\n")
         self.update(body)
 
     def _detail(self, rows: list[tuple]) -> str:

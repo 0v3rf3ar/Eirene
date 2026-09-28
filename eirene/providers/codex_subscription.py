@@ -11,6 +11,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 
 from .. import __version__
 from ..core.errors import AuthError, ConnectionFailed, ProviderError
+from .base import ConnectionStatus
 from ..core.subprocesses import executable_argv
 from ..tools import activity
 from .base import (Done, Event, PlanUpdate, Provider, ProviderTool, TextDelta,
@@ -203,8 +204,14 @@ class CodexSubscription(Provider):
                             yield shown
                     self._file_changes.pop(item_id, None)
                 elif method == "error":
+                    if self._turn_id and params.get("turnId") not in (None, self._turn_id):
+                        continue
                     error = params.get("error") or {}
-                    raise ProviderError(str(error.get("message") or "Codex turn failed"))
+                    detail = str(error.get("message") or "Codex turn failed")
+                    if params.get("willRetry"):
+                        yield ConnectionStatus("Codex reconnecting: " + detail)
+                        continue
+                    raise ProviderError(detail)
                 elif method == "turn/completed":
                     completed = params.get("turn") or {}
                     if self._turn_id and completed.get("id") not in (None, self._turn_id):
@@ -375,14 +382,14 @@ class _AppServer:
             result = await asyncio.wait_for(future, self.timeout)
         except asyncio.TimeoutError as exc:
             self.pending.pop(request_id, None)
-            raise ProviderError(f"Codex timed out during {method}", retryable=True) from exc
+            raise ProviderError(f"Codex timed out during {method}", retryable=method != "turn/start") from exc
         return result if isinstance(result, dict) else {}
 
     async def notification(self, timeout: float) -> dict[str, Any]:
         try:
             return await asyncio.wait_for(self.notifications.get(), timeout)
         except asyncio.TimeoutError as exc:
-            raise ProviderError("Codex stopped sending events", retryable=True) from exc
+            raise ProviderError("Codex stopped sending events; turn outcome is unknown, inspect before continuing", retryable=False) from exc
 
     async def _send(self, message: dict[str, Any]) -> None:
         process = self.process

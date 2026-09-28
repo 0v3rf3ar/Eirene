@@ -2,7 +2,7 @@
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 ROOT = Path(SPECPATH).parent
 
@@ -28,7 +28,6 @@ hiddenimports += [
     "eirene.commands.keybindings",
     "eirene.commands.model",
     "eirene.commands.notification",
-    "eirene.commands.processes",
     "eirene.commands.review",
     "eirene.commands.schedule",
     "eirene.commands.skills",
@@ -45,6 +44,9 @@ hiddenimports += [
     "eirene.providers.claude_code",
     "eirene.providers.codex_subscription",
 ]
+
+hiddenimports += collect_submodules("eirene.commands")
+hiddenimports += collect_submodules("keyring.backends")
 
 excludes = ["tkinter", "unittest", "pydoc_data", "test", "distutils",
             "setuptools", "pip", "PIL", "numpy", "pytest"]

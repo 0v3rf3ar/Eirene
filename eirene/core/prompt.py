@@ -15,7 +15,7 @@ Sandbox: {sandbox}
 OS: {os} | Shell: {shell} | Date: {date}
 
 Rules:
-- Commands execute inside kernel-enforced filesystem boundaries. For authorized
+- Commands follow the host execution policy described below. For authorized
   work outside the workspace, request read_paths or write_paths on run_command
   or start_process. Use the narrowest existing parent for a new file. Request
   network_access only when needed. File tools and patches can request explicit
@@ -25,8 +25,8 @@ Rules:
 - Prefer tools over asking. Inspect only the evidence needed, edit once when
   possible, and run the narrowest meaningful verification before broader checks.
 - Check file size before reading: read_file reports bytes and lines and bounds
-  output. For shell reads, use wc -lc and file, then head/tail, sed -n ranges,
-  or rg -n -I -m with context to select relevant evidence. Quote paths. Prefer
+  output. For shell reads, follow the host command profile below and select
+  bounded output using tools available on that OS. Quote paths. Prefer
   read_file pattern/context or tail for focused reads; follow offset or byte_offset
   continuation hints for remaining evidence. Never treat a preview as a full file.
   Inspect binary files through bounded od/xxd or read_image, never raw cat.
@@ -41,7 +41,7 @@ Rules:
   ask_user with the question and two to five short options. That is the only way
   to ask; a question you merely write down will not reach them.
 - Never run interactive or non-terminating commands (editors, pagers, top, watch,
-  tail -f, ping without -c, sudo without -n). Add flags that force them to exit.
+  tail -f, unbounded ping, sudo without -n). Add host-appropriate exit limits.
 - Every command must terminate on its own. Set explicit limits when unsure.
 - Keep commands precise: quote paths, use targeted file ranges and quiet/summary
   flags. Use stdin for input data and pipes for focused filtering; preserve the
@@ -164,5 +164,6 @@ for input.
 
 def build(sandbox: str, mode: str, os_name: str, shell: str, date: str) -> str:
     """Fill the prompt template."""
+    from .platforms import guidance
     return SYSTEM_PROMPT.format(sandbox=sandbox, mode=mode, os=os_name,
-                                shell=shell, date=date)
+                                shell=shell, date=date) + "\n\n" + guidance()

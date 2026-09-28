@@ -328,6 +328,10 @@ TOOLS.append(_output_tool)
 BY_NAME[_output_tool.name] = _output_tool
 
 
+BY_NAME["start_process"].schema["properties"]["powershell"] = {
+    "type": "boolean", "description": "Use PowerShell instead of cmd on Windows."}
+
+
 def specs(include_exec: bool = True) -> list[dict[str, Any]]:
     """Schemas in provider-neutral form."""
     return [{"name": t.name, "description": t.description, "parameters": t.schema}
@@ -459,6 +463,7 @@ async def _execute(name: str, args: dict[str, Any], box: Sandbox, *,
 
     if name == "start_process":
         return await processes.start(_text(args, "command"), box.root,
+                                     powershell=bool(args.get("powershell")),
                                      pty=bool(args.get("pty")), isolation=isolation,
                                      isolate_network=isolate_network and not args.get("network_access", False),
                                      read_paths=args.get("read_paths", []), write_paths=args.get("write_paths", []),

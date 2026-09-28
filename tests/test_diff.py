@@ -184,13 +184,27 @@ def test_the_code_is_syntax_highlighted_in_colour(workdir):
     assert diff.SYNTAX_THEME is palette.CODE_THEME
 
 
-def test_the_theme_does_not_paint_its_own_background(workdir):
-    change = make(workdir, name="code.py", before="x = 1\n", after="y = 2\n")
-    out = styled(change)
-    context = [line for line in out.splitlines()
-               if "48;2;14;43;22" not in line and "48;2;61;18;20" not in line]
-    body = "\n".join(context[2:])
-    assert "48;2;40;42;54" not in body, "context lines must keep the terminal background"
+@pytest.mark.parametrize("name", ["code.py", "notes.txt"])
+@pytest.mark.parametrize("background", ["#ffffff", "#282a36", "#1e1e2e"])
+def test_the_theme_does_not_paint_its_own_background(workdir, name, background):
+    change = make(workdir, name=name, before="x = 1\ny = 2\n",
+                  after="x = 1\ny = 3\n")
+    rows = diff.ChangeView(change).rows(60)
+    console = Console(width=60, force_terminal=True, color_system="truecolor")
+    for row, rendered in zip(change.rows, rows):
+        if row.sign != " ":
+            continue
+        assert row.text == "x = 1"
+        segments = list(console.render(rendered))
+        assert all(segment.style is None or segment.style.bgcolor is None
+                   for segment in segments)
+        with console.capture() as capture:
+            console.print(rendered, style=f"on {background}")
+        out = capture.get()
+        red, green, blue = (int(background[i:i + 2], 16) for i in (1, 3, 5))
+        assert f"48;2;{red};{green};{blue}" in out
+        assert "48;2;0;0;0" not in out
+        assert "49m" not in out
 
 
 def test_the_header_matches_the_layout(workdir):

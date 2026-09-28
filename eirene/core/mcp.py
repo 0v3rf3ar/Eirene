@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+from .subprocesses import executable_argv
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -65,7 +66,7 @@ class MCPClient:
             env = isolation.environment(configured_env if isinstance(configured_env, dict) else {})
         try:
             self.process = await asyncio.create_subprocess_exec(
-                *command, cwd=str(cwd), env=env, stdin=subprocess.PIPE,
+                *executable_argv(command[0], *command[1:]), cwd=str(cwd), env=env, stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 start_new_session=os.name != "nt")
             self.stderr_task = asyncio.create_task(self._drain_stderr())

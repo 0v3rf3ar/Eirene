@@ -12,5 +12,5 @@ async def run(app, args: str) -> None:
     for key, meaning in [(label, hint) for _, _, label, hint in SHORTCUTS] + list(EDITING_KEYS):
         body.append(f"{key:<18}", style="bold")
         body.append(f"{meaning}\n", style="dim")
-    body.append("\nEsc closes this window", style="dim")
+    body.remove_suffix("\n")
     app.aside.show_content(body)

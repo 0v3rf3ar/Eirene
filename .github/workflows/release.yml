@@ -1,0 +1,70 @@
+name: Release binaries
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/platforms.yml
+
+  publish:
+    needs: checks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release
+      - name: Verify all assets and include installers
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release
+          for asset in eirene-linux-amd64.tar.gz eirene-linux-arm64.tar.gz eirene-macos-silicon.tar.gz eirene-windows-amd64.zip; do
+            test -f "$asset"
+            sha256sum --check "$asset.sha256"
+          done
+          cp ../install.sh ../install.ps1 .
+          sha256sum eirene-*.tar.gz eirene-*.zip install.sh install.ps1 > SHA256SUMS
+      - name: Classify release channel
+        id: channel
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          prerelease=$(python scripts/release_metadata.py --tag "$RELEASE_TAG")
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+      - name: Publish complete GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
+          IS_PRERELEASE: ${{ steps.channel.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --json isDraft > release-state.json 2>/dev/null; then
+            python -c 'import json; assert json.load(open("release-state.json"))["isDraft"], "Release already published; use a new tag"'
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "Eirene $RELEASE_TAG"
+          fi
+          gh release upload "$RELEASE_TAG" release/*.tar.gz release/*.zip release/SHA256SUMS release/install.sh release/install.ps1 --clobber
+          if [[ "$IS_PRERELEASE" == true ]]; then
+            gh release edit "$RELEASE_TAG" --prerelease --draft=false --latest=false
+          else
+            gh release edit "$RELEASE_TAG" --prerelease=false --draft=false
+          fi

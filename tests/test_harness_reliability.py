@@ -207,10 +207,10 @@ def test_legacy_backends_normalize_to_auto(backend):
     assert "container_image" not in config
 
 
-def test_auto_requires_linux_even_if_container_runtime_exists(workdir, monkeypatch):
+def test_auto_requires_macos_sandbox_even_if_container_runtime_exists(workdir, monkeypatch):
     monkeypatch.setattr(isolation.sys, "platform", "darwin")
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
-    with pytest.raises(ToolError, match="requires Linux"):
+    monkeypatch.setattr(shutil, "which", lambda name: None if name == "sandbox-exec" else f"/usr/bin/{name}")
+    with pytest.raises(ToolError, match="macOS isolation needs sandbox-exec"):
         isolation.command("echo hi", workdir)
 
 
@@ -223,7 +223,8 @@ async def test_sandbox_command_is_status_only(workdir):
                           sandbox=SimpleNamespace(root=workdir), theme="textual-dark", config={},
                           aside=SimpleNamespace(show_content=lambda body: messages.append(body.plain)))
     await run(app, "")
-    assert "Bubblewrap" in messages[-1]
+    expected = "Seatbelt" if sys.platform == "darwin" else "Windows" if sys.platform == "win32" else "Bubblewrap"
+    assert expected in messages[-1]
     assert "image:" not in messages[-1]
     for option in ("docker", "podman", "image alpine", "none", "auto"):
         with pytest.raises(CommandError, match="shows status"):

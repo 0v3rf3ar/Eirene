@@ -34,6 +34,7 @@ class StatusLine(Static):
         self.input_tokens = 0
         self.output_tokens = 0
         self.verb = art.verb()
+        self._spinner_style = art.spinner_style()
         self.note = ""
         self._tick = 0
         self._timer = None
@@ -50,6 +51,7 @@ class StatusLine(Static):
         self.phase = "thinking"
         self.note = ""
         self.verb = art.verb()
+        self._spinner_style = art.spinner_style()
         self._refresh()
 
     def stop(self, note: str = "") -> None:
@@ -61,7 +63,7 @@ class StatusLine(Static):
     def set_phase(self, phase: str) -> None:
         if phase not in {"thinking", "reasoning"} and not self.thinking and self.started:
             self.thinking = time.monotonic() - self.started
-        self.phase = strip_escapes(phase)
+        self.phase = " ".join(strip_escapes(phase).split())[:240]
         self._refresh()
 
     def set_tokens(self, input_tokens: int, output_tokens: int) -> None:
@@ -79,7 +81,9 @@ class StatusLine(Static):
 
         elapsed = time.monotonic() - self.started
         body = Text()
-        body.append(f"  {art.spinner_frame(self._tick)} ", style="bold")
+        config = getattr(self.app, "config", None) if self.is_mounted else None
+        frame = "*" if config and config.get("reduce_motion", False) else art.spinner_frame(self._tick, self._spinner_style)
+        body.append(f"  {frame} ", style="bold")
         body.append(f"{self.verb}… ", style="bold")
         if self.phase:
             body.append(f"{self.phase} ", style="dim")

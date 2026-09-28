@@ -9,6 +9,8 @@ import re
 import shutil
 import subprocess
 import shlex
+import tempfile
+from ..core.subprocesses import executable_argv
 from pathlib import Path
 
 from ..core.errors import ToolError
@@ -33,11 +35,11 @@ async def diagnostics(box: Sandbox, path: str, timeout: float = 30, *,
     command = _diagnostic_command(target, suffix)
     if suffix == ".rs" and (box.root / "Cargo.toml").is_file() and shutil.which("cargo"):
         command = [shutil.which("cargo"), "check", "--offline", "--message-format=short",
-                   "--target-dir", "/tmp/eirene-cargo-target"]
+                   "--target-dir", str(Path(tempfile.gettempdir()) / "eirene-cargo-target")]
     if suffix == ".go" and (box.root / "go.mod").is_file() and shutil.which("go"):
         command = [shutil.which("go"), "test", "-run", "^$", "./..."]
     if suffix in {".ts", ".tsx"} and (box.root / "tsconfig.json").is_file():
-        compiler = box.root / "node_modules" / ".bin" / "tsc"
+        compiler = box.root / "node_modules" / ".bin" / ("tsc.cmd" if os.name == "nt" else "tsc")
         executable = str(compiler) if compiler.exists() else shutil.which("tsc")
         command = [executable, "--noEmit", "--pretty", "false", "--project", str(box.root / "tsconfig.json")] if executable else None
     if (isolation != "none" or read_only) and command is not None:
@@ -49,7 +51,7 @@ async def diagnostics(box: Sandbox, path: str, timeout: float = 30, *,
     if command is None:
         raise ToolError(f"no installed diagnostic engine supports {suffix or 'this file'}")
     process = await asyncio.create_subprocess_exec(
-        *command, cwd=str(box.root), stdout=asyncio.subprocess.PIPE,
+        *executable_argv(command[0], *command[1:]), cwd=str(box.root), stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT)
     try:
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout)

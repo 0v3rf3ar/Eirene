@@ -7,6 +7,7 @@ import re
 from rich.console import Console, ConsoleOptions, RenderResult
 from rich.syntax import Syntax
 from rich.text import Text
+from rich.style import Style
 
 from .palette import CODE_THEME, CYAN
 
@@ -40,6 +41,7 @@ INLINE = re.compile(
     r"|(?<![\w_])_(?P<em2>[^_\s](?:[^_]*[^_\s])?)_(?![\w_])"
     r"|~~(?P<strike>\S(?:.*?\S)?)~~"
     r"|\[(?P<label>[^\]\n]+)\]\((?P<url>[^)\s]+)\)"
+    r"|(?P<bare>https?://[^\s<>]+)"
 )
 
 STYLES = {
@@ -72,9 +74,16 @@ def inline(text: str) -> Text:
         if match.start() > position:
             body.append(text[position:match.start()])
         groups = match.groupdict()
-        if groups["label"] is not None:
-            body.append(groups["label"], style=LINK_STYLE)
-            body.append(f" ({groups['url']})", style="dim")
+        if groups["label"] is not None or groups["bare"] is not None:
+            url = groups["url"] or groups["bare"].rstrip(".,;:!?)")
+            link = Style.parse(LINK_STYLE) + Style.from_meta(
+                {"@click": f"open_link({url!r})"})
+            body.append(groups["label"] or url, style=link)
+            if groups["label"] is not None:
+                body.append(f" ({url})", style=Style.parse("dim") + Style.from_meta(
+                    {"@click": f"open_link({url!r})"}))
+            else:
+                body.append(groups["bare"][len(url):])
         else:
             for name, style in STYLES.items():
                 if groups.get(name) is not None:

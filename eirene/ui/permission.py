@@ -97,7 +97,7 @@ class PermissionBar(Static):
                 row.stylize("reverse")
             body.append_text(row)
             body.append("\n")
-        body.append("  ↑↓ move · enter choose · y / a / n · esc to deny", style="dim")
+        body.remove_suffix("\n")
         self.update(body)
 
     async def _on_key(self, event: events.Key) -> None:

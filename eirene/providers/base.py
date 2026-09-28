@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import re
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
@@ -12,6 +15,11 @@ import httpx
 
 from ..core.errors import (AuthError, ConnectionFailed, ModelNotFound, ProviderError,
                            RateLimitError)
+
+
+@dataclass
+class ConnectionStatus:
+    text: str
 
 
 @dataclass
@@ -71,7 +79,7 @@ class Done:
 
 
 Event = (TextDelta | ThinkingDelta | ToolCall | Usage | PlanUpdate
-         | ProviderTool | Done)
+         | ProviderTool | ConnectionStatus | Done)
 
 
 class Provider:
@@ -135,14 +143,22 @@ def raise_for_status(response: httpx.Response, host: str, model: str = "") -> No
         raise ProviderError(f"{host} returned 404" + (f": {detail}" if detail else ""),
                             status=404)
     if code == 429:
+        try:
+            error = response.json().get("error", {})
+            error_code = error.get("code", "") if isinstance(error, dict) else ""
+        except (ValueError, AttributeError):
+            error_code = ""
+        if error_code in {"insufficient_quota", "billing_hard_limit_reached", "organization_spend_limit_exceeded", "project_spend_limit_exceeded", "organization_usage_limit_exceeded"}:
+            raise ProviderError(f"{host}: {detail or error_code}", status=code)
         retry = _retry_after(response)
         note = f"rate limited by {host}"
         if retry:
             note += f", retry in {retry:.0f}s"
         raise RateLimitError(note, retry_after=retry)
-    if code >= 500:
-        raise ProviderError(explain(code, host, detail, model),
-                            retryable=True, status=code)
+    if code >= 500 or code == 408:
+        error = ProviderError(explain(code, host, detail, model), retryable=True, status=code)
+        error.retry_after = _retry_after(response)
+        raise error
     raise ProviderError(explain(code, host, detail, model), status=code)
 
 
@@ -221,9 +237,13 @@ def _retry_after(response: httpx.Response) -> float | None:
     if not value:
         return None
     try:
-        return float(value)
+        seconds = float(value)
     except ValueError:
-        return None
+        try:
+            seconds = (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()
+        except (ValueError, TypeError, OverflowError):
+            return None
+    return max(0.0, seconds) if math.isfinite(seconds) else None
 
 
 def wrap_transport_error(exc: Exception, host: str) -> ProviderError:

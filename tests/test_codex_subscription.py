@@ -270,3 +270,20 @@ def test_codex_work_items_become_visible_tool_cards(workdir):
     assert _item_tool({"type": "commandExecution"}, workdir) is None
     assert _item_result({"output": "5\n"}) == "5\n"
     assert _item_result({"type": "commandExecution"}) == ""
+
+
+async def test_retry_notification_does_not_abort_turn(workdir, tmp_path, monkeypatch):
+    import test_codex_subscription as fixture
+    from eirene.providers.base import ConnectionStatus
+    retry = '{{"method": "error", "params": {{"threadId": "thread-1", "turnId": "turn-1", "willRetry": true, "error": {{"message": "connection reset"}}}}}},'
+    # Fake server source is Python, so its boolean must use Python spelling.
+    retry = retry.replace("true", "True")
+    monkeypatch.setattr(fixture, "FAKE_SERVER", FAKE_SERVER.replace("notices = [", "notices = [" + retry))
+    provider = CodexSubscription(binary=fake_codex(tmp_path))
+    provider.set_context(workdir, "auto")
+    try:
+        events = [e async for e in provider.stream([{"role": "user", "content": "go"}], "codex-a")]
+        assert any(isinstance(e, ConnectionStatus) for e in events)
+        assert any(isinstance(e, Done) for e in events)
+    finally:
+        await provider.close()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import shlex
 import shutil
 import signal
@@ -45,7 +46,7 @@ class ManagedProcess:
 _processes: dict[str, ManagedProcess] = {}
 
 
-async def start(command: str, cwd: Path, *, pty: bool = False,
+async def start(command: str, cwd: Path, *, pty: bool = False, powershell: bool = False,
                 isolation: str = "none", isolate_network: bool = False,
                 auto_stop: float = 0, read_paths=(), write_paths=()) -> str:
     reap()
@@ -56,7 +57,7 @@ async def start(command: str, cwd: Path, *, pty: bool = False,
         raise ToolError(reason)
     actual = _pty_command(command) if pty else command
     try:
-        process = await shell._start(actual, cwd, None, False, stdin=subprocess.DEVNULL,
+        process = await shell._start(actual, cwd, None, powershell, stdin=subprocess.DEVNULL,
                                      isolation=isolation,
                                      isolate_network=isolate_network, read_paths=read_paths,
                                      write_paths=write_paths)
@@ -231,4 +232,6 @@ def _pty_command(command: str) -> str:
     executable = shutil.which("script")
     if not executable:
         raise ToolError("PTY mode needs the 'script' command")
+    if sys.platform == "darwin":
+        return shlex.join([executable, "-q", "/dev/null", *shell.posix_argv(command)])
     return f"{shlex.quote(executable)} -qefc {shlex.quote(command)} /dev/null"

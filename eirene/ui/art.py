@@ -43,6 +43,7 @@ SMALL_BANNER = r"""
 TINY_BANNER = "e i r e n e"
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+SPINNERS = (SPINNER, "⡀⠄⠂⠁⠈⠐⠠⢀", "▁▂▃▄▅▆▇█▇▆▅▄▃▂")
 ACCESSIBLE = False
 
 ICONS = {
@@ -153,8 +154,13 @@ def file_icon(path: str) -> str:
     return FOLDER_ICON if not text else PLAIN_FILE_ICON
 
 
-def spinner_frame(tick: int) -> str:
-    return "*" if ACCESSIBLE else SPINNER[tick % len(SPINNER)]
+def spinner_frame(tick: int, style: int = 0) -> str:
+    frames = SPINNERS[style % len(SPINNERS)]
+    return "*" if ACCESSIBLE else frames[tick % len(frames)]
+
+
+def spinner_style() -> int:
+    return random.randrange(len(SPINNERS))
 
 
 def verb(seed: int | None = None) -> str:

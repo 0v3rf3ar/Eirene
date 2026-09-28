@@ -1,0 +1,73 @@
+name: Native platform checks
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          python -m pip install -r requirements-dev.txt
+      - name: Check version and run tests
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          python scripts/release_metadata.py --tag "$RELEASE_TAG"
+          python -m pytest -q
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: linux-amd64
+          - runner: ubuntu-22.04-arm
+            target: linux-arm64
+          - runner: macos-14
+            target: macos-silicon
+          - runner: windows-2022
+            target: windows-amd64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install build dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Build and smoke-test executable
+        run: python build.py --no-install --skip-tests
+      - name: Compress and test extracted executable
+        run: python scripts/package_release.py --target ${{ matrix.target }}
+      - name: Test shell installer
+        if: runner.os != 'Windows'
+        run: python -m pytest -q tests/test_release.py
+      - name: Test PowerShell installer
+        shell: pwsh
+        run: ./tests/installers.ps1 -Target '${{ matrix.target }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: release/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+

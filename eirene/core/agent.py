@@ -38,9 +38,10 @@ ASIDE_HISTORY = 40
 TITLE_TOKENS = 1024
 TRUNCATED = ("length", "max_tokens", "max_output_tokens")
 DEFAULT_MAX_TOKENS = 16384
-RETRY_ATTEMPTS = 5
+RETRY_ATTEMPTS = 12
 RETRY_DELAY = 1.0
-RETRY_MAX_DELAY = 30.0
+RETRY_MAX_DELAY = 60.0
+CONNECTION_STATUS_AFTER = 15.0
 # 0 means the agent keeps going until the work is done.
 DEFAULT_ITERATIONS = 0
 
@@ -228,7 +229,7 @@ class Agent:
             wanted = int(self.config.get("retry_attempts", RETRY_ATTEMPTS))
         except (TypeError, ValueError):
             return RETRY_ATTEMPTS
-        return max(1, min(wanted, 10))
+        return max(1, min(wanted, 100))
 
     @property
     def iteration_limit(self) -> int:
@@ -259,9 +260,10 @@ class Agent:
 
     def system_prompt(self) -> str:
         if getattr(self.provider, "owns_context", False):
-            # The CLI brings its own prompt, tools and sandbox. Only skills
-            # are Eirene's to contribute.
-            return skills_mod.inline_block(self.skills)
+            # The CLI owns its tools and sandbox; contribute only host guidance
+            # and enabled skills, without Eirene tool instructions.
+            from .platforms import guidance
+            return guidance(native=True) + "\n\n" + skills_mod.inline_block(self.skills)
         self.project = project_mod.discover(self.sandbox.root)
         text = prompts.build(sandbox=str(self.sandbox.root), mode=self.mode.value,
                              os_name=_os_name(), shell=_shell_name(),
@@ -362,7 +364,7 @@ class Agent:
                     yield event
 
                 async for event in self._stream():
-                    if isinstance(event, Notice):
+                    if isinstance(event, (Notice, Phase)):
                         yield event
                     elif isinstance(event, ThinkingDelta):
                         thinking += event.text
@@ -608,10 +610,20 @@ class Agent:
         while True:
             attempt += 1
             produced = False
+            waiting = attempt > 1
             try:
                 async for event in self._stream_once():
-                    produced = True
-                    yield event
+                    if isinstance(event, (Notice, pbase.ConnectionStatus)):
+                        waiting = True
+                    elif waiting:
+                        yield Phase(ANSWERING if isinstance(event, TextDelta) else THINKING)
+                        waiting = False
+                    if not isinstance(event, (Notice, pbase.ConnectionStatus, pbase.Usage)):
+                        produced = True
+                    if isinstance(event, pbase.ConnectionStatus):
+                        yield Notice(event.text, transient=True, phase="reconnecting")
+                    else:
+                        yield event
                 return
             except ProviderError as exc:
                 if produced or not exc.retryable:
@@ -622,8 +634,7 @@ class Agent:
                         delay = RETRY_DELAY
                         continue
                     raise ProviderError(f"{exc.user_message()}. You can continue later, try a different approach, or switch models.") from exc
-                wait = min(float(getattr(exc, "retry_after", None) or delay),
-                           RETRY_MAX_DELAY)
+                wait = max(0.0, float(getattr(exc, "retry_after", None) or min(delay, RETRY_MAX_DELAY)))
                 self.logger.info("provider.retry",
                                  extra={"session_id": self.session.id,
                                         "attempt": attempt, "wait": wait,
@@ -631,7 +642,14 @@ class Agent:
                 yield Notice(f"{exc.user_message()} - retrying in "
                              f"{wait:.0f}s (attempt {attempt + 1} of {attempts})",
                              transient=True, phase="reconnecting")
-                await asyncio.sleep(wait)
+                remaining = wait
+                while remaining > 0:
+                    step = min(1.0, remaining)
+                    await asyncio.sleep(step)
+                    remaining -= step
+                    if remaining > 0:
+                        yield Notice(f"Connection interrupted; retrying in {remaining:.0f}s (attempt {attempt + 1} of {attempts})",
+                                     transient=True, phase="reconnecting")
                 delay = min(delay * 2, RETRY_MAX_DELAY)
 
     async def _stream_once(self):
@@ -660,7 +678,12 @@ class Agent:
         task = asyncio.create_task(pump())
         try:
             while True:
-                item = await queue.get()
+                try:
+                    item = await asyncio.wait_for(queue.get(), CONNECTION_STATUS_AFTER)
+                except asyncio.TimeoutError:
+                    yield Notice("Waiting for provider response; connection may be slow", transient=True,
+                                 phase="waiting for response")
+                    continue
                 if item is sentinel:
                     break
                 if isinstance(item, BaseException):
@@ -751,7 +774,14 @@ class Agent:
         network_tools = {"web_search", "web_fetch", "http_request", "browser_inspect", "browser_interact", "browser_screenshot"}
         if call.name in network_tools and self.config.get("isolate_network", True):
             escape = escape or "this tool requires network access outside command isolation"
+        native_windows = (platform.system() == "Windows" and
+                          self.config.get("execution_isolation", "auto") == "auto" and
+                          (call.name in {"run_command", "start_process", "language_diagnostics"} or call.name.startswith("git_")))
+        if native_windows:
+            escape = "Windows native execution has no kernel filesystem or network isolation; approve this command with your user account's access"
         verdict, reason = decide(self.mode, kind, escape)
+        if native_windows and self.mode is Mode.PLAN:
+            verdict, reason = BLOCK, "native Windows commands cannot enforce plan mode; use portable file/search tools"
         if verdict != BLOCK and not escape and tools.harmless(call.name, call.arguments):
             verdict, reason = ALLOW, ""
         outside = tools.escape_paths(call.name, call.arguments) if escape else []
@@ -827,10 +857,10 @@ class Agent:
                                    if call.name == "read_file" and getattr(self.provider, "profile", None)
                                    else int(self.config.get("max_output_bytes", 200_000) or 200_000)),
                         output=output,
-                        isolation=str(self.config.get("execution_isolation", "auto")),
+                        isolation="none" if native_windows else str(self.config.get("execution_isolation", "auto")),
                         isolate_network=bool(self.config.get("isolate_network", True)) and call.name not in network_tools,
                         plan_scope=self.session.id,
-                        read_only=self.mode is Mode.PLAN or kind == tools.READ):
+                        read_only=(self.mode is Mode.PLAN or kind == tools.READ) and not native_windows):
                         if isinstance(item, ToolOutput):
                             yield item
                         else:
@@ -1114,7 +1144,5 @@ def _os_name() -> str:
 
 
 def _shell_name() -> str:
-    import os
-    if os.name == "nt":
-        return "cmd"
-    return "sh"
+    from .platforms import shell_name
+    return shell_name()

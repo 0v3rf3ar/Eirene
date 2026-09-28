@@ -65,7 +65,7 @@ def fake_claude(tmp_path, logged_in=True):
 
 async def test_account_models_and_stream(workdir, tmp_path):
     provider = ClaudeCode(binary=fake_claude(tmp_path))
-    provider.set_context(workdir, "auto")
+    provider.set_context(workdir, "auto", approve=lambda *args: _approve_native())
     assert (await provider.account())["authMethod"] == "claude.ai"
     assert await provider.models() == ["sonnet", "opus", "haiku"]
     seen = []
@@ -92,7 +92,7 @@ def test_modes_and_mode_change_reset_session(workdir):
     provider.set_context(workdir, "manual")
     assert provider._permission_mode() == "manual"
     provider._session_id = "old"
-    provider.set_context(workdir, "auto")
+    provider.set_context(workdir, "auto", approve=lambda *args: _approve_native())
     assert provider._permission_mode() == "auto"
     assert provider._session_id == ""
     provider.set_context(workdir, "plan")
@@ -192,7 +192,7 @@ async def test_claude_tool_work_reaches_the_transcript(workdir, tmp_path):
     from eirene.providers.base import ProviderTool
 
     provider = ClaudeCode(binary=fake_claude(tmp_path))
-    provider.set_context(workdir, "auto")
+    provider.set_context(workdir, "auto", approve=lambda *args: _approve_native())
     events = [event async for event in provider.stream(
         [{"role": "user", "content": "fix it"}], "sonnet", system="Eirene")]
     shown = [event for event in events if isinstance(event, ProviderTool)]
@@ -245,7 +245,7 @@ async def test_the_permission_bridge_stays_out_of_the_transcript(workdir, tmp_pa
         binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
 
     provider = ClaudeCode(binary=str(binary))
-    provider.set_context(workdir, "auto")
+    provider.set_context(workdir, "auto", approve=lambda *args: _approve_native())
     events = [event async for event in provider.stream(
         [{"role": "user", "content": "go"}], "sonnet", system="")]
     shown = [event for event in events if isinstance(event, ProviderTool)]
@@ -273,3 +273,22 @@ def test_a_write_carries_the_diff_it_is_about_to_apply(workdir):
     outside = _change_preview("Write", {"file_path": "/etc/passwd", "content": "x"},
                               workdir)
     assert outside == "x", "a path outside falls back to the content, never raises"
+
+
+async def test_api_retry_is_reported_without_restarting(workdir, tmp_path, monkeypatch):
+    import test_claude_code as fixture
+    from eirene.providers.base import ConnectionStatus
+    retry = '{{"type": "system", "subtype": "api_retry", "attempt": 2, "retry_delay_ms": 1200}},'
+    monkeypatch.setattr(fixture, "FAKE_CLAUDE", FAKE_CLAUDE.replace("events = [", "events = [" + retry))
+    provider = ClaudeCode(binary=fake_claude(tmp_path))
+    provider.set_context(workdir, "auto", approve=lambda *args: _approve_native())
+    try:
+        events = [e async for e in provider.stream([{"role": "user", "content": "go"}], "claude")]
+        assert any(isinstance(e, ConnectionStatus) and "attempt 2" in e.text for e in events)
+        assert any(isinstance(e, Done) for e in events)
+    finally:
+        await provider.close()
+
+
+async def _approve_native():
+    return "yes"

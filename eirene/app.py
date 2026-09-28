@@ -615,7 +615,7 @@ class Eirene(App):
                     card.flush()
                 elif isinstance(event, agent_mod.Notice):
                     if event.transient:
-                        self.status.set_phase(event.phase)
+                        self.status.set_phase(event.text if event.phase in {"reconnecting", "waiting for response"} else event.phase)
                         continue
                     answer = None
                     await self.push(NoticeBlock(event.text))

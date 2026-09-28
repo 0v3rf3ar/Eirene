@@ -98,9 +98,7 @@ class SlashMenu(Static):
                 row.stylize("reverse")
             body.append_text(row)
             body.append("\n")
-        if len(self.matches) > WINDOW:
-            body.append(f"   {len(self.matches)} commands\n", style="dim")
-        body.append("   ↑↓ move · enter or tab to pick · esc to dismiss", style="dim")
+        body.remove_suffix("\n")
         self.update(body)
 
 

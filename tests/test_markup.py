@@ -70,6 +70,15 @@ def test_a_link_shows_its_target():
     assert body.plain == "see the docs (https://example.com) for more"
     assert any(pair[0] == "the docs" and "underline" in pair[1]
                for pair in styles(body))
+    assert any(span.style.meta.get("@click") == "open_link('https://example.com')"
+               for span in body.spans)
+
+
+def test_bare_url_is_clickable_without_trailing_punctuation():
+    body = inline("Visit https://example.com/docs.")
+    assert body.plain == "Visit https://example.com/docs."
+    assert any(span.style.meta.get("@click") == "open_link('https://example.com/docs')"
+               for span in body.spans)
 
 
 def test_headings_lose_the_hashes():

@@ -6,8 +6,9 @@ import re
 from dataclasses import dataclass, field
 
 from rich.console import Console, ConsoleOptions, RenderResult
+from rich.style import Style
 from rich.syntax import Syntax
-from rich.text import Text
+from rich.text import Span, Text
 
 from . import art, palette
 
@@ -32,6 +33,12 @@ LEXERS = {
     ".service": "ini", ".timer": "ini", ".lua": "lua", ".pl": "perl",
     ".swift": "swift", ".dockerfile": "docker", ".tf": "terraform",
 }
+
+
+def _without_background(style: Style | str) -> Style:
+    if isinstance(style, str):
+        style = Style.parse(style)
+    return style.without_color + Style(color=style.color)
 
 
 def strip_gutter(text: str, width: int) -> str:
@@ -153,6 +160,12 @@ class ChangeView:
         except Exception:  # noqa: BLE001
             return Text(text or "")
         body.remove_suffix("\n")
+        # Inherit the UI background instead of resetting it to terminal default.
+        body.style = _without_background(body.style)
+        body.spans = [
+            Span(span.start, span.end, _without_background(span.style))
+            for span in body.spans
+        ]
         return body
 
     def gutter(self) -> int:

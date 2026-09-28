@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 from collections import deque
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any, AsyncIterator
 
 from ..core.errors import (AuthError, ConnectionFailed, EireneError,
                            ProviderError)
+from .base import ConnectionStatus
 from ..core.subprocesses import executable_argv
 from ..tools import activity
 from .base import (Done, Event, PlanUpdate, Provider, ProviderTool, TextDelta,
@@ -102,15 +104,22 @@ class ClaudeCode(Provider):
             if history:
                 prompt = f"Prior Eirene conversation:\n{history}\n\nCurrent user request:\n{prompt}"
 
+        native_windows = os.name == "nt"
+        if native_windows and self.mode != "plan":
+            reason = "Claude Code on native Windows has no kernel sandbox; this turn may run commands with your user account's filesystem and network access"
+            if self.approve is None or await self.approve("native_execution", "Claude Code on Windows", "", reason) not in ("yes", "always"):
+                raise ProviderError("Native Windows Claude Code execution needs approval; use WSL2 for sandboxed execution")
         gate = self.mode != "plan" and self.approve is not None
         asking = self.choose is not None
         broker = None
         args = ["-p", prompt, "--output-format", "stream-json",
                 "--verbose", "--include-partial-messages", "--model", model,
                 "--permission-mode", self._permission_mode(),
-                "--settings", json.dumps({"sandbox": {"enabled": True,
-                    "allowUnsandboxedCommands": False, "failIfUnavailable": True}}),
+                "--settings", json.dumps({"sandbox": {"enabled": not native_windows,
+                    "allowUnsandboxedCommands": native_windows, "failIfUnavailable": not native_windows}}),
                 "--append-system-prompt", _system_prompt(system, asking)]
+        if native_windows and self.mode == "plan":
+            args.extend(["--disallowedTools", "Bash,PowerShell,Write,Edit,NotebookEdit"])
         if gate or asking:
             broker = PermissionBroker(self.root, self.approve if gate else None,
                                       self.choose if asking else None,
@@ -153,8 +162,8 @@ class ClaudeCode(Provider):
                     line = await asyncio.wait_for(process.stdout.readline(), self.timeout)
                 except asyncio.TimeoutError as exc:
                     process.terminate()
-                    raise ProviderError("Claude Code stopped sending events",
-                                        retryable=True) from exc
+                    raise ProviderError("Claude Code stopped sending events; turn outcome is unknown, inspect before continuing",
+                                        retryable=False) from exc
                 if not line:
                     break
                 try:
@@ -165,7 +174,15 @@ class ClaudeCode(Provider):
                 if session_id:
                     self._session_id = session_id
                 kind = str(event.get("type") or "")
-                if kind == "stream_event":
+                if kind == "system" and event.get("subtype") == "api_retry":
+                    attempt = event.get("attempt", "?")
+                    delay_ms = event.get("retry_delay_ms", 0)
+                    try:
+                        delay = max(0, float(delay_ms)) / 1000
+                    except (TypeError, ValueError):
+                        delay = 0
+                    yield ConnectionStatus(f"Claude Code reconnecting: attempt {attempt}, retry in {delay:.0f}s")
+                elif kind == "stream_event":
                     delta = (event.get("event") or {}).get("delta") or {}
                     delta_type = str(delta.get("type") or "")
                     if delta_type == "text_delta":

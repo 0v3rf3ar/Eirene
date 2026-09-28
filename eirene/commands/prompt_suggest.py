@@ -18,5 +18,5 @@ def show(app):
     body = Text()
     body.append("Prompt suggestions\n", style="bold")
     body.append(app._suggestion_status if enabled else "Disabled", style="dim")
-    body.append("\n\nTab / → copy · Enter sends\nExtra model request", style="dim")
+    body.append("\n\nExtra model request", style="dim")
     app.aside.show_toggle(body, enabled, app.set_prompt_suggestions)
