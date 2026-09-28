@@ -11,7 +11,7 @@ $onWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
 if ($onWindows) {
     $cpu = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
     if ($cpu -ne 'AMD64') { throw "Unsupported Windows architecture: $cpu. The Windows release requires AMD64." }
-    $target = 'windows-amd64'
+    $target = 'Windows-amd64'
     $binaryName = 'eirene.exe'
     $extension = 'zip'
     if (-not $InstallDir) { $InstallDir = Join-Path $env:LOCALAPPDATA 'Eirene\bin' }
@@ -22,8 +22,8 @@ if ($onWindows) {
     switch ($osName) {
         'Linux' {
             switch ($cpu) {
-                { $_ -in 'x86_64', 'amd64' } { $target = 'linux-amd64'; break }
-                { $_ -in 'aarch64', 'arm64' } { $target = 'linux-arm64'; break }
+                { $_ -in 'x86_64', 'amd64' } { $target = 'Linux-amd64'; break }
+                { $_ -in 'aarch64', 'arm64' } { $target = 'Linux-arm64'; break }
                 default { throw "Unsupported Linux architecture: $cpu" }
             }
         }
@@ -32,7 +32,7 @@ if ($onWindows) {
                 $silicon = & sysctl -n hw.optional.arm64 2>$null
                 if ($silicon -ne '1') { throw 'The macOS release requires Apple Silicon.' }
             }
-            $target = 'macos-silicon'
+            $target = 'MacOS-silicon'
         }
         default { throw "Unsupported operating system: $osName" }
     }
@@ -63,7 +63,7 @@ try {
         $Version = (Get-Content -Raw -LiteralPath $metadata | ConvertFrom-Json).tag_name
     }
     if ($Version -cnotmatch '^v[0-9][A-Za-z0-9._+-]*$') { throw "Invalid release tag: $Version" }
-    $asset = "eirene-$target.$extension"
+    $asset = "eirene-$target-$($Version.Substring(1)).$extension"
     $base = "https://github.com/$repo/releases/download/$Version"
     $archive = Join-Path $temporary $asset
     $checksums = Join-Path $temporary 'SHA256SUMS'

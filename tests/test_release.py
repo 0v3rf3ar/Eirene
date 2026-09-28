@@ -22,7 +22,11 @@ spec.loader.exec_module(packager)
 def test_release_archives_preserve_binary_and_license(target, tmp_path):
     binary = tmp_path / 'binary'
     binary.write_bytes(b'release binary\x00\xff')
-    archive = packager.package(target, binary, tmp_path / 'release')
+    archive = packager.package(target, binary, tmp_path / 'release', '0.1.7b1')
+    label = {'linux-amd64': 'Linux-amd64', 'linux-arm64': 'Linux-arm64',
+             'macos-silicon': 'MacOS-silicon', 'windows-amd64': 'Windows-amd64'}[target]
+    extension = 'zip' if target == 'windows-amd64' else 'tar.gz'
+    assert archive.name == f'eirene-{label}-0.1.7b1.{extension}'
     if target == 'windows-amd64':
         with zipfile.ZipFile(archive) as bundle:
             assert set(bundle.namelist()) == {'eirene.exe', 'LICENSE', 'NOTICE'}
@@ -50,7 +54,8 @@ def installer(tmp_path):
     binary = fixture / 'binary'
     binary.write_text('#!/bin/sh\nprintf "Eirene fixture\\n"\n')
     for target in ('linux-amd64', 'linux-arm64', 'macos-silicon'):
-        packager.package(target, binary, fixture)
+        for version in ('1.2.3', '2.3.4', '0.1.7b1'):
+            packager.package(target, binary, fixture, version)
     (fixture / 'SHA256SUMS').write_text(''.join(p.read_text() for p in sorted(fixture.glob('*.sha256'))))
     (tools / 'uname').write_text('#!/bin/sh\nif [ "$1" = -s ]; then echo "$TEST_OS"; else echo "$TEST_CPU"; fi\n')
     (tools / 'sysctl').write_text('#!/bin/sh\necho "${TEST_SILICON:-0}"\n')
@@ -79,8 +84,8 @@ else:
     return run, env, fixture
 
 
-@pytest.mark.parametrize('system,cpu,target', [('Linux', 'x86_64', 'linux-amd64'),
-    ('Linux', 'aarch64', 'linux-arm64'), ('Darwin', 'arm64', 'macos-silicon')])
+@pytest.mark.parametrize('system,cpu,target', [('Linux', 'x86_64', 'Linux-amd64'),
+    ('Linux', 'aarch64', 'Linux-arm64'), ('Darwin', 'arm64', 'MacOS-silicon')])
 def test_installer_detects_host_and_installs_executable(installer, system, cpu, target):
     run, env, _ = installer
     result = run(TEST_OS=system, TEST_CPU=cpu)
@@ -89,7 +94,7 @@ def test_installer_detects_host_and_installs_executable(installer, system, cpu, 
     assert os.access(binary, os.X_OK)
     assert subprocess.check_output([str(binary), '--version'], text=True).strip() == 'Eirene fixture'
     requests = Path(env['TEST_LOG']).read_text()
-    assert f'/v1.2.3/eirene-{target}.tar.gz' in requests
+    assert f'/v1.2.3/eirene-{target}-1.2.3.tar.gz' in requests
     assert '/v1.2.3/SHA256SUMS' in requests
 
 
@@ -105,7 +110,7 @@ def test_installer_failure_preserves_existing_binary(installer, kind):
     binary = Path(env['EIRENE_INSTALL_DIR']) / 'eirene'
     original = binary.read_bytes()
     if kind == 'checksum':
-        (fixture / 'SHA256SUMS').write_text('0' * 64 + '  eirene-linux-amd64.tar.gz\n')
+        (fixture / 'SHA256SUMS').write_text('0' * 64 + '  eirene-Linux-amd64-1.2.3.tar.gz\n')
         result = run()
         assert 'checksum mismatch' in result.stderr
     else:
@@ -114,10 +119,11 @@ def test_installer_failure_preserves_existing_binary(installer, kind):
     assert binary.read_bytes() == original
 
 
-def test_installer_pinned_version_and_path_update_are_repeatable(installer):
+@pytest.mark.parametrize('version', ['v2.3.4', 'v0.1.7b1'])
+def test_installer_pinned_version_and_path_update_are_repeatable(installer, version):
     run, env, _ = installer
     for _ in range(2):
-        result = run(EIRENE_VERSION='v2.3.4', EIRENE_NO_PATH='0')
+        result = run(EIRENE_VERSION=version, EIRENE_NO_PATH='0')
         assert result.returncode == 0, result.stderr
     profile = (Path(env['HOME']) / '.bashrc').read_text()
     assert profile.count('# Eirene') == 1

@@ -159,6 +159,8 @@ def test_a_broken_notifier_does_not_raise(monkeypatch):
 def test_macos_uses_osascript(monkeypatch):
     monkeypatch.setattr(notify, "IS_MAC", True)
     monkeypatch.setattr(notify, "IS_WINDOWS", False)
+    monkeypatch.setattr(notify.shutil, "which",
+                        lambda name: "/mock/osascript" if name == "osascript" else None)
     command = notify._command("chat", 'say "hi"')
     assert command[0] == "osascript"
     assert "Eirene" in command[2]
@@ -168,6 +170,8 @@ def test_macos_uses_osascript(monkeypatch):
 def test_windows_uses_powershell(monkeypatch):
     monkeypatch.setattr(notify, "IS_MAC", False)
     monkeypatch.setattr(notify, "IS_WINDOWS", True)
+    monkeypatch.setattr(notify.shutil, "which",
+                        lambda name: "/mock/powershell" if name == "powershell" else None)
     command = notify._command("chat", "done")
     assert command[0] == "powershell"
     assert "BalloonTipTitle" in command[-1]

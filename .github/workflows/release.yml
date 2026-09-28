@@ -29,11 +29,14 @@ jobs:
           merge-multiple: true
           path: release
       - name: Verify all assets and include installers
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
           cd release
-          for asset in eirene-linux-amd64.tar.gz eirene-linux-arm64.tar.gz eirene-macos-silicon.tar.gz eirene-windows-amd64.zip; do
+          version=${RELEASE_TAG#v}
+          for asset in "eirene-Linux-amd64-$version.tar.gz" "eirene-Linux-arm64-$version.tar.gz" "eirene-MacOS-silicon-$version.tar.gz" "eirene-Windows-amd64-$version.zip"; do
             test -f "$asset"
             sha256sum --check "$asset.sha256"
           done

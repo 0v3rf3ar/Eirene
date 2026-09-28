@@ -28,7 +28,7 @@ def check_host(target: str) -> None:
                          f"got {platform.system()} {platform.machine()}")
 
 
-def package(target: str, binary: Path, output: Path) -> Path:
+def package(target: str, binary: Path, output: Path, version: str) -> Path:
     """Archive the executable plus license files; preserve executable mode."""
     if not binary.is_file() or binary.is_symlink():
         raise ValueError("release binary must be a regular file")
@@ -36,7 +36,8 @@ def package(target: str, binary: Path, output: Path) -> Path:
     name = "eirene.exe" if windows else "eirene"
     files = [(binary, name), (ROOT / "LICENSE", "LICENSE"), (ROOT / "NOTICE", "NOTICE")]
     output.mkdir(parents=True, exist_ok=True)
-    archive = output / f"eirene-{target}.{'zip' if windows else 'tar.gz'}"
+    label = target.replace("linux-", "Linux-").replace("macos-", "MacOS-").replace("windows-", "Windows-")
+    archive = output / f"eirene-{label}-{version}.{'zip' if windows else 'tar.gz'}"
     if windows:
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as bundle:
             for source, member in files:
@@ -86,7 +87,9 @@ def main() -> None:
     args = parser.parse_args()
     check_host(args.target)
     binary = args.dist / ("eirene.exe" if args.target == "windows-amd64" else "eirene")
-    archive = package(args.target, binary, args.output)
+    from release_metadata import read_version
+    version = read_version(ROOT / "pyproject.toml")
+    archive = package(args.target, binary, args.output, version)
     smoke_archive(archive, args.target == "windows-amd64")
     print(archive)
 

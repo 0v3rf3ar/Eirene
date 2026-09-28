@@ -33,6 +33,9 @@ irm https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.ps1 | iex
 No Python needed. Reopen your terminal after installing.
 Run the same command to update; close Eirene first on Windows.
 You can also download a binary from [Releases](https://github.com/0v3rf3ar/Eirene/releases).
+Archives use `eirene-<OS>-<architecture>-<version>.<format>`: `Linux-amd64`,
+`Linux-arm64`, and `MacOS-silicon` use `.tar.gz`; `Windows-amd64` uses `.zip`.
+For example: `eirene-MacOS-silicon-0.1.7b1.tar.gz`.
 
 ## Use
 

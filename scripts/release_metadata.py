@@ -16,13 +16,19 @@ def is_prerelease(version: str) -> bool:
     return bool(match[1])
 
 
-def classify(manifest: Path, tag: str = '') -> bool:
+def read_version(manifest: Path) -> str:
     content = manifest.read_text(encoding='utf-8')
     table = re.search(r'^\[project\][ \t]*\r?\n(.*?)(?=^\[|\Z)', content, re.M | re.S)
     fields = re.findall(r'^\s*version\s*=\s*["\']([^"\'\r\n]+)["\']', table[1] if table else '', re.M)
     if len(fields) != 1:
         raise ValueError('pyproject.toml must have one explicit project.version')
     version = fields[0]
+    is_prerelease(version)
+    return version
+
+
+def classify(manifest: Path, tag: str = '') -> bool:
+    version = read_version(manifest)
     result = is_prerelease(version)
     if tag and tag != 'v' + version:
         raise ValueError(f'Release tag must match the manifest version: expected v{version}, got {tag}')

@@ -16,8 +16,8 @@ cpu=$(uname -m)
 case "$os_name" in
     Linux)
         case "$cpu" in
-            x86_64|amd64) target=linux-amd64 ;;
-            aarch64|arm64) target=linux-arm64 ;;
+            x86_64|amd64) target=Linux-amd64 ;;
+            aarch64|arm64) target=Linux-arm64 ;;
             *) fail "unsupported Linux architecture: $cpu" ;;
         esac ;;
     Darwin)
@@ -25,11 +25,10 @@ case "$os_name" in
         if [[ "$cpu" != arm64 && "$cpu" != aarch64 ]] && [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" != 1 ]]; then
             fail 'the macOS release requires Apple Silicon'
         fi
-        target=macos-silicon ;;
+        target=MacOS-silicon ;;
     MINGW*|MSYS*|CYGWIN*) fail 'on Windows, use install.ps1 from PowerShell' ;;
     *) fail "unsupported operating system: $os_name" ;;
 esac
-asset="eirene-$target.tar.gz"
 fetch() {
     curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
         --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 "$@"
@@ -40,6 +39,7 @@ if [[ "$version" == latest ]]; then
     version=${resolved##*/}
 fi
 [[ "$version" =~ ^v[0-9][A-Za-z0-9._+-]*$ ]] || fail "invalid release tag: $version (expected v followed by a version)"
+asset="eirene-$target-${version#v}.tar.gz"
 base="https://github.com/$repo/releases/download/$version"
 temporary=$(mktemp -d)
 staged=''
