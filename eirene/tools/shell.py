@@ -381,7 +381,7 @@ class _Capture:
     """Bounded output buffer keeping head and tail."""
 
     def __init__(self, limit: int):
-        self.limit = max(limit, 4_000)
+        self.limit = max(128, min(int(limit), DEFAULT_MAX_BYTES))
         self.head = bytearray()
         self.tail = bytearray()
         self.total = 0
@@ -436,7 +436,7 @@ async def run(command: str, cwd: Path, *, timeout: float | None = None,
     _active[command_id] = item
     activity.changed()
     try:
-        limit = _clamp_timeout(timeout)
+        limit = _clamp_timeout(timeout) if timeout is not None else command_timeout(command)
         try:
             actual = command
             if pty:
@@ -562,6 +562,8 @@ async def _pump(process: asyncio.subprocess.Process, capture: _Capture,
                 on_output: Callable[[str], None] | None,
                 stall: float = 0.0) -> None:
     """Drain stdout until the process ends."""
+    import codecs
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     stream = process.stdout
     if stream is None:
         await process.wait()
@@ -572,11 +574,20 @@ async def _pump(process: asyncio.subprocess.Process, capture: _Capture,
         else:
             chunk = await asyncio.wait_for(stream.read(8192), timeout=stall)
         if not chunk:
+            if on_output:
+                final = decoder.decode(b"", final=True)
+                if final:
+                    try:
+                        on_output(final)
+                    except Exception:
+                        pass
             break
         capture.feed(chunk)
         if on_output:
-            try:
-                on_output(chunk.decode("utf-8", "replace"))
-            except Exception:
-                pass
+            text = decoder.decode(chunk)
+            if text:
+                try:
+                    on_output(text)
+                except Exception:
+                    pass
     await process.wait()

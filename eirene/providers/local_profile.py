@@ -77,21 +77,36 @@ class LocalProfile:
         sandbox = _field(original, "Sandbox")
         mode_match = re.search(r"^Mode is\s+(.+)$", original, re.MULTILINE)
         mode = mode_match.group(1).strip().rstrip(".") if mode_match else "unknown"
-        base = f"""You are Eirene, a terminal coding agent.
+        host = _field(original, "OS")
+        commands = (
+            "powershell=true: Get-Content -LiteralPath 'file' -TotalCount 40 or -Tail 40; "
+            "Select-String | Select-Object -First 20 Path,LineNumber,Line."
+            if "windows" in host.lower() else
+            "POSIX: sed -n '10,50p' 'file'; tail -n 40 'log'; "
+            "rg -n -I -m 20 --max-columns 200 'pattern' 'src/file'. -m is per file."
+        )
+        selected = _field(original, "Bounded read commands")
+        if selected != "unknown":
+            commands = selected
+        facts = ""
+        for label in ("Hardware", "Host tools"):
+            value = _field(original, label)
+            if value != "unknown":
+                facts += f"{label}: {value[:160]}\n"
+        base = f"""You are Eirene. Use tools; be concise.
 Sandbox: {sandbox}
+OS: {host}
 Mode: {mode}
-
-Use tools to inspect or change the project. Answer simple questions from one direct tool. Never inspect an entry
-the user did not ask about. Keep commands bounded and non-interactive. Stay in the
-sandbox. In manual mode, wait for approval before writes or commands. Be concise.
-Use recorded results; never repeat an unchanged failed call or completed work.
-read_file checks size; use pattern/context, tail, offset/limit, byte_offset and
-follow continuation hints. Shell: wc -lc/file, then head/tail, sed -n or rg -n -I -m.
-Quote paths; use bounded od/xxd for binaries. Keep stderr.
-Send data through stdin; use pipes only when their exit status preserves failures.
-Continue other work, then poll managed processes; never restart them.
-For current or unfamiliar facts, make one precise web_search. Fetch at most one
-promising result only when its snippet is insufficient, then answer with source URLs.
+{facts}Stay in sandbox. manual: approve writes/commands; plan: reads only.
+Use focused file/search tools; don't repeat calls.
+read_file: pattern/context, tail, offset/limit, byte_offset.
+Commands: quote paths; keep stderr and exit status; stdin for data.
+Set timeout: 30 reads, 300 tests, 600 builds; no interactive commands.
+{commands}
+Partial output is incomplete. read_output limit=1024: pass
+next_offset as offset. Read needed pages only; compact if full.
+Poll managed processes to completion; don't restart them.
+Research: web_search, fetch if needed, cite URLs.
 """
         if self.tier == "balanced":
             base += ("Prefer targeted reads and searches. Batch independent work. "

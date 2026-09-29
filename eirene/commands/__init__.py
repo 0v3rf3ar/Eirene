@@ -33,9 +33,9 @@ def register(name: str, summary: str, usage: str = "", wants_args: bool = False)
     return wrap
 
 
-def lookup(name: str) -> Command | None:
+def lookup(name: str, app=None) -> Command | None:
     _load()
-    return REGISTRY.get(name)
+    return REGISTRY.get(name) or next((command for command in commands(app) if command.name == name), None)
 
 
 def _load() -> None:
@@ -51,11 +51,13 @@ async def dispatch(app, text: str) -> None:
     if not body:
         app.say("type /help to see the commands", "warn")
         return
-    name, _, args = body.partition(" ")
+    parts = body.split(maxsplit=1)
+    name, args = parts[0], parts[1] if len(parts) > 1 else ""
     name = name.lower()
-    command = REGISTRY.get(name)
+    available = {**{command.name: command for command in commands(app)}, **REGISTRY}
+    command = available.get(name)
     if command is None:
-        close = difflib.get_close_matches(name, REGISTRY, n=1, cutoff=0.5)
+        close = difflib.get_close_matches(name, available, n=1, cutoff=0.5)
         hint = f" - did you mean /{close[0]}?" if close else " - try /help"
         app.say(f"unknown command /{name}{hint}", "warn")
         return
@@ -74,4 +76,5 @@ def commands(app=None) -> list[Command]:
     visible = sorted(REGISTRY)
     if app is None or getattr(app.config, "provider", None) != "ollama-local":
         visible = [name for name in visible if name != "think"]
-    return [REGISTRY[name] for name in visible]
+    from .plugin_commands import commands as plugin_commands
+    return [REGISTRY[name] for name in visible] + plugin_commands(getattr(app, "config", None))

@@ -41,6 +41,8 @@ class ClaudeCode(Provider):
         self._interrupted = False
         self.approve = None
         self.choose = None
+        self._plugin_servers = {}
+        self._last_system = ""
 
     def set_context(self, root: Path, mode: str, approve=None, choose=None) -> None:
         resolved = root.resolve()
@@ -50,6 +52,13 @@ class ClaudeCode(Provider):
         self.mode = mode
         self.approve = approve
         self.choose = choose
+
+    def set_plugins(self, definitions: dict) -> None:
+        from .plugin_config import native_servers
+        servers = native_servers(definitions)
+        if servers != self._plugin_servers:
+            self.reset_thread()
+            self._plugin_servers = servers
 
     def _executable(self) -> str:
         executable = shutil.which(self.binary)
@@ -97,6 +106,9 @@ class ClaudeCode(Provider):
                      tools: list[dict] | None = None,
                      max_tokens: int = 8192) -> AsyncIterator[Event]:
         self._interrupted = False
+        if self._session_id and system != self._last_system:
+            self.reset_thread()
+        self._last_system = system
         prompt = _last_user_text(messages)
         first = not self._session_id
         if first:
@@ -120,6 +132,7 @@ class ClaudeCode(Provider):
                 "--append-system-prompt", _system_prompt(system, asking)]
         if native_windows and self.mode == "plan":
             args.extend(["--disallowedTools", "Bash,PowerShell,Write,Edit,NotebookEdit"])
+        mcp_servers = dict(self._plugin_servers)
         if gate or asking:
             broker = PermissionBroker(self.root, self.approve if gate else None,
                                       self.choose if asking else None,
@@ -130,9 +143,10 @@ class ClaudeCode(Provider):
                                       "args": permission_args}
             if environment:
                 server["env"] = environment
-            config = {"mcpServers": {SERVER: server}}
-            args.extend(["--mcp-config", json.dumps(config),
-                         "--permission-prompt-tool", APPROVE_TOOL])
+            mcp_servers[SERVER] = server
+            args.extend(["--permission-prompt-tool", APPROVE_TOOL])
+        if mcp_servers:
+            args.extend(["--mcp-config", json.dumps({"mcpServers": mcp_servers})])
         if self._session_id:
             args.extend(["--resume", self._session_id])
 

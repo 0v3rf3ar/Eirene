@@ -66,7 +66,7 @@ def command(command: str, root: Path, *, backend: str = "auto",
         if network:
             argv += ["--share-net"]
         for name in ("/usr", "/bin", "/sbin", "/lib", "/lib64",
-                     "/etc/ssl", "/etc/pki", "/etc/ld.so.cache", "/etc/alternatives",
+                     "/etc/ssl", "/etc/pki", "/etc/crypto-policies", "/etc/ld.so.cache", "/etc/alternatives",
                      "/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf",
                      "/etc/passwd", "/etc/group", "/etc/localtime"):
             if Path(name).exists():

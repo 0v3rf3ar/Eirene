@@ -40,9 +40,11 @@ class CodexSubscription(Provider):
         self._thread_id = ""
         self._turn_id = ""
         self._system_sent = False
+        self._last_system = ""
         self._commands: dict[str, str] = {}
         self._file_changes: dict[str, list[dict[str, Any]]] = {}
         self._shown: set[str] = set()
+        self._plugin_servers = {}
 
     def set_context(self, root: Path, mode: str, approve: ApprovalFn | None = None,
                     choose: ChoiceFn | None = None) -> None:
@@ -54,6 +56,13 @@ class CodexSubscription(Provider):
         self.mode = mode
         self.approve = approve
         self.choose = choose
+
+    def set_plugins(self, definitions: dict) -> None:
+        from .plugin_config import native_servers
+        servers = native_servers(definitions)
+        if servers != self._plugin_servers:
+            self.reset_thread()
+            self._plugin_servers = servers
 
     async def _server(self) -> "_AppServer":
         if self._rpc is None:
@@ -113,6 +122,9 @@ class CodexSubscription(Provider):
                      tools: list[dict] | None = None,
                      max_tokens: int = 8192) -> AsyncIterator[Event]:
         server = await self._server()
+        if self._thread_id and system != self._last_system:
+            self.reset_thread()
+        self._last_system = system
         if not self._thread_id:
             result = await server.request("thread/start",
                                           self._thread_options(model, system))
@@ -270,7 +282,8 @@ class CodexSubscription(Provider):
         return {"model": model, "cwd": str(self.root), "sandbox": legacy,
                 "approvalPolicy": policy["approvalPolicy"],
                 "developerInstructions": system or None,
-                "serviceName": "eirene"}
+                "serviceName": "eirene",
+                **({"config": {"mcp_servers": self._plugin_servers}} if self._plugin_servers else {})}
 
     def _turn_policy(self) -> dict[str, Any]:
         if self.mode == "plan":

@@ -38,22 +38,28 @@ def split_front_matter(text: str) -> tuple[dict[str, str], str]:
     body = text.lstrip()
     lines = body.splitlines()
     fields: dict[str, str] = {}
+    multiline = ""
     for index, line in enumerate(lines[1:], start=1):
         if line.strip() in ("---", "..."):
             return fields, "\n".join(lines[index + 1:]).strip()
+        if multiline and (line.startswith((" ", "\t")) or not line.strip()):
+            fields[multiline] = (fields[multiline] + " " + line.strip()).strip()
+            continue
+        multiline = ""
         key, sep, value = line.partition(":")
         if sep and key.strip():
             fields[key.strip().lower()] = value.strip().strip('"\'')
+            if value.strip() in (">", "|", ">-", "|-"):
+                multiline = key.strip().lower()
+                fields[multiline] = ""
     return {}, text
 
 
 def discover() -> list[Skill]:
     """Read every .md in the skills dir."""
     directory = paths.skills_dir()
-    if not directory.exists():
-        return []
     skills = []
-    for path in sorted(directory.glob("*.md")):
+    for path in sorted([*directory.glob("*.md"), *directory.glob("*/SKILL.md")]):
         _append_skill(skills, path)
     try:
         from .plugins import discover as discover_plugins
@@ -75,7 +81,8 @@ def _append_skill(skills: list[Skill], path: Path, prefix: str = "") -> None:
     head = body[:1000]
     title = fields.get("name") or _title(head, path.stem)
     summary = fields.get("description") or _summary(head)
-    name = f"{prefix}:{path.stem}" if prefix else path.stem
+    slug = path.parent.name if path.name == "SKILL.md" else path.stem
+    name = f"{prefix}:{slug}" if prefix else slug
     skills.append(Skill(name, path, title, summary, size))
 
 
@@ -144,15 +151,21 @@ SKILL_BUDGET = 24_000
 
 def inline_block(skills: list[Skill], budget: int = SKILL_BUDGET) -> str:
     """Whole skills for an agent that cannot call load_skill itself."""
-    parts, spent = [], 0
+    parts, spent, deferred = [], 0, []
     for skill in skills:
         if not skill.enabled:
             continue
         body = load(skill).strip()
-        if not body or spent + len(body) > budget:
+        if not body:
+            continue
+        if spent + len(body) > budget:
+            deferred.append(f"- {skill.name}: {skill.summary} — read {skill.path}")
             continue
         spent += len(body)
-        parts.append(f"## Skill: {skill.name} ({skill.title})\n{body}")
+        parts.append(f"## Skill: {skill.name} ({skill.title})\n"
+                     f"Skill directory: {skill.path.parent}\n{body}")
+    if deferred:
+        parts.append("Additional enabled skills: read the SKILL.md at the given path before using one.\n" + "\n".join(deferred))
     if not parts:
         return ""
     return ("The user has enabled these Eirene skills. Follow one when the work "
@@ -196,4 +209,6 @@ def apply_config(skills: list[Skill], config) -> list[Skill]:
     """Set enabled flags from saved config."""
     for skill in skills:
         skill.enabled = config.skill_enabled(skill.name, True)
+        if ":" in skill.name:
+            skill.enabled = skill.enabled and config.plugin_enabled(skill.name.split(":", 1)[0])
     return skills

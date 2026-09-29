@@ -42,7 +42,15 @@ Rules:
   to ask; a question you merely write down will not reach them.
 - Never run interactive or non-terminating commands (editors, pagers, top, watch,
   tail -f, unbounded ping, sudo without -n). Add host-appropriate exit limits.
-- Every command must terminate on its own. Set explicit limits when unsure.
+- Every command has a runtime deadline. Set timeout=30 for reads, 300 for tests,
+  600 for builds unless the workload needs another limit. The deadline also applies
+  after handoff to a managed process; a timeout is a failed or incomplete result.
+- Choose output before executing using the detected host command profile below.
+  Narrow paths, select names/counts when sufficient, and limit rows and line width.
+  Avoid recursive dumps, raw contents of unknown files, and wide table output.
+- Partial output is not proof of completeness or absence. Fetch only needed saved
+  pages using read_output limit=1024; pass next_offset as offset. Do not retrieve
+  whole artifacts into context or raise limits merely to bypass a preview.
 - Keep commands precise: quote paths, use targeted file ranges and quiet/summary
   flags. Use stdin for input data and pipes for focused filtering; preserve the
   producing command's exit status (pipefail when supported). Never discard stderr
@@ -162,8 +170,10 @@ for input.
 """
 
 
-def build(sandbox: str, mode: str, os_name: str, shell: str, date: str) -> str:
+def build(sandbox: str, mode: str, os_name: str, shell: str, date: str, *, host=None) -> str:
     """Fill the prompt template."""
-    from .platforms import guidance
+    from .platforms import guidance, Host
+    host = host or Host.detect()
+    system = {"macOS": "Darwin"}.get(os_name, os_name)
     return SYSTEM_PROMPT.format(sandbox=sandbox, mode=mode, os=os_name,
-                                shell=shell, date=date) + "\n\n" + guidance()
+                                shell=shell, date=date) + "\n\n" + host.prompt_block() + "\n" + guidance(system=system, host=host) + "\nBounded read commands: " + host.read_commands()

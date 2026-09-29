@@ -136,3 +136,111 @@ def test_unsupported_hosts_fail_before_downloading(installer, system, cpu):
     result = run(TEST_OS=system, TEST_CPU=cpu, TEST_SILICON='0')
     assert result.returncode != 0
     assert not Path(env['TEST_LOG']).exists()
+
+
+@pytest.mark.parametrize('shell,system,expected', [
+    ('/bin/bash', 'Linux', ['.bashrc', '.profile']),
+    ('/bin/bash', 'Darwin', ['.bashrc', '.bash_profile']),
+    ('/bin/zsh', 'Darwin', ['.zshrc', '.zprofile']),
+    ('/bin/sh', 'Linux', ['.profile']),
+    ('/bin/fish', 'Linux', ['.config/fish/conf.d/eirene.fish']),
+])
+def test_installer_persists_path_for_the_users_shell(installer, shell, system, expected):
+    run, env, _ = installer
+    # Already in this process's PATH does not mean future shells have it.
+    result = run(SHELL=shell, TEST_OS=system, TEST_CPU='arm64', EIRENE_NO_PATH='0',
+                 PATH=env['EIRENE_INSTALL_DIR'] + os.pathsep + env['PATH'],
+                 XDG_CONFIG_HOME=str(Path(env['HOME']) / '.config'), ZDOTDIR=env['HOME'])
+    assert result.returncode == 0, result.stderr
+    for name in expected:
+        assert '# Eirene' in (Path(env['HOME']) / name).read_text()
+    assert 'Start now:' in result.stdout
+    assert '/connect' in result.stdout
+    assert 'new terminal' in result.stdout
+
+
+@pytest.mark.parametrize('profile', ['.bash_profile', '.bash_login', '.profile'])
+def test_installer_preserves_and_backs_up_existing_login_profile(installer, profile):
+    run, env, _ = installer
+    path = Path(env['HOME']) / profile
+    original = '# user settings\nexport MY_SETTING=kept\n'
+    path.write_text(original)
+    for _ in range(2):
+        result = run(EIRENE_NO_PATH='0')
+        assert result.returncode == 0, result.stderr
+    assert path.read_text().startswith(original)
+    backups = list(path.parent.glob(profile + '.eirene-backup.*'))
+    assert len(backups) == 1
+    assert backups[0].read_text() == original
+    assert path.read_text().count('# Eirene') == 1
+
+
+def test_installer_quotes_paths_and_sourcing_does_not_duplicate_path(installer):
+    run, env, _ = installer
+    directory = str(Path(env['HOME']) / "space ' quote $dollar `backtick` \\ backslash")
+    result = run(EIRENE_INSTALL_DIR=directory, EIRENE_NO_PATH='0', SHELL='/bin/sh')
+    assert result.returncode == 0, result.stderr
+    profile = str(Path(env['HOME']) / '.profile')
+    sourced = subprocess.run(['sh', '-c', '. "$1"; . "$1"; printf "%s" "$PATH"', 'sh', profile],
+                             env=env, capture_output=True, text=True, check=True)
+    assert sourced.stdout.split(os.pathsep).count(directory) == 1
+
+
+def test_installer_respects_zdotdir(installer):
+    run, env, _ = installer
+    directory = Path(env['HOME']) / 'zsh settings'
+    result = run(EIRENE_NO_PATH='0', SHELL='/bin/zsh', ZDOTDIR=str(directory))
+    assert result.returncode == 0, result.stderr
+    assert (directory / '.zshrc').exists()
+    assert (directory / '.zprofile').exists()
+    assert not (Path(env['HOME']) / '.zshrc').exists()
+
+
+def test_profile_failure_keeps_installed_binary_and_prints_recovery(installer):
+    run, env, _ = installer
+    (Path(env['HOME']) / '.bashrc').mkdir()
+    result = run(EIRENE_NO_PATH='0')
+    assert result.returncode == 0, result.stderr
+    assert 'PATH could not be saved' in result.stderr
+    assert (Path(env['EIRENE_INSTALL_DIR']) / 'eirene').exists()
+    assert 'Start now:' in result.stdout
+    assert 'Open a new terminal and run: eirene' not in result.stdout
+
+
+def test_path_opt_out_does_not_touch_profiles(installer):
+    run, env, _ = installer
+    result = run()
+    assert result.returncode == 0, result.stderr
+    assert not (Path(env['HOME']) / '.bashrc').exists()
+    assert 'PATH setup skipped' in result.stdout
+
+
+def test_bad_executable_leaves_previous_installation_intact(installer):
+    run, env, fixture = installer
+    assert run().returncode == 0
+    installed = Path(env['EIRENE_INSTALL_DIR']) / 'eirene'
+    original = installed.read_bytes()
+    bad = fixture / 'broken'
+    bad.write_text('#!/bin/sh\nexit 42\n')
+    archive = packager.package('linux-amd64', bad, fixture, '1.2.3')
+    (fixture / 'SHA256SUMS').write_text(archive.with_name(archive.name + '.sha256').read_text())
+    result = run()
+    assert result.returncode != 0
+    assert 'could not run' in result.stderr
+    assert installed.read_bytes() == original
+    assert not list(installed.parent.glob('.eirene.*'))
+
+
+def test_download_failure_explains_recovery(installer):
+    run, _, _ = installer
+    result = run(TEST_FAIL_DOWNLOAD='1')
+    assert result.returncode != 0
+    assert 'downloading' in result.stderr
+    assert 'not been replaced' in result.stderr
+
+
+def test_invalid_path_fails_before_download(installer):
+    run, env, _ = installer
+    result = run(EIRENE_INSTALL_DIR=env['HOME'] + '/bad:path')
+    assert result.returncode != 0
+    assert not Path(env['TEST_LOG']).exists()

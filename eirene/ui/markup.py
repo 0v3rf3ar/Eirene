@@ -164,7 +164,7 @@ def _fit(text: Text, width: int, align: str) -> Text:
     return body
 
 
-def table(source: list[str], start: int) -> tuple[list[Text], int] | None:
+def table(source: list[str], start: int, width: int = DEFAULT_WIDTH) -> tuple[list[Text], int] | None:
     """Render a markdown table, or None if there is not one here."""
     if start + 1 >= len(source):
         return None
@@ -190,21 +190,46 @@ def table(source: list[str], start: int) -> tuple[list[Text], int] | None:
     widths = [min(max((row[column].cell_len for row in drawn), default=3), MAX_CELL)
               for column in range(columns)]
 
+    # Keep the grid inside the answer pane. When there is not enough room for
+    # even one character per column, turn each record into readable fields.
+    room = max(width - (3 * columns + 1), 0)
+    if room < columns:
+        out: list[Text] = []
+        for row_index, row in enumerate(drawn[1:]):
+            if row_index:
+                out.append(Text(""))
+            for label, value in zip(drawn[0], row):
+                line = Text()
+                line.append_text(label.copy())
+                line.append(": ", style="dim")
+                line.append_text(value.copy())
+                out.extend(prose_lines(line.plain, max(width, 4)))
+        return out or [Text()], index - start
+
+    # Share the available width fairly. Long values are wrapped below rather
+    # than clipped, so every part remains visible and selectable.
+    while sum(widths) > room:
+        widest = max(range(columns), key=lambda column: widths[column])
+        if widths[widest] <= 1:
+            break
+        widths[widest] -= 1
+
     out = [_rule("┌", "┬", "┐", widths)]
-    head = Text("│ ", style="dim")
-    for column, cell in enumerate(drawn[0]):
-        piece = _fit(cell, widths[column], align[column])
-        piece.stylize("bold")
-        head.append_text(piece)
-        head.append(" │ " if column < columns - 1 else " │", style="dim")
-    out.append(head)
-    out.append(_rule("├", "┼", "┤", widths))
-    for row in drawn[1:]:
-        line = Text("│ ", style="dim")
-        for column, cell in enumerate(row):
-            line.append_text(_fit(cell, widths[column], align[column]))
-            line.append(" │ " if column < columns - 1 else " │", style="dim")
-        out.append(line)
+    for row_index, row in enumerate(drawn):
+        wrapped = [cell.wrap(WRAP_CONSOLE, widths[column], overflow="fold", no_wrap=False)
+                   for column, cell in enumerate(row)]
+        height = max((len(lines) for lines in wrapped), default=1)
+        for row_line in range(height):
+            line = Text("│ ", style="dim")
+            for column, lines in enumerate(wrapped):
+                part = lines[row_line] if row_line < len(lines) else Text()
+                if row_index == 0:
+                    part.stylize("bold")
+                line.append_text(_fit(part, widths[column], align[column]))
+                line.append(" │ " if column < columns - 1 else " │", style="dim")
+            out.append(line)
+        if row_index == 0:
+            out.append(_rule("├", "┼", "┤", widths))
     out.append(_rule("└", "┴", "┘", widths))
     return out, index - start
 
@@ -303,7 +328,7 @@ class Markdown:
                 index += used
                 previous_list = False
                 continue
-            drawn = table(source, index)
+            drawn = table(source, index, self.width)
             if drawn is not None:
                 rendered, used = drawn
                 out.extend(rendered)

@@ -397,7 +397,7 @@ class Eirene(App):
         self.prompt.menu_open = False
         if not name:
             return
-        command = commands.lookup(name)
+        command = commands.lookup(name, self)
         if message.run and command is not None and not command.wants_args:
             self.prompt.clear_draft()
             self.prompt.remember(f"/{name}")
@@ -496,9 +496,25 @@ class Eirene(App):
             prompt.value = ""
 
     async def ask_choice(self, title: str, options: list[tuple], *,
-                         on_highlight=None, selected: str = "") -> str | None:
+                         on_highlight=None, selected: str = "",
+                         skill_popup: bool = False) -> str | None:
         """Pick one option from a list, opening on the one already in use."""
         try:
+            if skill_popup:
+                from .ui.skill_picker import SkillPickerScreen
+                screen = SkillPickerScreen(options, selected)
+                future = asyncio.get_running_loop().create_future()
+
+                def resolved(value):
+                    if not future.done():
+                        future.set_result(value)
+
+                await self.push_screen(screen, resolved)
+                try:
+                    return await future
+                finally:
+                    if self.screen is screen:
+                        self.pop_screen()
             return await self.picker.choose(title, options,
                                             on_highlight=on_highlight,
                                             selected=selected)
@@ -842,7 +858,8 @@ class Eirene(App):
     def action_interrupt(self) -> None:
         """Close an output viewer before interrupting work underneath it."""
         from .ui.output import OutputScreen
-        if isinstance(self.screen, OutputScreen):
+        from .ui.skill_picker import SkillPickerScreen
+        if isinstance(self.screen, (OutputScreen, SkillPickerScreen)):
             self.screen.dismiss()
             return
         if self.aside.open:

@@ -44,3 +44,27 @@ def read(artifact_id: str, offset: int = 0, limit: int = 50000) -> str:
         handle.seek(max(0, offset))
         data = handle.read(max(1, min(limit, 200_000)))
     return data.decode("utf-8", "replace")
+
+
+def read_page(artifact_id: str, offset: int = 0, limit: int = 4096, *,
+              max_chars: int = 12000) -> str:
+    """Byte-addressed UTF-8 pages with exact continuation, bounded before decode."""
+    import codecs
+    maximum = max(0, max_chars)
+    if maximum < 256:
+        return "Output read deferred: compact context before retrieving details."[:maximum]
+    limit = max(1, min(limit, 200_000))
+    start = max(0, offset)
+    with location(artifact_id).open("rb") as handle:
+        size = handle.seek(0, 2)
+        handle.seek(min(start, size))
+        start = handle.tell()
+        data = handle.read(max(4, min(limit, (maximum - 220) // 4)))
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    body = decoder.decode(data, final=start + len(data) >= size)
+    pending, _ = decoder.getstate()
+    end = start + len(data) - len(pending)
+    header = f"Output {artifact_id}: bytes {start}-{end} of {size}\n"
+    footer = (f"\nMore output: use read_output artifact_id={artifact_id}, next_offset={end} "
+              f"(pass offset={end}), limit={limit}." if end < size else "\n(end of output)")
+    return header + body + footer

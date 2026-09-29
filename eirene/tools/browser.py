@@ -31,6 +31,7 @@ MAX_RESPONSE = 120_000
 MAX_SEARCH = 6_000
 MAX_PAGE_TEXT = 16_000
 MAX_BROWSER_RESULT = 32_000
+MAX_DOWNLOAD_BYTES = 2_000_000
 
 # Chromium uses different executable names and default install locations on each
 # desktop OS.  PATH remains the preferred, portable mechanism; the explicit
@@ -271,6 +272,48 @@ async def _evaluate(cdp: _CDP, session: str, expression: str):
     return reply.get("result", {}).get("value")
 
 
+async def _download(client, method: str, url: str, *, timeout: float, **kwargs):
+    """Bound decoded response bytes and total elapsed time, even for endless streams."""
+    async def receive():
+        request = client.build_request(method, url, **kwargs)
+        for _ in range(21):
+            # httpx's automatic redirect handling drains intermediate bodies
+            # without a size cap; close them directly and follow next_request.
+            response = await client.send(request, stream=True, follow_redirects=False)
+            try:
+                if client.follow_redirects and response.next_request is not None:
+                    request = response.next_request
+                    continue
+                data = bytearray()
+                clipped = False
+                async for chunk in response.aiter_bytes(chunk_size=8192):
+                    room = MAX_DOWNLOAD_BYTES - len(data)
+                    data.extend(chunk[:room])
+                    if len(chunk) > room:
+                        clipped = True
+                        break
+                headers = dict(response.headers)
+                # The body is already decoded; do not decompress it a second time.
+                headers.pop("content-encoding", None)
+                headers.pop("content-length", None)
+                if clipped:
+                    headers["x-eirene-body-clipped"] = "true"
+                return httpx.Response(response.status_code, headers=headers,
+                                      content=bytes(data), request=response.request)
+            finally:
+                await response.aclose()
+        raise ToolError("HTTP download redirected too many times")
+    try:
+        return await asyncio.wait_for(receive(), timeout=max(0.1, min(timeout, 120)))
+    except asyncio.TimeoutError as exc:
+        raise ToolError("HTTP download timed out and was stopped") from exc
+
+
+def _download_note(response) -> str:
+    return ("\n[Response exceeded the 2 MB download limit; partial content. Request a smaller resource.]"
+            if response.headers.get("x-eirene-body-clipped") else "")
+
+
 async def request(method: str, url: str, *, headers: dict | None = None,
                   body: str = "", timeout: float = 30) -> str:
     """Send an explicit bounded HTTP request."""
@@ -281,14 +324,14 @@ async def request(method: str, url: str, *, headers: dict | None = None,
     clean_headers = {str(k): str(v) for k, v in (headers or {}).items()}
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
-            response = await client.request(verb, target, headers=clean_headers,
-                                            content=body.encode() if body else None)
+            response = await _download(client, verb, target, timeout=timeout, headers=clean_headers,
+                                       content=body.encode() if body else None)
     except httpx.HTTPError as exc:
         raise ToolError(f"HTTP request failed: {exc}") from exc
     meta = {"status": response.status_code, "url": str(response.url),
             "headers": dict(response.headers)}
     content = response.text
-    return json.dumps(meta, indent=2) + "\n\n" + _bounded(content, MAX_RESPONSE)
+    return json.dumps(meta, indent=2) + "\n\n" + _bounded(content, MAX_RESPONSE) + _download_note(response)
 
 
 async def search(query: str, *, limit: int = 5, timeout: float = 15) -> str:
@@ -301,7 +344,7 @@ async def search(query: str, *, limit: int = 5, timeout: float = 15) -> str:
     headers = {"User-Agent": "Mozilla/5.0 (compatible; Eirene/1.0)"}
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
-            response = await client.get(url, headers=headers)
+            response = await _download(client, "GET", url, timeout=timeout, headers=headers)
             response.raise_for_status()
     except httpx.HTTPError as exc:
         raise ToolError(f"web search failed: {exc}") from exc
@@ -313,7 +356,7 @@ async def search(query: str, *, limit: int = 5, timeout: float = 15) -> str:
     lines = [f"Search results for: {wanted}"]
     for index, item in enumerate(results, 1):
         lines.extend((f"{index}. {item['title']}", item["url"], item["snippet"]))
-    return _bounded("\n".join(lines), MAX_SEARCH)
+    return _bounded("\n".join(lines), MAX_SEARCH) + _download_note(response)
 
 
 async def fetch_text(url: str, *, timeout: float = 20) -> str:
@@ -323,7 +366,7 @@ async def fetch_text(url: str, *, timeout: float = 20) -> str:
     try:
         async with httpx.AsyncClient(follow_redirects=False, timeout=timeout) as client:
             for _ in range(4):
-                response = await client.get(target, headers=headers)
+                response = await _download(client, "GET", target, timeout=timeout, headers=headers)
                 if response.is_redirect:
                     target = _public_url(urljoin(target, response.headers.get("location", "")))
                     continue
@@ -341,7 +384,7 @@ async def fetch_text(url: str, *, timeout: float = 20) -> str:
     text = re.sub(r"\n{3,}", "\n\n", "\n".join(parser.parts)).strip()
     if not text:
         raise ToolError("page contained no readable text")
-    return f"Source: {response.url}\n\n{_bounded(text, MAX_PAGE_TEXT)}"
+    return f"Source: {response.url}\n\n{_bounded(text, MAX_PAGE_TEXT)}" + _download_note(response)
 
 
 class _SearchParser(HTMLParser):
@@ -430,18 +473,33 @@ def _argv(profile: str, timeout: float) -> list[str]:
 
 
 async def _run(argv: list[str], timeout: float) -> tuple[bytes, bytes, int]:
+    from . import shell
+    process = None
     try:
         process = await asyncio.create_subprocess_exec(
             *executable_argv(argv[0], *argv[1:]), stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE)
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
+            stderr=asyncio.subprocess.PIPE, **shell._spawn_kwargs())
+        stdout, stderr = shell._Capture(MAX_DOM), shell._Capture(8000)
+
+        async def drain(stream, capture):
+            while chunk := await stream.read(8192):
+                capture.feed(chunk)
+
+        async def collect():
+            await asyncio.gather(drain(process.stdout, stdout), drain(process.stderr, stderr))
+            await process.wait()
+
+        await asyncio.wait_for(collect(), max(0.1, min(timeout, 120)))
     except asyncio.TimeoutError as exc:
-        process.kill()
-        await process.wait()
+        await shell._kill_tree(process)
         raise ToolError("Chromium timed out and was stopped") from exc
+    except asyncio.CancelledError:
+        if process is not None:
+            await shell._kill_tree(process)
+        raise
     except OSError as exc:
         raise ToolError(f"could not start Chromium: {exc}") from exc
-    return stdout, stderr, int(process.returncode or 0)
+    return stdout.text().encode(), stderr.text().encode(), int(process.returncode or 0)
 
 
 def _failure(stderr: bytes, code: int) -> str:

@@ -45,8 +45,10 @@ class Picker(Static):
 
     can_focus = True
 
-    def __init__(self) -> None:
+    def __init__(self, *, show_detail: bool = True, right_hint: bool = False) -> None:
         super().__init__(Text(""))
+        self.show_detail = show_detail
+        self.right_hint = right_hint
         self.future: asyncio.Future[str | None] | None = None
         self.options: list[tuple] = []
         self.title = ""
@@ -138,7 +140,7 @@ class Picker(Static):
         if not rows:
             body.append(f"  no match for '{self.filter}'\n", style="dim")
         start = max(0, min(self.index - WINDOW // 2, len(rows) - WINDOW))
-        room = max(self.size.width - 4, 1)
+        room = max(self.content_size.width, 1)
         for position, row in enumerate(rows[start:start + WINDOW], start):
             label, hint = row[1], row[2]
             selected = position == self.index
@@ -146,7 +148,14 @@ class Picker(Static):
             option = Text()
             option.append(f" {marker} {label}", style="bold" if selected else "")
             if hint:
-                option.append(f"  {hint}", style="" if selected else "dim")
+                if self.right_hint:
+                    tail = Text(str(hint))
+                    tail.truncate(max(room - 4, 1), overflow="ellipsis")
+                    option.truncate(max(room - tail.cell_len - 1, 1), overflow="ellipsis")
+                    option.append(" " * max(room - option.cell_len - tail.cell_len, 1))
+                    option.append(tail.plain, style="" if selected else "dim")
+                else:
+                    option.append(f"  {hint}", style="" if selected else "dim")
             if selected:
                 pad = room - option.cell_len
                 if pad > 0:
@@ -155,7 +164,7 @@ class Picker(Static):
             body.append_text(option)
             body.append("\n")
         detail = self._detail(rows)
-        if detail:
+        if detail and self.show_detail:
             for line in _wrap(detail, max(self.size.width - 6, 30)):
                 body.append(f"   {line}\n", style="dim italic")
         if self.filter:

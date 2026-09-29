@@ -57,9 +57,23 @@ def execution_memory(messages: list[dict], limit: int = 2400) -> str:
     return "\n".join(reversed(kept))
 
 
-def compact_output(text: str, limit: int, artifact_id: str) -> str:
-    """Keep both the initial diagnostic and final outcome with an exact source."""
-    if len(text) <= limit:
+def compact_output(text: str, limit: int, artifact_id: str, *,
+                   prefix_only: bool = False, source_required: bool = False) -> str:
+    """Keep useful evidence and a retrieval recipe inside a strict character cap."""
+    limit = max(0, limit)
+    if len(text) <= limit and not source_required:
         return text
-    source = f"\n[output artifact: {artifact_id}; use read_output with offset/limit for details]"
-    return shorten(text, max(128, limit - len(source))) + source
+    source = (f"\n[output artifact: {artifact_id}; partial output. "
+              "Use read_output with offset=0, limit=1024; follow next_offset.]")
+    if limit < len(source):
+        return "[Output saved; compact context before retrieving details.]"[:limit]
+    room = limit - len(source)
+    if prefix_only:
+        body = text[:room]
+        # Prefer complete rows; don't throw away an oversized single line.
+        boundary = body.rfind("\n")
+        if boundary >= room // 2:
+            body = body[:boundary]
+    else:
+        body = shorten(text, room)
+    return body + source

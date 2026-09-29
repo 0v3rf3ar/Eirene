@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import heapq
 import re
 from pathlib import Path
 
@@ -218,7 +219,14 @@ def list_dir(box: Sandbox, path: str = ".") -> str:
     if not resolved.is_dir():
         raise ToolError(f"{box.relative(resolved)} is not a directory")
     try:
-        entries = sorted(resolved.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        count = 0
+        def candidates():
+            nonlocal count
+            for entry in resolved.iterdir():
+                count += 1
+                yield entry
+        entries = heapq.nsmallest(MAX_LIST_ENTRIES, candidates(),
+                                 key=lambda p: (not p.is_dir(), p.name.lower()))
     except OSError as exc:
         raise ToolError(f"cannot list {box.relative(resolved)}: {exc}") from exc
     if not entries:
@@ -232,8 +240,8 @@ def list_dir(box: Sandbox, path: str = ".") -> str:
                 rows.append(f"{entry.name}  {entry.stat().st_size}b")
         except OSError:
             rows.append(entry.name)
-    if len(entries) > MAX_LIST_ENTRIES:
-        rows.append(f"… {len(entries) - MAX_LIST_ENTRIES} more")
+    if count > MAX_LIST_ENTRIES:
+        rows.append(f"… {count - MAX_LIST_ENTRIES} more; use glob with a narrower pattern")
     return "\n".join(rows)
 
 
@@ -246,16 +254,21 @@ def glob_files(box: Sandbox, pattern: str, path: str = ".") -> str:
     if pattern.startswith("/"):
         raise ToolError("pattern must be relative")
     try:
-        matches = [p for p in root.glob(pattern) if _keep(p, root)]
+        count = 0
+        def candidates():
+            nonlocal count
+            for entry in root.glob(pattern):
+                if _keep(entry, root) and box.contains(entry):
+                    count += 1
+                    yield entry
+        matches = heapq.nlargest(MAX_LIST_ENTRIES, candidates(), key=_mtime)
     except (OSError, ValueError, NotImplementedError) as exc:
         raise ToolError(f"bad pattern '{pattern}': {exc}") from exc
-    matches = [p for p in matches if box.contains(p)]
     if not matches:
         return f"no matches for '{pattern}'"
-    matches.sort(key=lambda p: _mtime(p), reverse=True)
-    rows = [box.relative(p) for p in matches[:MAX_LIST_ENTRIES]]
-    if len(matches) > MAX_LIST_ENTRIES:
-        rows.append(f"… {len(matches) - MAX_LIST_ENTRIES} more")
+    rows = [box.relative(p) for p in matches]
+    if count > MAX_LIST_ENTRIES:
+        rows.append(f"… {count - MAX_LIST_ENTRIES} more; narrow the pattern or path")
     return "\n".join(rows)
 
 
@@ -269,6 +282,7 @@ def search_text(box: Sandbox, pattern: str, path: str = ".", glob: str = "",
         raise ToolError(f"bad regular expression: {exc}") from exc
     maximum = max(1, min(int(limit), 500))
     matches = []
+    clipped_lines = False
     candidates = root.glob(glob or "**/*") if root.is_dir() else [root]
     for candidate in candidates:
         if len(matches) >= maximum:
@@ -279,15 +293,20 @@ def search_text(box: Sandbox, pattern: str, path: str = ".", glob: str = "",
             continue
         try:
             with open(candidate, "r", encoding="utf-8", errors="replace") as handle:
-                for number, line in enumerate(handle, 1):
+                for number, (line, clipped) in enumerate(_bounded_lines(handle), 1):
+                    clipped_lines |= clipped
                     if expression.search(line):
-                        matches.append(f"{box.relative(candidate)}:{number}:{line.rstrip()[:500]}")
+                        matches.append(f"{box.relative(candidate)}:{number}:{line.rstrip()[:500]}"
+                                       + (" [long line clipped; use read_file byte_offset]" if clipped else ""))
                         if len(matches) >= maximum:
                             break
         except OSError:
             continue
     suffix = f"\n… stopped after {maximum} matches" if len(matches) >= maximum else ""
-    return "\n".join(matches) + suffix if matches else "no matches"
+    if clipped_lines:
+        suffix += "\n[Oversized lines were clipped; search is partial. Use read_file byte_offset for those files.]"
+    body = "\n".join(matches) or ("no matches in inspected text" if clipped_lines else "no matches")
+    return body + suffix
 
 
 def find_symbol(box: Sandbox, name: str, path: str = ".", limit: int = 100) -> str:

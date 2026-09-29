@@ -150,6 +150,8 @@ class Agent:
         self.session = session
         self.config = config
         self.sandbox = sandbox
+        from .platforms import Host
+        self.host = Host.detect()
         self.mode = Mode(config.mode) if config.mode in Mode._value2member_map_ else Mode.MANUAL
         self.provider = None
         self.provider_key = ""
@@ -167,6 +169,10 @@ class Agent:
         self.mcp = MCPManager(definitions, self.sandbox.root)
         self.logger = get_logger()
         self.pending_input: list[str] = []
+        from .plugin_runtime import PluginRuntime
+        self.plugin_runtime = PluginRuntime(session.id)
+        self._turn_instructions = ""
+        self._mcp_definitions = merged_mcp_servers(config)
         self._scoped_seen: set[str] = set()
         self._tool_cache: dict[str, tuple[str, bool, str, int]] = {}
         self._work_revision = 0
@@ -259,16 +265,26 @@ class Agent:
         return wanted
 
     def system_prompt(self) -> str:
+        extra = ""
+        if self._turn_instructions:
+            extra += "\n\nCurrent command instructions:\n" + self._turn_instructions
+        extra += "\n\n" + self.plugin_runtime.block(self.config)
+        return self._base_system_prompt() + extra
+
+    def _base_system_prompt(self) -> str:
+        active_skills = self.skills
+        if self.plugin_runtime.ponytail_mode == "off":
+            active_skills = [s for s in self.skills if s.name != "ponytail:ponytail"]
         if getattr(self.provider, "owns_context", False):
             # The CLI owns its tools and sandbox; contribute only host guidance
             # and enabled skills, without Eirene tool instructions.
             from .platforms import guidance
-            return guidance(native=True) + "\n\n" + skills_mod.inline_block(self.skills)
+            return guidance(native=True) + "\n\n" + skills_mod.inline_block(active_skills)
         self.project = project_mod.discover(self.sandbox.root)
         text = prompts.build(sandbox=str(self.sandbox.root), mode=self.mode.value,
-                             os_name=_os_name(), shell=_shell_name(),
-                             date=date.today().isoformat())
-        block = skills_mod.catalog_block(self.skills)
+                             os_name={"Darwin": "macOS"}.get(self.host.system, self.host.system),
+                             shell=self.host.shell, date=date.today().isoformat(), host=self.host)
+        block = skills_mod.catalog_block(active_skills)
         if block:
             text = f"{text}\n{block}"
         project = self.project.prompt_block()
@@ -280,14 +296,15 @@ class Agent:
         return text
 
     def tool_specs(self) -> list[dict[str, Any]] | None:
-        if not self.provider or not self.provider.supports_tools:
+        if (not self.provider or getattr(self.provider, "owns_context", False)
+                or not self.provider.supports_tools):
             return None
         specs = tools.specs(include_exec=self.mode is not Mode.PLAN)
         if self.mode is Mode.PLAN:
             specs.extend(spec for spec in tools.specs() if spec["name"] == "run_command")
         if self.mode is not Mode.PLAN:
             specs.extend(self.mcp.specs())
-        return specs
+        return self.host.tool_specs(specs)
 
     # the loop
 
@@ -297,12 +314,24 @@ class Agent:
             yield Failed("no provider selected; run /connect")
             yield TurnDone(0.0, 0.0, Usage())
             return
-        if self.mode is Mode.PLAN:
+        definitions = merged_mcp_servers(self.config)
+        if definitions != self._mcp_definitions:
+            await self.mcp.close()
+            self._mcp_definitions = definitions
+            self.mcp = MCPManager({name: {**definition,
+                "_isolation": self.config.get("execution_isolation", "auto"),
+                "_isolate_network": self.config.get("isolate_network", True)}
+                for name, definition in definitions.items()}, self.sandbox.root)
+        native_plugins = getattr(self.provider, "set_plugins", None)
+        if native_plugins:
+            native_plugins({} if self.mode is Mode.PLAN else definitions)
+        if self.mode is Mode.PLAN or getattr(self.provider, "owns_context", False):
             await self.mcp.close()
         else:
             await self.mcp.ensure()
         self.session.repair_pending()
         self._consume_input()
+        self._turn_instructions = text if record_text is not None and record_text != text else ""
         self.session.add_user(record_text if record_text is not None else text)
         self._tool_cache.clear()
         self._work_revision = 0
@@ -326,6 +355,10 @@ class Agent:
         status = "completed"
 
         try:
+            for notice in await self.plugin_runtime.submit(
+                    record_text if record_text is not None else text,
+                    self.sandbox, self.config, plan=self.mode is Mode.PLAN):
+                yield Notice(notice)
             if prepare:
                 local_context = await prepare(self.model)
                 limit = self.iteration_limit
@@ -563,7 +596,7 @@ class Agent:
             semaphore = asyncio.Semaphore(4)
             async def worker(call):
                 async with semaphore:
-                    async for event in self._handle(call):
+                    async for event in self._handle(call, output_share=len(calls)):
                         await queue.put(event)
             tasks = [asyncio.create_task(worker(c)) for c in calls]
             try:
@@ -697,16 +730,16 @@ class Agent:
             except (asyncio.CancelledError, Exception):
                 pass
 
-    async def _handle(self, call: ToolCall) -> AsyncIterator[AgentEvent]:
+    async def _handle(self, call: ToolCall, *, output_share: int = 1) -> AsyncIterator[AgentEvent]:
         try:
-            async for event in self._handle_checked(call):
+            async for event in self._handle_checked(call, output_share=output_share):
                 yield event
         except (ToolError, SandboxError) as exc:
             result = f"Call not executed: {exc.user_message()}. Correct the request before continuing."
             self.session.add_tool_result(call.id, call.name, result, True)
             yield Notice(result, transient=True, phase="adjusting approach")
 
-    async def _handle_checked(self, call: ToolCall) -> AsyncIterator[AgentEvent]:
+    async def _handle_checked(self, call: ToolCall, *, output_share: int = 1) -> AsyncIterator[AgentEvent]:
         """Approve and execute one tool call."""
         if call.name == "ask_user" and isinstance(call.arguments, dict):
             # Missing choices still represents required user input, not license
@@ -724,6 +757,7 @@ class Agent:
             async for event in self._ask_user(call):
                 yield event
             return
+        result_limit = await self._tool_output_limit(output_share)
         is_mcp = self.mcp.owns(call.name)
         self.session.add_note("tool_state", call_id=call.id, tool=call.name, state="requested")
         kind = tools.EXEC if is_mcp else tools.kind_of(call.name)
@@ -749,10 +783,13 @@ class Agent:
         if (cacheable and cached and cached[3] == self._work_revision
                 and not processes.running() and not any(merged_hooks(self.config).values())):
             result, is_error, artifact_id, _ = cached
-            self.session.add_tool_result(call.id, call.name,
+            result = compact_output(result, result_limit, artifact_id)
+            recorded = compact_output(
                 "Already attempted with these arguments; not executed again. Use this recorded result "
                 "and take the next unfinished step or change the failed approach.\n" + result,
-                is_error, artifact_id=artifact_id)
+                result_limit, artifact_id)
+            self.session.add_tool_result(call.id, call.name, recorded,
+                                         is_error, artifact_id=artifact_id)
             yield ToolFinished(call.id, call.name, label, result, is_error, 0.0,
                                artifact_id, reused=True)
             return
@@ -853,9 +890,7 @@ class Agent:
                     async for item in self._execute_live(call,
                         call.name, call.arguments, self.sandbox,
                         timeout=float(self.config.get("shell_timeout", 120) or 120),
-                        max_bytes=(await self._local_output_limit()
-                                   if call.name == "read_file" and getattr(self.provider, "profile", None)
-                                   else int(self.config.get("max_output_bytes", 200_000) or 200_000)),
+                        max_bytes=min(result_limit, int(self.config.get("max_output_bytes", 200_000) or 200_000)),
                         output=output,
                         isolation="none" if native_windows else str(self.config.get("execution_isolation", "auto")),
                         isolate_network=bool(self.config.get("isolate_network", True)) and call.name not in network_tools,
@@ -895,19 +930,12 @@ class Agent:
         if output.size == 0 or is_error:
             output.feed(result)
         output.close()
-        profile = getattr(self.provider, "profile", None)
-        result_limit = min(24000, max(1200, profile.context_tokens // 2)) if profile else 24000
-        if profile and call.name in {"web_search", "read_file"}:
-            result_limit = await self._local_output_limit()
-            if len(result) > result_limit:
-                source = f"\n[output artifact: {output.id}; use read_output for more]"
-                room = max(0, result_limit - len(source))
-                prefix = result[:room]
-                result = (prefix + source) if result_limit >= len(source) else result[:result_limit]
-        else:
-            result = compact_output(result, result_limit, output.id)
-        if output.size > result_limit and output.id not in result and not (profile and call.name in {"web_search", "read_file"}):
-            result += f"\n[output artifact: {output.id}; use read_output for more]"
+        # Every tool, including MCP and artifact pages, shares the same budget.
+        # Recompute after execution because parallel peers may have added history.
+        result_limit = min(result_limit, await self._tool_output_limit(output_share))
+        result = compact_output(result, result_limit, output.id,
+                                prefix_only=call.name in {"read_file", "read_output", "web_search"},
+                                source_required=output.size > len(result.encode("utf-8")))
         if kind in (tools.WRITE, tools.EXEC):
             # Even failed commands can partially change state.
             self._work_revision += 1
@@ -937,18 +965,28 @@ class Agent:
         yield ToolFinished(call.id, call.name, label, result, is_error, seconds, output.id)
 
     async def _local_output_limit(self) -> int:
-        """Reserve instructions, history, tool framing and the model's reply."""
+        return await self._tool_output_limit()
+
+    async def _tool_output_limit(self, share: int = 1) -> int:
+        """Bound all observations by context left after instructions and reply."""
         from .usage import estimate_tokens
-        profile = self.provider.profile
+        profile = getattr(self.provider, "profile", None)
+        context = int(self.config.get("model_context_limits", {}).get(self.model, 0) or 0)
         prepare = getattr(self.provider, "prepare_context", None)
-        context = await prepare(self.model) if prepare else profile.context_tokens
-        configured = int(self.config.get("model_context_limits", {}).get(self.model, 0) or 0)
-        if configured:
-            context = min(context, configured)
-        overhead = estimate_tokens(profile.system(self.system_prompt()))
-        overhead += estimate_tokens(json.dumps(profile.tools(self.tool_specs())))
-        available = context - self.max_tokens - 256 - overhead - self.context_size()
-        return min(24000, max(1200, profile.context_tokens // 2), max(0, (available - 64) * 4))
+        if profile:
+            local = await prepare(self.model) if prepare else profile.context_tokens
+            context = min(context, local) if context else local
+            system = profile.system(self.system_prompt())
+            specs = profile.tools(self.tool_specs())
+            ceiling = min(12000, profile.context_tokens // 2)
+        else:
+            system, specs = self.system_prompt(), self.tool_specs()
+            ceiling = 12000
+        overhead = estimate_tokens(system) + estimate_tokens(json.dumps(specs))
+        threshold = int(self.config.get("context_warning", CONTEXT_WARNING) or CONTEXT_WARNING)
+        budget = min(threshold, context - self.max_tokens - (256 if profile else 2048)) if context else threshold
+        available = max(0, budget - overhead - self.context_size() - 64 * share)
+        return min(ceiling, available * 4 // max(1, share))
 
     async def _execute_live(self, call, name, arguments, sandbox, *, output, **kwargs):
         queue: asyncio.Queue = asyncio.Queue(maxsize=32)

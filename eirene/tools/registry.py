@@ -91,7 +91,7 @@ TOOLS: list[Tool] = [
          "Run a bounded, non-interactive shell command. Long commands return a managed process id; poll it instead of restarting.", {
              "type": "object",
              "properties": {
-                 "command": {"type": "string", "description": "Command line to execute."},
+                 "command": {"type": "string", "description": "Quote paths, set timeout, and narrow output using the detected host command profile. Prefer read_file for ranges."},
                  "timeout": {"type": "integer",
                              "description": "Total time limit in seconds, including background work. Defaults adapt to the command; maximum 3600."},
                  "stdin": {"type": "string", "description": "Optional exact input text; stdin closes after sending it."},
@@ -321,7 +321,7 @@ for _name in ("run_command", "start_process"):
         "network_access": {"type": "boolean", "description": "Request network access for this command; requires approval."},
     })
 
-_output_tool = Tool("read_output", READ, "Read a saved tool output artifact by ID and byte offset.", {
+_output_tool = Tool("read_output", READ, "Read a small page of saved output. Offsets and limits are bytes; follow next_offset by passing offset.", {
     "type": "object", "properties": {"artifact_id": {"type": "string"},
     "offset": {"type": "integer"}, "limit": {"type": "integer"}}, "required": ["artifact_id"]})
 TOOLS.append(_output_tool)
@@ -436,8 +436,8 @@ async def _execute(name: str, args: dict[str, Any], box: Sandbox, *,
     if name == "read_output":
         from ..core import artifacts
         try:
-            return artifacts.read(_text(args, "artifact_id"), int(args.get("offset", 0)),
-                                  int(args.get("limit", 50000)))
+            return artifacts.read_page(_text(args, "artifact_id"), int(args.get("offset", 0)),
+                                       int(args.get("limit", 4096)), max_chars=max_bytes)
         except (ValueError, OSError) as exc:
             raise ToolError(f"cannot read output: {exc}") from exc
 
@@ -545,7 +545,8 @@ async def _execute(name: str, args: dict[str, Any], box: Sandbox, *,
         if skill is None:
             raise ToolError(f"no skill '{wanted}'")
         body = skill_ops.load(skill)
-        return f"# Skill: {skill.title}\n{body}" if body else "skill is empty"
+        return (f"# Skill: {skill.title}\nSkill directory: {skill.path.parent}\n{body}"
+                if body else "skill is empty")
     if name == "plan_show":
         return plan_ops.load(box.root, plan_scope).render()
     if name == "plan_update":

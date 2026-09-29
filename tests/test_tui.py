@@ -2413,21 +2413,46 @@ async def test_a_picker_without_descriptions_still_works(workdir):
 
 async def test_skills_lists_the_shipped_examples(workdir):
     from eirene import commands
+    from eirene.ui.skill_picker import SkillPickerScreen
+    from eirene.ui.picker import Picker
+    from textual.containers import Vertical
 
     app, pilot, context = await start(workdir)
     try:
         listing = asyncio.create_task(commands.dispatch(app, "/skills"))
         for _ in range(40):
             await pilot.pause()
-            if app.picker.waiting:
+            if isinstance(app.screen, SkillPickerScreen) and app.screen.query_one(Picker).waiting:
                 break
-        assert app.picker.waiting, "the skill list should open"
-        shown = content(app.picker)
+        assert isinstance(app.screen, SkillPickerScreen)
+        picker = app.screen.query_one(Picker)
+        assert picker.waiting, "the skill list should open"
+        shown = content(picker)
         assert "systemd" in shown.lower()
         assert "python" in shown.lower()
-        assert "systemd" in shown.lower()
+        from rich.cells import cell_len
+        token_rows = [line for line in shown.splitlines() if line.endswith("tokens")]
+        assert token_rows
+        assert all(cell_len(line) == picker.content_size.width for line in token_rows)
+        assert all("on ·" not in row[2] and "off ·" not in row[2] for row in picker.options)
+        panel = app.screen.query_one(Vertical)
+        assert abs(panel.region.center[0] - app.size.width / 2) <= 1
+        assert abs(panel.region.center[1] - app.size.height / 2) <= 1
+        description = picker.options[picker.index][3]
+        assert description in content(app.screen.query_one("#skill-description"))
+        assert description not in shown
+        await pilot.press("down")
+        assert picker.options[picker.index][3] in content(app.screen.query_one("#skill-description"))
+        selected = picker.options[picker.index][0]
+        before = app.config.skill_enabled(selected, True)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.config.skill_enabled(selected, True) != before
+        assert isinstance(app.screen, SkillPickerScreen)
+        assert app.screen.query_one(Picker).options[app.screen.query_one(Picker).index][0] == selected
         await pilot.press("escape")
         await listing
+        assert not isinstance(app.screen, SkillPickerScreen)
     finally:
         await context.__aexit__(None, None, None)
 

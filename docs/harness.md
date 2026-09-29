@@ -54,6 +54,22 @@ sandboxing enabled, unsandboxed retries disabled, and failure requested when its
 sandbox is unavailable. Backend behavior depends on the installed CLI version.
 Eirene's Bubblewrap runtime does not wrap those external CLIs.
 
+## Host awareness
+
+At agent startup, Eirene records the operating system, architecture, shell,
+CPU thread count, estimated RAM/GPU model memory, and a bounded inventory of
+common tools on host PATH. These checks use local APIs and files; they do not
+invoke a model or launch probe commands. The snapshot is reused for model turns.
+Hardware figures are estimates, and undetected GPU memory is reported as unknown.
+
+Provider and local-model prompts receive only their host's command profile.
+Windows uses CMD and, when detected, PowerShell; macOS uses its BSD/POSIX profile;
+Linux uses its own profile. Bounded read examples are chosen from installed
+utilities. Command schemas omit PowerShell on other systems and omit PTY on
+Windows. Small local prompts retain the same concise hardware/tool facts.
+Project-installed tools may differ from host PATH; sandbox access still follows
+execution policy. Codex and Claude Code retain their own tool harnesses.
+
 ## Output and interaction
 
 Commands show two output lines in chat by default. Click a command to expand its
@@ -62,7 +78,16 @@ Expanded output is limited to 200 KB for responsive rendering; larger artifacts
 remain available through `read_output`. Native tools stream through a
 bounded queue and save output under the private Eirene data directory. Each
 artifact is capped at 20 MB with an explicit truncation marker. Transcript and
-model context use shorter previews; `read_output` retrieves artifact byte ranges.
+model context use shorter previews. Every native tool result, including MCP,
+commands, directory listings, web tools, process polling, and artifact reads, uses
+the remaining context after instructions, schemas, history, and reply reserve.
+Cloud previews are capped at 12,000 characters; local previews have a smaller
+profile cap. Parallel reads divide the available allowance across their batch.
+Saved-output pages report exact byte ranges and `next_offset`; pass that value
+as `offset` to `read_output`, preferably with `limit=1024`. UTF-8 continuation
+boundaries are preserved. A partial preview cannot establish absence of errors
+or matches. Very small budgets return a short deferral or no body, followed by
+normal context compaction before the next model request.
 External CLI output is limited by what that CLI exposes.
 
 `read_file` checks file size and counts lines with bounded buffers before choosing
@@ -71,7 +96,13 @@ ranges and continuation offsets. `pattern`/`context` selects grep-style evidence
 `tail` retains the ending, and `byte_offset` pages oversized lines without splitting
 UTF-8 characters. Local models receive a smaller allowance based on remaining
 estimated context, instructions, tool schemas and reply reserve. Shell guidance
-uses `wc -lc`, `file`, `head`/`tail`, `sed -n` and bounded `rg` searches.
+uses `wc -lc`, `file`, `head`/`tail`, `sed -n` and bounded `rg` searches, with
+PowerShell equivalents in the compact local prompt. `rg -m` is a per-file limit,
+so models are instructed to narrow paths and choose names/counts when sufficient.
+Directory and glob tools retain at most 500 entries while counting omitted
+entries. Text search bounds physical-line allocations and identifies clipped
+lines. HTTP bodies are streamed with a 2 MB decoded download cap and an elapsed
+time deadline; Chromium stdout and stderr are drained into bounded buffers.
 Binary files are rejected by text reads; use image tools or bounded `od`/`xxd`.
 Terminal displays and headless output strip control and escape sequences while
 preserving printable Unicode. Local web search cards show status and errors while

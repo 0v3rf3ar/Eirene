@@ -30,7 +30,13 @@ Windows (AMD64), in PowerShell:
 irm https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.ps1 | iex
 ```
 
-No Python needed. Reopen your terminal after installing.
+No Python needed. The installer configures PATH and prints a command to start
+immediately; open a new terminal to run `eirene` by name.
+Linux and macOS install to `~/.local/bin`, with Bash, Zsh, Fish, or `.profile`
+startup configuration. Windows installs to `%LOCALAPPDATA%\Programs\eirene`
+and updates your user PATH without administrator access.
+Existing shell profiles are backed up before changes. Set `EIRENE_INSTALL_DIR`
+to choose another directory, or `EIRENE_NO_PATH=1` to skip PATH changes.
 Run the same command to update; close Eirene first on Windows.
 You can also download a binary from [Releases](https://github.com/0v3rf3ar/Eirene/releases).
 Archives use `eirene-<OS>-<architecture>-<version>.<format>`: `Linux-amd64`,
@@ -43,6 +49,32 @@ Run `eirene` in your project folder, then `/connect` to choose a provider.
 Codex and Claude Code need their own CLI installed and signed in.
 Use `/help` or F1 for commands, and `/keybindings` for shortcuts.
 
-Linux command isolation needs Bubblewrap and enabled user namespaces.
-See [platform support and building from source](docs/platforms.md) or
-[permissions and recovery](docs/harness.md) for details.
+## Skills and plugins
+
+Install portable plugins from GitHub (requires Git):
+
+```text
+/plugins install DietrichGebert/ponytail
+/plugins inspect ponytail
+/plugins trust ponytail
+/ponytail ultra
+/ponytail-review
+```
+
+Skills and Markdown commands appear in slash completion immediately, with
+`/plugin:command` names and unambiguous short aliases. Supported startup/prompt
+hooks provide automatic activation and mode tracking across API providers,
+Codex, and Claude Code. Imported executable hooks and stdio MCP servers require
+explicit plugin trust. Ponytail also requires Node.js.
+
+For an existing skills-only installation, run `/plugins refresh ponytail`, then
+inspect and trust it. `/plugins browse` lists Ponytail, Superpowers, Anthropic's
+skills, official review/design/commit plugins, Playwright, Serena, and Vercel skills.
+Install shortcuts such as `/plugins install frontend-design` or
+`/plugins install playwright`. `/skills` toggles individual skills; `/plugins`
+toggles whole bundles. Local directories, `owner/repo/path` subdirectories, and
+GitHub repository/tree URLs are also accepted.
+
+See [plugin setup and compatibility](docs/plugins.md) for supported components,
+provider behavior, prerequisites, and limitations. Host-specific features such
+as native statuslines and subagent lifecycle hooks are not emulated.

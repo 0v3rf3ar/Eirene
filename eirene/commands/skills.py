@@ -21,26 +21,22 @@ async def run(app, args: str) -> None:
         await app.push(Block(body))
         return
 
+    selected = ""
     while True:
         options = []
         for skill in found:
             mark = art.icon("ok") if skill.enabled else art.icon("fail")
-            state = "on" if skill.enabled else "off"
             options.append((skill.name, f"{mark} {skill.title}",
-                            f"{state} · ~{skill.tokens} tokens",
+                            f"~{skill.tokens} tokens",
                             skill.description or "no description"))
-        options.append(("", "done", "", "close this list"))
-        chosen = await app.ask_choice("toggle a skill", options)
+        chosen = await app.ask_choice("toggle a skill", options,
+                                      selected=selected, skill_popup=True)
         if not chosen:
             break
+        selected = chosen
         for skill in found:
             if skill.name == chosen:
                 skill.enabled = not skill.enabled
                 app.config.set_skill(skill.name, skill.enabled)
                 app._save_config()
-                app.say(f"{skill.title} {'enabled' if skill.enabled else 'disabled'}")
                 break
-
-    active = [s for s in found if s.enabled]
-    total = sum(s.tokens for s in active)
-    app.say(f"{len(active)} of {len(found)} skills on (~{total} tokens per request)")
