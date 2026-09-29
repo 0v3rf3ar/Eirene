@@ -281,12 +281,15 @@ def test_a_table_inside_a_fence_is_left_alone():
     assert "|---|---|" in drawn[2]
 
 
-def test_a_very_wide_cell_is_trimmed():
+def test_a_very_wide_cell_is_wrapped():
     from eirene.ui.markup import MAX_CELL
-    body = f"| a |\n|---|\n| {'x' * 200} |\n"
-    drawn = [line.plain for line in Markdown(body).lines()]
-    assert all(len(line) <= MAX_CELL + 6 for line in drawn)
-    assert "…" in drawn[3]
+    value = "x" * 200
+    body = f"| a |\n|---|\n| {value} |\n"
+    lines = Markdown(body).lines()
+    assert all(line.cell_len <= MAX_CELL + 4 for line in lines)
+    wrapped = [line.plain[2:-2].rstrip() for line in lines[3:-1]]
+    assert len(wrapped) > 1
+    assert "".join(wrapped) == value
 
 
 def test_wrapped_numbered_items_align_beneath_the_text_and_have_space():
