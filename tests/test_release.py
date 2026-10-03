@@ -333,12 +333,14 @@ def test_redirected_installer_has_readable_steps_and_no_escape_codes(installer):
 
 
 @pytest.mark.parametrize('system', ['Linux', 'Darwin'])
-def test_slow_bash_profile_has_portable_deadline_and_stops_children(installer, system):
+@pytest.mark.parametrize('job_control', [False, True])
+def test_slow_bash_profile_has_portable_deadline_and_stops_children(installer, system, job_control):
     import time
 
     run, env, _ = installer
     profile = Path(env['HOME']) / '.bashrc'
-    profile.write_text('sh -c \'trap "" TERM; echo $$ > "$HOME/profile-child.pid"; sleep 30\'\n')
+    profile.write_text(('set -m\n' if job_control else '') +
+                       'sh -c \'trap "" TERM; echo $$ > "$HOME/profile-child.pid"; sleep 30\'\n')
     # The portable watchdog must work even with no usable timeout utility.
     tools = Path(env['PATH'].split(os.pathsep)[0])
     timeout = tools / 'timeout'

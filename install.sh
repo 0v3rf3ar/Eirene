@@ -53,7 +53,7 @@ repo='0v3rf3ar/Eirene'
 version=${EIRENE_VERSION:-latest}
 install_dir=${EIRENE_INSTALL_DIR:-"$HOME/.local/bin"}
 case "$install_dir" in /*) ;; *) install_dir="$PWD/$install_dir" ;; esac
-for tool in curl tar uname mktemp grep cp chmod mv mkdir cat sleep; do
+for tool in curl tar uname mktemp grep cp chmod mv mkdir cat sleep ps awk; do
     command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"
 done
 case "$install_dir" in *$'\n'*|*$'\r'*|*:*) fail 'install directory must not contain newlines or a colon (PATH separator)' ;; esac
@@ -258,23 +258,46 @@ if [[ "${EIRENE_NO_PATH:-0}" != 1 ]]; then
     fi
     if [[ -f "$HOME/.bashrc" ]] && command -v bash >/dev/null 2>&1; then
         printf 'Checking .bashrc (up to 2 seconds)…\n'
-        # Job control gives the check its own process group. The watchdog can
-        # stop the shell AND profile children on Linux/macOS without timeout(1).
+        # Job control gives the check its own process group. Interactive startup
+        # and profiles can create additional groups, so snapshot descendants
+        # before signalling the shell; their parent links disappear on exit.
         # Only resolve PATH here: another frozen-binary startup is unnecessary.
         verify_bash_profile() (
             set +e
             set -m
             PATH="$initial_path" bash --noprofile --norc +m -ic \
-                'source "$1"; hash -r; [[ "$(type -P eirene)" == "$2/eirene" ]] && printf verified > "$3"' \
+                'set +m; source "$1"; hash -r; [[ "$(type -P eirene)" == "$2/eirene" ]] && printf verified > "$3"' \
                 bash "$HOME/.bashrc" "$install_dir" "$temporary/profile-verified" < /dev/null \
                 > "$temporary/shell-check.txt" 2>&1 &
             shell_pid=$!
             (
                 sleep 2
                 printf 'timeout\n' > "$temporary/shell-timeout"
+                ps -axo pid=,ppid= | awk -v root="$shell_pid" '
+                    { parent[$1] = $2 }
+                    END {
+                        descendant[root] = 1
+                        do {
+                            changed = 0
+                            for (pid in parent) {
+                                if (!descendant[pid] && descendant[parent[pid]]) {
+                                    descendant[pid] = 1
+                                    print pid
+                                    changed = 1
+                                }
+                            }
+                        } while (changed)
+                    }
+                ' > "$temporary/profile-children"
+                while read -r child_pid; do
+                    kill -TERM "$child_pid" 2>/dev/null
+                done < "$temporary/profile-children"
                 kill -TERM -- "-$shell_pid" 2>/dev/null
                 sleep 0.1
                 kill -KILL -- "-$shell_pid" 2>/dev/null
+                while read -r child_pid; do
+                    kill -KILL "$child_pid" 2>/dev/null
+                done < "$temporary/profile-children"
             ) &
             watchdog_pid=$!
             wait "$shell_pid"
