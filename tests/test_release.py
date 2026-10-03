@@ -357,6 +357,50 @@ def test_slow_bash_profile_has_portable_deadline_and_stops_children(installer, s
     assert not state.stdout.strip() or state.stdout.strip().startswith('Z')
 
 
+def test_watchdog_finishes_cleanup_when_profile_shell_exits_on_term(installer, tmp_path):
+    import signal
+    import time
+
+    run, env, _ = installer
+    home = Path(env['HOME'])
+    (home / '.bashrc').write_text(
+        'sh -c \'trap "" TERM; echo $$ > "$HOME/profile-child.pid"; '
+        'echo $PPID > "$HOME/profile-parent.pid"; sleep 30\'\n')
+    # Reproduce macOS's early shell exit even when this test runs on Linux.
+    # The watchdog's group TERM still reaches the resistant child, but the
+    # group leader is forced to exit before the delayed group KILL.
+    environment = tmp_path / 'early-exit.bash'
+    environment.write_text('''
+kill() {
+    builtin kill "$@"
+    status=$?
+    if [[ "$1" == -TERM && -f "$HOME/profile-parent.pid" ]]; then
+        parent=$(cat "$HOME/profile-parent.pid")
+        if [[ "${3:-}" == "-$parent" ]]; then
+            builtin kill -KILL "$parent" 2>/dev/null
+        fi
+    fi
+    return "$status"
+}
+''')
+    try:
+        started = time.monotonic()
+        result = run(EIRENE_NO_PATH='0', BASH_ENV=str(environment))
+        assert time.monotonic() - started < 6
+        assert result.returncode == 0, result.stderr
+        assert 'Bash startup exceeded 2 seconds' in result.stderr
+        pid = (home / 'profile-child.pid').read_text().strip()
+        state = subprocess.run(['ps', '-o', 'stat=', '-p', pid], capture_output=True, text=True)
+        assert not state.stdout.strip() or state.stdout.strip().startswith('Z')
+    finally:
+        parent_file = home / 'profile-parent.pid'
+        if parent_file.exists():
+            try:
+                os.killpg(int(parent_file.read_text().strip()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
 def test_installer_runs_only_three_executable_checks(installer):
     run, env, fixture = installer
     binary = fixture / 'counted'

@@ -279,7 +279,12 @@ if [[ "${EIRENE_NO_PATH:-0}" != 1 ]]; then
             watchdog_pid=$!
             wait "$shell_pid"
             result=$?
-            kill -TERM -- "-$watchdog_pid" 2>/dev/null
+            # macOS can reap the shell on TERM while a profile child ignores
+            # that signal. Let the timed-out watchdog finish its KILL phase
+            # before returning; cancelling it here leaves those children alive.
+            if [[ ! -f "$temporary/shell-timeout" ]]; then
+                kill -TERM -- "-$watchdog_pid" 2>/dev/null
+            fi
             wait "$watchdog_pid" 2>/dev/null
             exit "$result"
         )
