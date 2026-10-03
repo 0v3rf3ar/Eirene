@@ -1699,6 +1699,44 @@ async def test_deleting_the_slash_closes_the_menu(workdir):
         await context.__aexit__(None, None, None)
 
 
+async def test_slash_menu_resize_keeps_transcript_at_bottom(workdir):
+    app, pilot, context = await start(workdir, size=(70, 24))
+    try:
+        await app.push(NoticeBlock("older response\n" * 40))
+        await pilot.pause()
+        assert app.transcript.is_vertical_scroll_end
+
+        await pilot.press("/")
+        await pilot.pause()
+        assert app.transcript.is_vertical_scroll_end
+        await pilot.press("backspace")
+        await pilot.pause()
+        assert app.transcript.is_vertical_scroll_end
+        assert not app.query_one(BackToBottom).display
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_slash_menu_resize_preserves_scrolled_up_position(workdir):
+    app, pilot, context = await start(workdir, size=(70, 24))
+    try:
+        await app.push(NoticeBlock("older response\n" * 40))
+        await pilot.pause()
+        app.transcript.scroll_home(animate=False, immediate=True)
+        await pilot.pause()
+        position = app.transcript.scroll_y
+
+        await pilot.press("/")
+        await pilot.pause()
+        assert app.transcript.scroll_y == position
+        await pilot.press("backspace")
+        await pilot.pause()
+        assert app.transcript.scroll_y == position
+        assert app.query_one(BackToBottom).display
+    finally:
+        await context.__aexit__(None, None, None)
+
+
 async def test_backspacing_a_command_narrows_the_menu(workdir):
     app, pilot, context = await start(workdir)
     try:

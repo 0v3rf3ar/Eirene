@@ -609,6 +609,8 @@ class Transcript(VerticalScroll):
         self.call_after_refresh(self.refresh_navigation)
 
     def on_resize(self, event) -> None:
+        if self._following:
+            self._schedule_follow()
         self.call_after_refresh(self.refresh_navigation)
 
     def refresh_navigation(self) -> None:
