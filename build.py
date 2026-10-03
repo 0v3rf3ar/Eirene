@@ -97,8 +97,8 @@ def main() -> int:
                         help="temporary packaging directory (default: build/work)")
     args = parser.parse_args()
 
-    if sys.version_info < (3, 10):
-        fail("Python 3.10 or newer is required")
+    if sys.version_info < (3, 11):
+        fail("Python 3.11 or newer is required")
     print(f"eirene build on {platform.system()} {platform.machine()} "
           f"with python {platform.python_version()}", flush=True)
     python = Path(sys.executable) if args.no_install else ensure_venv()

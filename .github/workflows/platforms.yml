@@ -12,13 +12,17 @@ permissions:
 
 jobs:
   test:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12', '3.13', '3.14']
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python }}
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -29,7 +33,14 @@ jobs:
           RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: |
           python scripts/release_metadata.py --tag "$RELEASE_TAG"
-          python -m pytest -q
+          python -m ruff check .
+          python -m mypy
+          python -m pytest -q --cov --cov-report=term:skip-covered --cov-report=xml
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-python-${{ matrix.python }}
+          path: coverage.xml
 
   build:
     strategy:

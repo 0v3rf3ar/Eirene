@@ -63,7 +63,7 @@ def installer(tmp_path):
 from pathlib import Path
 args = sys.argv[1:]
 url = args[-1]
-with open(os.environ['TEST_LOG'], 'a') as stream: stream.write(url + '\\n')
+with open(os.environ['TEST_LOG'], 'a') as stream: stream.write(url + '\\n' + ' '.join(args) + '\\n')
 if url.endswith('/releases/latest'):
     print('https://github.com/0v3rf3ar/Eirene/releases/tag/v1.2.3', end='')
 else:
@@ -95,7 +95,7 @@ def test_installer_detects_host_and_installs_executable(installer, system, cpu, 
     assert subprocess.check_output([str(binary), '--version'], text=True).strip() == 'Eirene fixture'
     requests = Path(env['TEST_LOG']).read_text()
     assert f'/v1.2.3/eirene-{target}-1.2.3.tar.gz' in requests
-    assert '/v1.2.3/SHA256SUMS' in requests
+    assert 'SHA256SUMS' not in requests
 
 
 def test_installer_detects_apple_silicon_through_rosetta(installer):
@@ -103,16 +103,16 @@ def test_installer_detects_apple_silicon_through_rosetta(installer):
     assert run(TEST_OS='Darwin', TEST_CPU='x86_64', TEST_SILICON='1').returncode == 0
 
 
-@pytest.mark.parametrize('kind', ['checksum', 'download'])
+@pytest.mark.parametrize('kind', ['archive', 'download'])
 def test_installer_failure_preserves_existing_binary(installer, kind):
     run, env, fixture = installer
     assert run().returncode == 0
     binary = Path(env['EIRENE_INSTALL_DIR']) / 'eirene'
     original = binary.read_bytes()
-    if kind == 'checksum':
-        (fixture / 'SHA256SUMS').write_text('0' * 64 + '  eirene-Linux-amd64-1.2.3.tar.gz\n')
+    if kind == 'archive':
+        (fixture / 'eirene-Linux-amd64-1.2.3.tar.gz').write_bytes(b'broken archive')
         result = run()
-        assert 'checksum mismatch' in result.stderr
+        assert 'extracting the release archive' in result.stderr
     else:
         result = run(TEST_FAIL_DOWNLOAD='1')
     assert result.returncode != 0
@@ -244,3 +244,169 @@ def test_invalid_path_fails_before_download(installer):
     result = run(EIRENE_INSTALL_DIR=env['HOME'] + '/bad:path')
     assert result.returncode != 0
     assert not Path(env['TEST_LOG']).exists()
+
+
+def test_installer_configures_multiple_detected_shells(installer):
+    run, env, _ = installer
+    tools = Path(env['PATH'].split(os.pathsep)[0])
+    for shell in ('zsh', 'fish', 'ksh', 'csh', 'tcsh', 'pwsh', 'nu'):
+        executable = tools / shell
+        executable.write_text('#!/bin/sh\nexit 0\n')
+        executable.chmod(0o755)
+    overrides = dict(EIRENE_NO_PATH='0', SHELL='/bin/bash',
+                     ZDOTDIR=env['HOME'], XDG_CONFIG_HOME=str(Path(env['HOME']) / '.config'))
+    for _ in range(2):
+        result = run(**overrides)
+        assert result.returncode == 0, result.stderr
+    for name in ('.bashrc', '.profile', '.zshrc', '.zprofile', '.kshrc',
+                 '.cshrc', '.tcshrc', '.config/fish/conf.d/eirene.fish',
+                 '.config/powershell/profile.ps1', '.config/nushell/env.nu'):
+        text = (Path(env['HOME']) / name).read_text()
+        assert text.count('# Eirene') == 1, name
+        assert env['EIRENE_INSTALL_DIR'] in text, name
+    assert 'Sourced .bashrc and verified eirene' in result.stdout
+
+
+def test_installer_sources_bashrc_with_normal_interactive_guard(installer):
+    run, env, _ = installer
+    marker = Path(env['HOME']) / 'sourced'
+    profile = Path(env['HOME']) / '.bashrc'
+    profile.write_text('case $- in *i*) ;; *) return ;; esac\nprintf sourced > "$HOME/sourced"\n')
+    result = run(EIRENE_NO_PATH='0')
+    assert result.returncode == 0, result.stderr
+    assert marker.read_text() == 'sourced'
+    assert 'Sourced .bashrc and verified eirene' in result.stdout
+
+
+@pytest.mark.parametrize('exit_code', [0, 9])
+def test_bash_startup_failure_does_not_claim_shell_is_ready(installer, exit_code):
+    run, env, _ = installer
+    (Path(env['HOME']) / '.bashrc').write_text(f'exit {exit_code}\n')
+    result = run(EIRENE_NO_PATH='0')
+    assert result.returncode == 0, result.stderr
+    assert 'Bash startup verification failed' in result.stderr
+    assert 'Open a new terminal and run: eirene' not in result.stdout
+    assert (Path(env['EIRENE_INSTALL_DIR']) / 'eirene').exists()
+
+
+def test_staged_help_failure_preserves_existing_binary(installer):
+    run, env, fixture = installer
+    assert run().returncode == 0
+    installed = Path(env['EIRENE_INSTALL_DIR']) / 'eirene'
+    original = installed.read_bytes()
+    bad = fixture / 'broken-help'
+    bad.write_text('#!/bin/sh\nif [ "$1" = --help ]; then exit 7; fi\necho version\n')
+    archive = packager.package('linux-amd64', bad, fixture, '1.2.3')
+    (fixture / 'SHA256SUMS').write_text(archive.with_name(archive.name + '.sha256').read_text())
+    result = run()
+    assert result.returncode != 0
+    assert 'failed --help' in result.stderr
+    assert installed.read_bytes() == original
+
+
+def test_shell_configuration_mode_does_not_download_or_replace_binary(installer):
+    run, env, _ = installer
+    assert run().returncode == 0
+    binary = Path(env['EIRENE_INSTALL_DIR']) / 'eirene'
+    original = binary.read_bytes()
+    request_log = Path(env['TEST_LOG'])
+    original_requests = request_log.read_text()
+    result = subprocess.run(['bash', str(ROOT / 'install.sh'), '--configure-shells'],
+                            env={**env, 'EIRENE_NO_PATH': '0'}, capture_output=True,
+                            text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert binary.read_bytes() == original
+    assert request_log.read_text() == original_requests
+    assert (Path(env['HOME']) / '.bashrc').exists()
+
+
+def test_redirected_installer_has_readable_steps_and_no_escape_codes(installer):
+    run, _, _ = installer
+    result = run(NO_COLOR='1')
+    assert result.returncode == 0, result.stderr
+    for number in range(1, 8):
+        assert f'[{number}/7]' in result.stdout
+    assert '\x1b' not in result.stdout + result.stderr
+    assert 'Executable extracted' in result.stdout
+    assert 'SHA256SUMS' not in Path(installer[1]['TEST_LOG']).read_text()
+    assert all(not line.startswith(' ') for line in result.stdout.splitlines())
+
+
+@pytest.mark.parametrize('system', ['Linux', 'Darwin'])
+def test_slow_bash_profile_has_portable_deadline_and_stops_children(installer, system):
+    import time
+
+    run, env, _ = installer
+    profile = Path(env['HOME']) / '.bashrc'
+    profile.write_text('sh -c \'trap "" TERM; echo $$ > "$HOME/profile-child.pid"; sleep 30\'\n')
+    # The portable watchdog must work even with no usable timeout utility.
+    tools = Path(env['PATH'].split(os.pathsep)[0])
+    timeout = tools / 'timeout'
+    timeout.write_text('#!/bin/sh\nexit 99\n')
+    timeout.chmod(0o755)
+    started = time.monotonic()
+    result = run(EIRENE_NO_PATH='0', TEST_OS=system, TEST_CPU='arm64')
+    assert time.monotonic() - started < 6
+    assert result.returncode == 0, result.stderr
+    assert 'Bash startup exceeded 2 seconds' in result.stderr
+    assert 'Checking .bashrc (up to 2 seconds)' in result.stdout
+    assert 'Start now:' in result.stdout
+    assert 'Open a new terminal and run: eirene' not in result.stdout
+    pid = (Path(env['HOME']) / 'profile-child.pid').read_text().strip()
+    state = subprocess.run(['ps', '-o', 'stat=', '-p', pid], capture_output=True, text=True)
+    assert not state.stdout.strip() or state.stdout.strip().startswith('Z')
+
+
+def test_installer_runs_only_three_executable_checks(installer):
+    run, env, fixture = installer
+    binary = fixture / 'counted'
+    binary.write_text('#!/bin/sh\nprintf "%s\\n" "$1" >> "$HOME/binary-checks"\necho fixture\n')
+    archive = packager.package('linux-amd64', binary, fixture, '1.2.3')
+    (fixture / 'SHA256SUMS').write_text(archive.with_name(archive.name + '.sha256').read_text())
+    result = run(EIRENE_NO_PATH='0')
+    assert result.returncode == 0, result.stderr
+    assert (Path(env['HOME']) / 'binary-checks').read_text().splitlines() == [
+        '--version', '--help', '--version']
+
+
+def test_terminal_installer_displays_portrait_and_requests_live_progress(installer):
+    if os.name == 'nt':
+        pytest.skip('POSIX terminal test')
+    import errno
+    import pty
+    import select
+    import time
+
+    _, env, _ = installer
+    master, slave = pty.openpty()
+    process = subprocess.Popen(['bash', str(ROOT / 'install.sh')],
+                               env={**env, 'TERM': 'xterm-256color', 'COLUMNS': '80'},
+                               stdin=subprocess.DEVNULL, stdout=slave, stderr=slave)
+    os.close(slave)
+    output = bytearray()
+    deadline = time.monotonic() + 20
+    try:
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.1)
+            if not ready:
+                continue
+            try:
+                chunk = os.read(master, 65536)
+            except OSError as exc:
+                if exc.errno == errno.EIO:
+                    break
+                raise
+            if not chunk:
+                break
+            output.extend(chunk)
+        assert process.wait(timeout=2) == 0, output.decode()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        os.close(master)
+    import re
+    text = re.sub(r'\x1b\[[0-9;]*m', '', output.decode())
+    assert '⠻⣷' in text
+    assert '[3/7] Download' in text
+    assert '--progress-bar' in Path(env['TEST_LOG']).read_text()

@@ -1,13 +1,13 @@
 [project]
 name = "eirene"
-version = "0.1.9"
+version = "0.1.10"
 description = "Terminal AI agent for coding, automation and deployment."
 readme = "README.md"
 authors = [{ name = "s3p" }]
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
-requires-python = ">=3.10"
-dependencies = ["textual>=1.0", "rich>=13.7", "httpx>=0.27", "keyring>=25.0"]
+requires-python = ">=3.11"
+dependencies = ["textual>=1.0", "rich>=13.7", "httpx>=0.27", "keyring>=25.0", "packaging>=24.0"]
 
 [project.scripts]
 eirene = "eirene.__main__:main"
@@ -27,3 +27,28 @@ filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.setuptools.package-data]
 "eirene.ui" = ["logo.gray.zlib"]
+
+[tool.ruff]
+target-version = "py311"
+extend-exclude = ["build", "dist", "release", ".venv-build-linux-x86_64"]
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["eirene/core/paths.py", "eirene/core/subprocesses.py", "eirene/core/updates.py", "eirene/tools/lsp.py"]
+follow_imports = "silent"
+check_untyped_defs = true
+disallow_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+
+[tool.coverage.run]
+source = ["eirene"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

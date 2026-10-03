@@ -17,3 +17,8 @@ htmlcov/
 *-old.*
 
 release/
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/

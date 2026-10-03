@@ -14,10 +14,42 @@ $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('eirene-installer-test-' + [gu
 $installDirectory = Join-Path $testRoot 'path with spaces'
 $requests = [Collections.Generic.List[string]]::new()
 $corrupt = $false
+$downloadMode = 'normal'
+$downloadAttempts = 0
+$retryDelays = [Collections.Generic.List[double]]::new()
+function Start-Sleep([double]$Seconds) { $retryDelays.Add($Seconds) }
 $savedProcessPath = $env:PATH
 $savedUserPath = if ($Target -eq 'windows-amd64') { [Environment]::GetEnvironmentVariable('Path', 'User') } else { $null }
 $savedProfile = $PROFILE
 $savedNoPath = $env:EIRENE_NO_PATH
+$savedHomeEnv = $env:HOME
+$savedConfigHome = $env:XDG_CONFIG_HOME
+$savedZdotdir = $env:ZDOTDIR
+$savedShell = $env:SHELL
+if ($Target -ne 'windows-amd64') {
+    $env:HOME = Join-Path $testRoot 'home'
+    $env:XDG_CONFIG_HOME = Join-Path $testRoot 'config'
+    $env:ZDOTDIR = $env:HOME
+    $env:SHELL = '/bin/bash'
+    New-Item -ItemType Directory -Path $env:HOME -Force | Out-Null
+}
+# Substitute only the transport; exercise the real streaming/progress loop.
+$installerSource = [IO.File]::ReadAllText((Join-Path $root 'install.ps1'))
+$installerSource = $installerSource.Replace('$request = [Net.WebRequest]::Create($Uri)', 'return Open-FixtureDownload $Uri')
+$installer = [scriptblock]::Create($installerSource)
+function Open-FixtureDownload([string]$Uri) {
+    $requests.Add($Uri)
+    $script:downloadAttempts += 1
+    if ($downloadMode -eq 'retry' -and $downloadAttempts -eq 1) { throw 'Simulated interrupted connection.' }
+    if ($downloadMode -eq 'empty') {
+        return [pscustomobject]@{ Stream = [IO.MemoryStream]::new(); Length = 0; Response = $null }
+    }
+    if ($downloadMode -eq 'truncated') {
+        return [pscustomobject]@{ Stream = [IO.MemoryStream]::new([byte[]](1, 2, 3)); Length = 999; Response = $null }
+    }
+    if (-not $Uri.EndsWith('/' + $fixtureAsset)) { throw "Unexpected archive: $Uri" }
+    return [pscustomobject]@{ Stream = [IO.File]::OpenRead($archiveFixture); Length = $(if ($downloadMode -eq 'unknown') { -1 } else { (Get-Item -LiteralPath $archiveFixture).Length }); Response = $null }
+}
 
 function Invoke-WebRequest {
     param([switch]$UseBasicParsing, [string]$Uri, [string]$OutFile, [int]$TimeoutSec)
@@ -26,9 +58,12 @@ function Invoke-WebRequest {
         [IO.File]::WriteAllText($OutFile, ('{"tag_name":"v' + $fixtureVersion + '"}'))
     } elseif ($Uri -ceq "https://github.com/0v3rf3ar/Eirene/releases/download/v$fixtureVersion/SHA256SUMS") {
         $hash = if ($corrupt) { '0' * 64 } else { $checksumFixture }
-        [IO.File]::WriteAllText($OutFile, "$hash  $fixtureAsset`n")
+        $shellHash = (Get-FileHash -LiteralPath (Join-Path $root 'install.sh') -Algorithm SHA256).Hash
+        [IO.File]::WriteAllText($OutFile, "$hash  $fixtureAsset`n$shellHash  install.sh`n")
     } elseif ($Uri -ceq "https://github.com/0v3rf3ar/Eirene/releases/download/v$fixtureVersion/$fixtureAsset") {
         Copy-Item -LiteralPath $archiveFixture -Destination $OutFile
+    } elseif ($Uri.EndsWith('/install.sh')) {
+        Copy-Item -LiteralPath (Join-Path $root 'install.sh') -Destination $OutFile
     } else {
         throw "Unexpected download: $Uri"
     }
@@ -36,8 +71,8 @@ function Invoke-WebRequest {
 
 try {
     # First install and an atomic upgrade into a path with spaces.
-    & "$root/install.ps1" -Version latest -InstallDir $installDirectory -NoPathUpdate
-    & "$root/install.ps1" -Version "v$fixtureVersion" -InstallDir $installDirectory -NoPathUpdate
+    & $installer -Version latest -InstallDir $installDirectory -NoPathUpdate
+    & $installer -Version "v$fixtureVersion" -InstallDir $installDirectory -NoPathUpdate
     $name = if ($Target -eq 'windows-amd64') { 'eirene.exe' } else { 'eirene' }
     $binary = Join-Path $installDirectory $name
     $originalHash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
@@ -48,7 +83,7 @@ try {
     }
     $corrupt = $true
     $failed = $false
-    try { & "$root/install.ps1" -Version "v$fixtureVersion" -InstallDir $installDirectory -NoPathUpdate }
+    try { & $installer -Version "v$fixtureVersion" -InstallDir $installDirectory -NoPathUpdate }
     catch {
         if ($_.Exception.Message -notmatch 'Checksum mismatch') { throw }
         $failed = $true
@@ -58,6 +93,28 @@ try {
         throw 'Failed install modified the existing executable.'
     }
     $corrupt = $false
+    foreach ($failureMode in @('empty', 'truncated')) {
+        $downloadMode = $failureMode
+        $downloadAttempts = 0
+        $failed = $false
+        try { & $installer -Version "v$fixtureVersion" -InstallDir $installDirectory -NoPathUpdate }
+        catch {
+            if ($_.Exception.Message -notmatch 'archive is empty|download was incomplete') { throw }
+            $failed = $true
+        }
+        if (-not $failed -or $downloadAttempts -ne 4) { throw "Expected four failed $failureMode download attempts." }
+        if ((Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash -ne $originalHash) {
+            throw 'Failed streaming download modified the existing executable.'
+        }
+    }
+    $downloadMode = 'retry'
+    $downloadAttempts = 0
+    & $installer -Version "v$fixtureVersion" -InstallDir $installDirectory -NoPathUpdate
+    if ($downloadAttempts -ne 2) { throw 'Interrupted download was not retried exactly once.' }
+    $downloadMode = 'unknown'
+    & $installer -Version "v$fixtureVersion" -InstallDir $installDirectory -NoPathUpdate
+    if ((Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash -ne $originalHash) { throw 'Unknown-size download changed the fixture binary.' }
+    $downloadMode = 'normal'
     $env:EIRENE_NO_PATH = '0'
     if ($Target -ne 'windows-amd64') {
         $profileFixture = Join-Path $testRoot 'profile.ps1'
@@ -65,8 +122,8 @@ try {
         $PROFILE = [pscustomobject]@{ CurrentUserAllHosts = $profileFixture }
     }
     # Repeat PATH setup, including when this process already has the directory.
-    & "$root/install.ps1" -Version "v$fixtureVersion" -InstallDir $installDirectory
-    & "$root/install.ps1" -Version "v$fixtureVersion" -InstallDir $installDirectory
+    & $installer -Version "v$fixtureVersion" -InstallDir $installDirectory
+    & $installer -Version "v$fixtureVersion" -InstallDir $installDirectory
     if (($env:PATH -split [IO.Path]::PathSeparator) -notcontains $installDirectory) {
         throw 'Current terminal PATH was not updated.'
     }
@@ -96,6 +153,10 @@ try {
 } finally {
     $env:PATH = $savedProcessPath
     $env:EIRENE_NO_PATH = $savedNoPath
+    $env:HOME = $savedHomeEnv
+    $env:XDG_CONFIG_HOME = $savedConfigHome
+    $env:ZDOTDIR = $savedZdotdir
+    $env:SHELL = $savedShell
     $PROFILE = $savedProfile
     if ($Target -eq 'windows-amd64') {
         [Environment]::SetEnvironmentVariable('Path', $savedUserPath, 'User')

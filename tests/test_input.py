@@ -326,7 +326,7 @@ async def test_enter_runs_exit_on_the_first_press(workdir):
 async def test_enter_on_a_partial_name_runs_the_highlighted_one(workdir):
     app, pilot, context = await start(workdir)
     try:
-        await pilot.press("slash", "u")
+        await pilot.press("slash", "u", "s")
         await settle(pilot)
         assert app.slash.choice == "usage"
         await pilot.press("enter")

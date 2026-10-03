@@ -6,8 +6,46 @@ param(
     [switch]$NoPathUpdate
 )
 $ErrorActionPreference = 'Stop'
-# Unicode escapes keep the banner compatible with Windows PowerShell 5.1 file decoding.
-Write-Host ([regex]::Unescape('\n\u250f\u2501\u2578\u257b\u250f\u2501\u2513\u250f\u2501\u2578\u250f\u2513\u257b\u250f\u2501\u2578\n\u2523\u2578 \u2503\u2523\u2533\u251b\u2523\u2578 \u2503\u2517\u252b\u2523\u2578\n\u2517\u2501\u2578\u2579\u2579\u2517\u2578\u2517\u2501\u2578\u2579 \u2579\u2517\u2501\u2578\n'))
+function Write-Step([int]$Number, [string]$Text) {
+    if ($null -eq $env:NO_COLOR) { Write-Host "`n[$Number/7] $Text" -ForegroundColor Cyan }
+    else { Write-Host "`n[$Number/7] $Text" }
+}
+function Write-OK([string]$Text) {
+    if ($null -eq $env:NO_COLOR) { Write-Host "[ok] $Text" -ForegroundColor Green }
+    else { Write-Host "[ok] $Text" }
+}
+function Show-Eirene {
+    # Embedded artwork needs no image viewer, Python or additional download.
+    if (-not [Console]::IsOutputRedirected -and [Console]::WindowWidth -ge 56) {
+        $portrait = [regex]::Unescape(@'
+                    \u2820\u2824\u28e4\u28c0\u2840
+                       \u2819\u283b\u28f7\u28c4
+         \u2840              \u28e4\u2808\u283b\u28f7\u2844  \u28b0\u28ff
+       \u2820\u280a    \u2840\u2880\u2840\u28e4\u28c4\u28c0\u28e0\u28f6\u28fc\u283f\u2826\u2808 \u2808\u2819\u2819\u2802\u2808\u2819\u2802
+       \u2850\u2824\u2830\u2816\u2807\u2810\u281b\u2809\u2801\u2848\u2801\u2809\u2801\u2801
+      \u2870         \u28f7\u2840
+     \u28b0\u2847    \u28b0\u2840 \u2840\u28b8\u2818\u28fb\u28e4\u28e4\u28c0\u28c0\u28c0\u2880     \u28c0\u28e4\u28c4
+     \u2818\u2847\u2846   \u28c8\u28f3\u28e6\u28f5\u287c\u280b\u2801\u2808\u2809\u2889\u28fd\u28ff\u28ff\u28ff\u28e7\u2840\u2880\u28fc\u28c7\u28fb\u28fe\u2806
+       \u2839\u28a6\u2840   \u2808\u28ff\u28c7    \u28fc\u28ff\u28ff\u28ff\u28ff\u28ff\u28ff\u28ff\u284b\u28c0\u28fc\u280f      \u2820
+         \u2808   \u28f4\u28ff\u28ff\u28f7\u28e6\u28f4\u28fe\u28ff\u28ff\u28ff\u28ff\u28ff\u28ff\u28ff\u281f\u2801\u280b\u2801   \u2822    \u2886
+            \u2818\u28ff\u283f\u283f\u283f\u28ff\u28ff\u28ff\u28ff\u28ff\u28ff\u28ff\u28ff\u28ff\u28ff\u28c6\u285f          \u2818\u2844
+          \u28fc  \u2808\u28b7\u28fc\u28ff\u28ff\u28ff\u28ff\u28ff\u28ff\u287f\u28ff\u28ff\u28ff\u28ff\u28fe\u2847\u2840  \u28f0\u285c\u2803    \u2820\u28f9\u2844
+          \u2809    \u2839\u28ff\u287f\u283f\u281b\u2809\u2881\u28fe\u28ff\u28ff\u28ff\u28ff\u28ff\u28f7\u28c7          \u28b9\u28ff\u2844
+        \u28f8  \u2830         \u28ff\u28ff\u28ff\u287f\u28ff\u28ff\u28ff\u28df\u28bf\u2804\u2804         \u283b\u28f7
+        \u28bf\u2840\u2844          \u2838\u28ff\u28df\u28fc\u28ff\u28ff\u28ff\u28ff\u2802        \u2880 \u2840\u28a0\u2818
+        \u2808\u287d\u2801           \u28b9\u28ff\u28ff\u28bf\u283f\u281f\u2809    \u2880\u28c4   \u2808 \u2801 \u28c7 \u28e7
+        \u2808\u2801\u28e0\u2846  \u2820\u2803       \u28ff\u28ff\u28f6\u2846\u2809             \u2820\u2803\u2818\u2803
+                   \u2880\u28e4\u2816\u28f7\u28ff\u283f\u280b  \u28e0\u2814\u2809          \u2840
+          \u2824\u2804\u2860\u2802     \u28be\u2807\u28fc\u281f\u2801\u2802 \u280a\u2808\u2801
+           \u2808\u2801      \u2808 \u2801
+'@)
+        if ($null -eq $env:NO_COLOR) { Write-Host $portrait -ForegroundColor Cyan }
+        else { Write-Host $portrait }
+    }
+    Write-Host 'E I R E N E  /  terminal coding agent'
+}
+Write-Host 'E I R E N E  /  installer'
+Write-Step 1 'Check this computer'
 $repo = '0v3rf3ar/Eirene'
 $temporary = $null
 $staged = $null
@@ -55,18 +93,73 @@ if ($InstallDir.IndexOfAny(@([char]10, [char]13, [IO.Path]::PathSeparator)) -ge 
     throw 'Install directory must not contain newlines or the PATH separator.'
 }
 
-function Get-ReleaseFile([string]$Uri, [string]$Destination) {
+function Open-ReleaseDownload([string]$Uri) {
+    $request = [Net.WebRequest]::Create($Uri)
+    $request.Timeout = 15000
+    $request.ReadWriteTimeout = 300000
+    $request.UserAgent = 'Eirene-installer'
+    $response = $request.GetResponse()
+    if ($response.ResponseUri.Scheme -ne 'https') {
+        $response.Close()
+        throw 'Release download redirected away from HTTPS.'
+    }
+    return [pscustomobject]@{ Stream = $response.GetResponseStream(); Length = $response.ContentLength; Response = $response }
+}
+
+function Get-ReleaseFile([string]$Uri, [string]$Destination, [switch]$ShowProgress) {
     for ($attempt = 1; $attempt -le 4; $attempt++) {
+        $download = $null
+        $output = $null
         try {
-            Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $Destination -TimeoutSec 300
+            if (-not $ShowProgress) {
+                Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $Destination -TimeoutSec 300
+            } else {
+                $download = Open-ReleaseDownload $Uri
+                $output = [IO.File]::Create($Destination)
+                $buffer = New-Object byte[] 65536
+                $received = [long]0
+                $timer = [Diagnostics.Stopwatch]::StartNew()
+                $lastUpdate = -1.0
+                while (($count = $download.Stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                    $output.Write($buffer, 0, $count)
+                    $received += $count
+                    $elapsed = $timer.Elapsed.TotalSeconds
+                    if ($elapsed -gt 300) { throw 'Download exceeded five minutes.' }
+                    if ($elapsed - $lastUpdate -lt 0.12) { continue }
+                    $lastUpdate = $elapsed
+                    $speed = $received / [Math]::Max($elapsed, 0.001)
+                    if ($download.Length -gt 0) {
+                        $percent = [Math]::Min(100, [int](100 * $received / $download.Length))
+                        $filled = [int]($percent / 5)
+                        $bar = '[' + ('=' * $filled) + (' ' * (20 - $filled)) + ']'
+                        $status = '{0} {1}% | {2:N1} / {3:N1} MiB | {4:N1} MiB/s' -f $bar, $percent, ($received / 1MB), ($download.Length / 1MB), ($speed / 1MB)
+                        $eta = [int][Math]::Min(2147483647, [Math]::Max(0, ($download.Length - $received) / $speed))
+                        Write-Progress -Id 1 -Activity 'Downloading Eirene' -Status $status -PercentComplete $percent -SecondsRemaining $eta
+                    } else {
+                        Write-Progress -Id 1 -Activity 'Downloading Eirene' -Status ('{0:N1} MiB | {1:N1} MiB/s' -f ($received / 1MB), ($speed / 1MB))
+                    }
+                }
+                if ($received -eq 0) { throw 'Downloaded archive is empty.' }
+                if ($download.Length -ge 0 -and $received -ne $download.Length) { throw 'Archive download was incomplete.' }
+                Write-OK ('Downloaded {0:N1} MiB' -f ($received / 1MB))
+            }
             return
         } catch {
             if ($attempt -eq 4) { throw "Could not download $Uri after 4 attempts. Check your connection and release availability. $($_.Exception.Message)" }
-            Write-Host "  Download interrupted; retrying ($attempt/3)..."
+            Write-Host "Download interrupted; retrying ($attempt/3)..."
             Start-Sleep -Seconds ([Math]::Pow(2, $attempt))
+        } finally {
+            if ($output) { $output.Dispose() }
+            if ($download) {
+                $download.Stream.Dispose()
+                if ($download.Response) { $download.Response.Close() }
+            }
+            if ($ShowProgress) { Write-Progress -Id 1 -Activity 'Downloading Eirene' -Completed }
         }
     }
 }
+Write-OK "$target / $InstallDir"
+Write-Step 2 'Find the release'
 
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('eirene-install-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $temporary | Out-Null
@@ -81,11 +174,14 @@ $temporary = Join-Path ([IO.Path]::GetTempPath()) ('eirene-install-' + [guid]::N
     $base = "https://github.com/$repo/releases/download/$Version"
     $archive = Join-Path $temporary $asset
     $checksums = Join-Path $temporary 'SHA256SUMS'
-    Write-Host "Downloading Eirene $Version for $target..."
+    Write-OK "Release $Version"
+    Write-Step 3 'Download'
+    Show-Eirene
+    Write-Host "Eirene $Version for $target"
     $phase = 'downloading the release and checksums'
-    Get-ReleaseFile "$base/$asset" $archive
+    Get-ReleaseFile "$base/$asset" $archive -ShowProgress
     Get-ReleaseFile "$base/SHA256SUMS" $checksums
-    Write-Host 'Verifying download...'
+    Write-Step 4 'Verify and unpack'
     $phase = 'verifying the downloaded archive'
     $pattern = '^([0-9a-fA-F]{64})  ' + [regex]::Escape($asset) + '$'
     $hashes = @(foreach ($line in (Get-Content -LiteralPath $checksums)) {
@@ -95,6 +191,7 @@ $temporary = Join-Path ([IO.Path]::GetTempPath()) ('eirene-install-' + [guid]::N
     if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $hashes[0]) {
         throw 'Checksum mismatch; existing installation was not changed.'
     }
+    Write-OK 'SHA-256 checksum matches'
     $phase = 'extracting the release archive'
     if ($onWindows) {
         Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $temporary 'unpacked')
@@ -108,6 +205,8 @@ $temporary = Join-Path ([IO.Path]::GetTempPath()) ('eirene-install-' + [guid]::N
     if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
         throw 'Archive must contain a regular executable.'
     }
+    Write-OK 'Executable extracted'
+    Write-Step 5 'Install the executable'
     $phase = "preparing $InstallDir; check directory permissions and free disk space"
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     $InstallDir = (Resolve-Path -LiteralPath $InstallDir).Path
@@ -121,6 +220,9 @@ $temporary = Join-Path ([IO.Path]::GetTempPath()) ('eirene-install-' + [guid]::N
     $phase = 'checking the executable; check OS compatibility and execution permissions'
     $binaryVersion = & $staged --version 2>&1
     if ($LASTEXITCODE -ne 0) { throw 'Downloaded binary could not run; existing installation was not changed.' }
+    $binaryHelp = & $staged --help 2>&1
+    if ($LASTEXITCODE -ne 0 -or -not $binaryVersion -or -not $binaryHelp) { throw 'Downloaded binary failed version/help checks; existing installation was not changed.' }
+    Write-OK 'Staged executable responds to --version and --help'
     if (Test-Path -LiteralPath $destination -PathType Container) { throw "$destination is a directory." }
     $phase = "replacing $destination; close any running Eirene window and retry if the executable is locked"
     if (Test-Path -LiteralPath $destination) {
@@ -130,6 +232,8 @@ $temporary = Join-Path ([IO.Path]::GetTempPath()) ('eirene-install-' + [guid]::N
     }
     $staged = $null
     $installed = $true
+    Write-OK "Installed $destination"
+    Write-Step 6 'Configure installed shells'
     $pathReady = $false
     if (-not $NoPathUpdate -and $env:EIRENE_NO_PATH -ne '1') {
         Write-Host 'Configuring PATH...'
@@ -144,7 +248,7 @@ $temporary = Join-Path ([IO.Path]::GetTempPath()) ('eirene-install-' + [guid]::N
                 if ($newPath -cne $userPath) {
                     [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
                 }
-                Write-Host '  Saved to your user PATH (no administrator access needed).'
+                Write-Host 'Saved to your user PATH (no administrator access needed).'
             } else {
                 # A PowerShell install persists in PowerShell's own startup file.
                 $profileFile = $PROFILE.CurrentUserAllHosts
@@ -156,11 +260,34 @@ $temporary = Join-Path ([IO.Path]::GetTempPath()) ('eirene-install-' + [guid]::N
                     if (Test-Path -LiteralPath $profileFile) {
                         $backup = $profileFile + '.eirene-backup.' + [guid]::NewGuid().ToString('N')
                         Copy-Item -LiteralPath $profileFile -Destination $backup
-                        Write-Host "  Profile backup: $backup"
+                        Write-Host "Profile backup: $backup"
                     }
                     [IO.File]::AppendAllText($profileFile, "`n# Eirene`n$pathLine`n", [Text.UTF8Encoding]::new($false))
                 }
-                Write-Host "  PATH configured in $profileFile"
+                Write-Host "PATH configured in $profileFile"
+                if (Get-Command bash -ErrorAction SilentlyContinue) {
+                    $phase = 'configuring installed Unix shells'
+                    $shellInstaller = Join-Path $temporary 'install.sh'
+                    Get-ReleaseFile "$base/install.sh" $shellInstaller
+                    $installerPattern = '^([0-9a-fA-F]{64})  install\.sh$'
+                    $installerHashes = @(foreach ($line in (Get-Content -LiteralPath $checksums)) {
+                        if ($line -match $installerPattern) { $Matches[1] }
+                    })
+                    if ($installerHashes.Count -ne 1 -or (Get-FileHash -LiteralPath $shellInstaller -Algorithm SHA256).Hash -ne $installerHashes[0]) {
+                        throw 'Shell installer checksum mismatch.'
+                    }
+                    if (-not ([IO.File]::ReadAllText($shellInstaller).Contains('--configure-shells'))) {
+                        throw 'This release predates automatic Unix shell setup. Use install.sh directly or configure other shells manually.'
+                    }
+                    $savedInstallDir = $env:EIRENE_INSTALL_DIR
+                    try {
+                        $env:EIRENE_INSTALL_DIR = $InstallDir
+                        & bash $shellInstaller --configure-shells
+                        if ($LASTEXITCODE -ne 0) { throw 'Unix shell configuration failed.' }
+                    } finally { $env:EIRENE_INSTALL_DIR = $savedInstallDir }
+                } else {
+                    throw 'Bash is unavailable; Unix shell profiles could not be configured. PowerShell PATH is saved.'
+                }
             }
             $pathReady = $true
         } catch {
@@ -173,9 +300,23 @@ $temporary = Join-Path ([IO.Path]::GetTempPath()) ('eirene-install-' + [guid]::N
     } else {
         Write-Host 'PATH setup skipped.'
     }
-    Write-Host "`nEirene $Version installed`n  $destination`n"
+    Write-Step 7 'Check the installed command'
+    $phase = 'verifying the installed command'
+    if (-not $NoPathUpdate -and $env:EIRENE_NO_PATH -ne '1') {
+        $resolvedCommand = @(Get-Command eirene -CommandType Application -ErrorAction Stop)[0]
+        if ($resolvedCommand.Source -ne $destination) { throw "PATH resolves to another Eirene: $($resolvedCommand.Source)" }
+        $installedVersion = & $resolvedCommand.Source --version 2>&1
+        if ($LASTEXITCODE -ne 0 -or -not $installedVersion) { throw 'Eirene could not run through PATH.' }
+        $installedVersion | Out-Host
+        Write-OK 'eirene resolves on PATH and runs'
+    } else {
+        $installedVersion = & $destination --version 2>&1
+        if ($LASTEXITCODE -ne 0 -or -not $installedVersion) { throw 'Installed executable failed --version.' }
+        Write-OK 'Installed command runs'
+    }
+    Write-Host "`nEirene $Version installed`n$destination`n"
     $launch = "& '" + $destination.Replace("'", "''") + "'"
-    Write-Host "Start now:`n  $launch`n"
+    Write-Host "Start now:`n$launch`n"
     if ($pathReady) {
         Write-Host 'Run eirene in this PowerShell window, or open a new terminal and run: eirene'
         if ($onWindows) { Write-Host 'If an existing terminal app has an old PATH, close all its windows and reopen it.' }

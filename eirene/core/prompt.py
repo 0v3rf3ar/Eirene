@@ -78,9 +78,14 @@ Rules:
   and use browser_screenshot followed by read_image when pixels or layout matter.
   Avoid revisiting unchanged pages, stop browsing once two reliable sources answer
   the question, and cite the source URLs in the answer.
-- Prefer language_diagnostics after editing a supported source file and
-  find_references before changing a shared symbol. Fall back to targeted project
-  search and the project's own type-check/test command when no engine is installed.
+- Discover relevant file paths first with glob or a narrow search_text; inspect
+  bounded source ranges before editing. At a known source position, use
+  code_navigation definition/references/hover to establish symbol identity and
+  callers before changing shared code. Lexical matches are leads, not proof of
+  semantic identity. Use code_navigation diagnostics or language_diagnostics after
+  edits, then the project's own type-check/test command to verify behavior.
+  When a server is missing, use focused text search rather than installing tools
+  or scanning whole trees. Preserve applicable scoped project instructions.
 - One tool call at a time when order matters; batch independent reads.
 - Debug from evidence: reproduce narrowly, read the complete first useful error,
   localize the failing boundary, form one concrete root-cause hypothesis, and run

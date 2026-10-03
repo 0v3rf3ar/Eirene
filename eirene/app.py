@@ -188,6 +188,18 @@ class Eirene(App):
         self._flusher = self.set_interval(1 / 20, self._flush_live)
         self.name_the_tab()
         self.prompt.focus()
+        if self.config.get("check_updates", True) and not os.environ.get("EIRENE_NO_UPDATE_CHECK"):
+            self.run_worker(self._check_updates(), group="update-check", exclusive=True)
+
+    async def _check_updates(self) -> None:
+        """Startup networking never delays mounting or interrupts provider setup."""
+        from .core import updates
+        try:
+            release = await updates.check()
+            if release:
+                self.say(f"Eirene {release.version} is available (current: {__version__}). Run /update to install it.")
+        except (updates.UpdateError, OSError, TimeoutError) as exc:
+            self.runtime_logger.debug("update.check_failed", extra={"reason": str(exc)})
 
     def watch_theme(self, theme_name: str) -> None:
         """Re-colour every section that follows the theme's accents."""

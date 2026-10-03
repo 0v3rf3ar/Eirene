@@ -16,7 +16,7 @@ COMPACT_TOOLS = {
 }
 BALANCED_TOOLS = COMPACT_TOOLS | {
     "read_image", "git_status", "git_diff", "project_info",
-    "language_diagnostics", "find_symbol", "find_references",
+    "language_diagnostics", "code_navigation", "find_symbol", "find_references",
 }
 
 

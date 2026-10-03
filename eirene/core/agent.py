@@ -815,7 +815,7 @@ class Agent:
             escape = escape or "this tool requires network access outside command isolation"
         native_windows = (platform.system() == "Windows" and
                           self.config.get("execution_isolation", "auto") == "auto" and
-                          (call.name in {"run_command", "start_process", "language_diagnostics"} or call.name.startswith("git_")))
+                          (call.name in {"run_command", "start_process", "language_diagnostics", "code_navigation"} or call.name.startswith("git_")))
         if native_windows:
             escape = "Windows native execution has no kernel filesystem or network isolation; approve this command with your user account's access"
         verdict, reason = decide(self.mode, kind, escape)
@@ -1002,6 +1002,8 @@ class Agent:
 
         if name in {"web_search", "web_fetch"}:
             kwargs["search_service"] = self.search_service
+        if name == "code_navigation":
+            kwargs["language_servers"] = self.config.get("language_servers", {})
         task = asyncio.create_task(tools.execute(name, arguments, sandbox, on_output=feed, **kwargs))
         try:
             while not task.done() or not queue.empty():

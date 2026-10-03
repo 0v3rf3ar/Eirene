@@ -14,11 +14,17 @@ Issues involving unapproved file access, command execution, or credential exposu
 are in scope. Problems in third-party model providers or external command-line tools
 should be reported to those projects.
 
-Eirene's command runtime uses kernel isolation through Bubblewrap on Linux.
-It fails closed when Bubblewrap or user namespaces are unavailable. The workspace is writable; other host paths are mounted
-only through explicit grants. Commands receive a private temporary directory and
-home, and network access is disabled unless approved. Containers share the host
-kernel; this is not virtual-machine isolation.
+Eirene's native command runtime uses Bubblewrap on Linux and sandbox-exec
+(Seatbelt) on macOS. It fails closed when the required backend is unavailable;
+Linux also requires working user namespaces. The workspace is writable, and
+additional paths need explicit grants. Network access is disabled unless approved.
+Linux commands receive a private temporary directory and home. macOS commands use
+a private scratch directory and an allowlist of runtime paths. Both backends use
+the host kernel; neither provides virtual-machine isolation.
+
+Windows has no native kernel isolation backend. Each native command requires
+explicit approval and runs with the user's account permissions. Plan mode blocks
+native commands, and headless commands that require approval fail closed.
 
 Built-in file tools enforce resolved-path containment in the application, not an
 OS sandbox. Browser/HTTP tools run in the application and request network approval.
@@ -27,5 +33,5 @@ Codex and Claude Code subscription providers own their execution environments;
 Eirene forwards approvals and requests their native sandbox controls.
 
 User configuration cannot select an unisolated runtime or a container backend.
-Legacy backend settings are normalized to automatic Bubblewrap isolation.
+Legacy backend settings are normalized to automatic platform isolation.
 See [execution and recovery](docs/harness.md) for the full trust model.

@@ -25,6 +25,7 @@ def eirene_home(tmp_path, monkeypatch):
     # the developer's terminal preference silently disable those colours.
     monkeypatch.delenv("NO_COLOR", raising=False)
     monkeypatch.setenv(paths.ENV_HOME, str(home))
+    monkeypatch.setenv("EIRENE_NO_UPDATE_CHECK", "1")
     paths.ensure_tree()
     return home
 

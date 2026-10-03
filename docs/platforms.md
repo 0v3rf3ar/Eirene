@@ -12,34 +12,61 @@ PowerShell is launched without profiles, noninteractively, with UTF-8 output and
 
 ## Installer behavior
 
-The Bash installer uses `~/.local/bin` on Linux and macOS. It detects the login
-shell from `SHELL` and configures:
+The installers show numbered steps, an embedded terminal rendering of the Eirene
+picture, and live archive-download progress. Redirected output stays plain; set
+`NO_COLOR=1` to disable colors. Small terminals omit the portrait.
 
-- Bash: `.bashrc` and the first existing `.bash_profile`, `.bash_login`, or
-  `.profile`. With no existing login profile, it creates `.bash_profile` on
-  macOS or `.profile` on Linux.
-- Zsh: `.zshrc` and `.zprofile`, respecting `ZDOTDIR`.
-- Fish: `fish/conf.d/eirene.fish`, respecting `XDG_CONFIG_HOME`.
-- Sh, Dash, and Ksh: `.profile`.
+The Bash installer uses `~/.local/bin` on Linux and macOS. It detects supported
+shells through PATH, the login shell (`SHELL`), and executable entries in
+`/etc/shells`, then saves PATH for each detected shell:
 
-Unrecognized shells receive manual setup guidance. Startup files are backed up
-before modification; repeating installation does not add duplicate entries.
-The printed full-path command works immediately, without restarting a shell.
+| Shell | User configuration |
+| --- | --- |
+| Sh, Dash | `.profile` |
+| Bash | `.bashrc`, plus the first existing `.bash_profile` or `.bash_login`; otherwise `.profile`, with a new `.bash_profile` on macOS |
+| Zsh | `.zshrc` and `.zprofile`, respecting `ZDOTDIR` |
+| Fish | `fish/conf.d/eirene.fish`, respecting `XDG_CONFIG_HOME` |
+| Ksh | `.profile` and `.kshrc` |
+| Csh, Tcsh | `.cshrc`, `.tcshrc` respectively |
+| PowerShell | `powershell/profile.ps1` under the user configuration directory |
+| Nushell | `nushell/env.nu` under the user configuration directory |
 
-Windows uses `%LOCALAPPDATA%\Programs\eirene` and persistent user PATH,
-without administrator access. PowerShell also updates the current process PATH.
-When run on Linux or macOS, the PowerShell installer updates PowerShell's
-`CurrentUserAllHosts` profile; use `install.sh` for Bash, Zsh, or Fish setup.
+`.profile` is always configured as the POSIX login fallback. Existing profiles
+are backed up before modification; repeating installation does not add duplicate
+PATH lines. Custom shell wrappers and custom startup-file locations may need
+manual configuration.
+
+The installer sources `.bashrc` in an interactive child Bash and checks that
+`eirene` resolves to the installed executable from the original PATH. This check
+has a two-second deadline on Linux and macOS; a slow or failing profile produces
+a warning and a full-path launch command. The watchdog stops the verification
+shell and its child processes so profile startup cannot stall installation.
+A child process cannot update the terminal that launched it: run the printed
+`source` command to refresh that terminal, or open a new one.
+
+On Windows, the PowerShell installer uses `%LOCALAPPDATA%\Programs\eirene` and
+updates the persistent user PATH without administrator access. That user PATH
+applies to newly launched shells, including CMD and PowerShell. It also refreshes
+the current PowerShell process. Close and reopen terminal apps that still have an
+old PATH. Third-party shells that replace PATH may need their own configuration.
+
+On Linux and macOS, the PowerShell installer updates its `CurrentUserAllHosts`
+profile and runs the matching release's checksum-verified Bash installer in
+shell-configuration mode to configure other installed shells.
 
 Both installers support `EIRENE_INSTALL_DIR`, `EIRENE_VERSION`, and
-`EIRENE_NO_PATH=1`. They verify the release checksum and run the staged binary
-before replacing the installed executable. Errors identify the failed phase;
-PATH failures leave a working executable and print recovery instructions.
-Close running Eirene processes before updating on Windows.
+`EIRENE_NO_PATH=1`. The Bash installer downloads only the archive after resolving
+the release; it does not fetch or verify release checksums. The PowerShell
+installer retains checksum verification. Both check `--version` and `--help`
+before replacement, then run `--version` once through PATH (or by full path when
+PATH setup is disabled). They avoid repeating expensive binary startup checks.
+With PATH setup enabled, they also verify command discovery. Errors
+identify the failed phase; PATH failures leave a working executable and print
+recovery instructions. Close running Eirene processes before updating on Windows.
 
 ## Build on the target machine
 
-Use Python 3.10+ and Git for tests. From the repository root:
+Use Python 3.11+ and Git for tests. From the repository root:
 
 - Linux/macOS: `python3 build.py`
 - Windows CMD or PowerShell: `py -3 build.py` (or `python build.py`)

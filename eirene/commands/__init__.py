@@ -41,7 +41,7 @@ def lookup(name: str, app=None) -> Command | None:
 def _load() -> None:
     from . import (agents, btw, clear, compact, connect, exit as exit_cmd, git, plan, plugins,
                    help as help_cmd, keybindings, model, notification, schedule, sessions, skills,
-                   review, sandbox, search_api, prompt_suggest, tasks, theme, think, usage)  # noqa: F401
+                   review, sandbox, search_api, prompt_suggest, tasks, theme, think, update, usage)  # noqa: F401
 
 
 async def dispatch(app, text: str) -> None:
@@ -54,6 +54,8 @@ async def dispatch(app, text: str) -> None:
     parts = body.split(maxsplit=1)
     name, args = parts[0], parts[1] if len(parts) > 1 else ""
     name = name.lower()
+    if name == "udpate":
+        name = "update"
     available = {**{command.name: command for command in commands(app)}, **REGISTRY}
     command = available.get(name)
     if command is None:

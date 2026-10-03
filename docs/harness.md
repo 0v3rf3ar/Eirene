@@ -5,21 +5,36 @@ host access; it does not create a disposable copy or undo external side effects.
 
 ## Kernel sandbox
 
-Run `/sandbox` to inspect status. Commands automatically use Bubblewrap on Linux;
-there are no Docker, Podman, image, or backend-selection options. Bubblewrap
-(`bwrap`) must be installed and the system must permit user namespaces. Missing
-support causes execution to fail closed, never to fall back to unprotected host
-execution. Other operating systems currently cannot run native sandboxed commands.
+Run `/sandbox` to inspect status. Native command execution follows the host:
 
-The sandbox uses your installed system tools, mounts system executables and
-selected runtime configuration read-only, keeps the project writable, and provides
-private temporary storage, process/device views, and HOME. Tools installed outside
-system directories need an explicit read mount. Desktop sockets and inherited API
-credentials are not exposed. This shares the host kernel, not a virtual machine.
+| Host | Execution policy | Requirements |
+| --- | --- | --- |
+| Linux | Bubblewrap isolation; no unprotected fallback | `bwrap` and working user namespaces |
+| macOS | sandbox-exec (Seatbelt) isolation; no unprotected fallback | `sandbox-exec` |
+| Windows | Explicit approval for every native command; no kernel isolation | Interactive approval; plan mode blocks native commands |
 
-Old backend settings are normalized to automatic Bubblewrap isolation when loaded;
-obsolete image settings are discarded. Network access is disabled by default.
-An approved network grant enables host networking, not a per-domain firewall.
+On Linux, the runtime mounts system executables and selected runtime configuration
+read-only, keeps the project writable, and provides private temporary storage,
+process/device views, and HOME. Tools installed outside system directories need
+an explicit read mount. Desktop sockets and inherited API credentials are not
+exposed.
+
+On macOS, a deny-by-default Seatbelt profile permits the project, approved paths,
+system runtime directories, and a private scratch directory used for HOME and
+TMPDIR. Homebrew's `/opt/homebrew` directory is readable when present. Seatbelt
+restricts access to host paths rather than creating Linux-style mount namespaces.
+Both backends share the host kernel, not a virtual machine.
+
+Windows commands run with the user's account permissions after approval. Portable
+file/search/edit tools retain their application-level path checks. Native commands
+cannot enforce read-only plan mode and are blocked there. Headless Windows runs
+fail closed when a command needs approval. See [platform support](platforms.md)
+for external CLI behavior and WSL2 guidance.
+
+Old backend settings are normalized to automatic platform isolation when loaded;
+obsolete image settings are discarded. Network access is disabled by default in
+the Linux and macOS backends. An approved network grant permits networking, not
+a per-domain firewall. Windows native commands have no network isolation.
 
 ## External paths and network access
 
@@ -31,13 +46,13 @@ their host absolute names inside the sandbox, so tool arguments need no remappin
 
 File tools and unified patches also support approved external paths, including
 `~` paths. Those tools enforce resolved-path checks inside Eirene; they are not
-executed inside a container. Do not use them against a hostile process actively
+executed inside the native command sandbox. Do not use them against a hostile process actively
 racing symlink changes. Review edits to sensitive configuration even when the
 target path was approved.
 
 `network_access: true` requests command networking separately from file access.
 Browser, web-search and HTTP tools request approval when network isolation is on;
-they run in the application, outside the command container. Approval does not
+they run in the application, outside the native command sandbox. Approval does not
 make arbitrary websites or responses trusted instructions.
 
 MCP servers configured in Eirene run in the selected command environment and do not

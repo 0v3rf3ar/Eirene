@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..core.errors import SandboxError, ToolError
-from . import browser, files, language, shell, processes, patches
+from . import browser, files, language, lsp, shell, processes, patches
 from ..core import git as git_ops
 from ..core import project as project_ops
 from ..core import skills as skill_ops
@@ -210,6 +210,16 @@ TOOLS: list[Tool] = [
                  "path": {"type": "string", "description": "File or directory; default '.'."},
                  "limit": {"type": "integer", "description": "Maximum matches, up to 500."},
              }, "required": ["symbol"],
+         }),
+    Tool("code_navigation", READ,
+         "Query an installed language server for definitions, semantic references, hover, or diagnostics. Use source positions; missing servers use explicitly labeled lexical/compiler fallbacks.", {
+             "type": "object", "properties": {
+                 "path": {"type": "string", "description": "Source file, at most 1 MB."},
+                 "action": {"type": "string", "description": "definition, references, hover, or diagnostics"},
+                 "line": {"type": "integer", "description": "1-based source line."},
+                 "column": {"type": "integer", "description": "1-based Unicode character column."},
+                 "limit": {"type": "integer"}, "timeout": {"type": "integer"},
+             }, "required": ["path", "action"],
          }),
     Tool("language_diagnostics", READ,
          "Run the installed parser/compiler's fast syntax diagnostics for one source file.", {
@@ -416,19 +426,20 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
                   on_output: Callable[[str], None] | None = None,
                   isolation: str = "none", isolate_network: bool = False,
                   plan_scope: str | None = None, read_only: bool = False,
-                  search_service=None) -> str:
+                  search_service=None, language_servers=None) -> str:
     with git_ops.execution_policy(backend=isolation, network=not isolate_network,
                                   read_only=read_only):
         return await _execute(name, args, box, timeout=timeout, max_bytes=max_bytes,
                               on_output=on_output, isolation=isolation,
                               isolate_network=isolate_network, plan_scope=plan_scope,
-                              read_only=read_only, search_service=search_service)
+                              read_only=read_only, search_service=search_service,
+                              language_servers=language_servers)
 
 
 async def _execute(name: str, args: dict[str, Any], box: Sandbox, *,
                   timeout=None, max_bytes=200_000, on_output=None, isolation="none",
                   isolate_network=False, plan_scope=None, read_only=False,
-                  search_service=None) -> str:
+                  search_service=None, language_servers=None) -> str:
     """Run a tool call and return its text result."""
     if name not in BY_NAME:
         raise ToolError(f"unknown tool '{name}'")
@@ -494,6 +505,12 @@ async def _execute(name: str, args: dict[str, Any], box: Sandbox, *,
         return language.references(box, _text(args, "symbol"),
                                    str(args.get("path") or "."),
                                    int(_number(args.get("limit"), 100) or 100))
+    if name == "code_navigation":
+        return await lsp.query(box, _text(args, "path"), _text(args, "action"),
+                               line=int(args.get("line", 1)), column=int(args.get("column", 1)),
+                               limit=int(args.get("limit", 100)), timeout=float(args.get("timeout", 30)),
+                               definitions=language_servers, isolation=isolation,
+                               isolate_network=isolate_network, read_only=read_only)
     if name == "language_diagnostics":
         return await language.diagnostics(
             box, _text(args, "path"),
