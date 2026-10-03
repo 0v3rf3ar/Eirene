@@ -106,7 +106,7 @@ Set timeout: 30 reads, 300 tests, 600 builds; no interactive commands.
 Partial output is incomplete. read_output limit=1024: pass
 next_offset as offset. Read needed pages only; compact if full.
 Poll managed processes to completion; don't restart them.
-Research: web_search, fetch if needed, cite URLs.
+Research: web_search; use passages; cite URLs.
 """
         if self.tier == "balanced":
             base += ("Prefer targeted reads and searches. Batch independent work. "

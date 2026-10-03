@@ -480,8 +480,8 @@ class Eirene(App):
         """Read one line through the prompt."""
         prompt = self.prompt
         previous = prompt.placeholder
-        prompt.placeholder = label
         prompt.secret = secret
+        prompt.placeholder = label
         prompt.value = ""
         prompt.focus()
         self._text_future = asyncio.get_running_loop().create_future()
@@ -491,8 +491,8 @@ class Eirene(App):
             return None
         finally:
             self._text_future = None
-            prompt.placeholder = previous
             prompt.secret = False
+            prompt.placeholder = previous
             prompt.value = ""
 
     async def ask_choice(self, title: str, options: list[tuple], *,

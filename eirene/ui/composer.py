@@ -204,7 +204,7 @@ class Prompt(TextArea):
     def get_line(self, line_index: int):
         """Mask the text while a secret is wanted."""
         line = super().get_line(line_index)
-        if not self._secret:
+        if not self._secret or not self.text:
             return line
         return Text(MASK * len(line.plain), end="", no_wrap=True)
 
@@ -227,7 +227,8 @@ class Prompt(TextArea):
     def remember(self, text: str) -> None:
         """Add a submitted, non-secret entry to up/down history."""
         text = text.strip()
-        if text and not self._secret:
+        sensitive_command = text.lower().startswith("/search-api ")
+        if text and not self._secret and not sensitive_command:
             self.recent.append(text)
         self._position = len(self.recent)
         self._pending = ""

@@ -41,7 +41,7 @@ def lookup(name: str, app=None) -> Command | None:
 def _load() -> None:
     from . import (agents, btw, clear, compact, connect, exit as exit_cmd, git, plan, plugins,
                    help as help_cmd, keybindings, model, notification, schedule, sessions, skills,
-                   review, sandbox, prompt_suggest, tasks, theme, think, usage)  # noqa: F401
+                   review, sandbox, search_api, prompt_suggest, tasks, theme, think, usage)  # noqa: F401
 
 
 async def dispatch(app, text: str) -> None:

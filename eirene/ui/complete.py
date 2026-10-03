@@ -80,6 +80,8 @@ class SlashMenu(Static):
         self.display = False
 
     def _draw(self) -> None:
+        if not self.matches:
+            return  # A scheduled redraw may run after command submission closed the menu.
         body = Text()
         start = max(0, min(self.index - WINDOW // 2, len(self.matches) - WINDOW))
         width = max(len(name) for name, _ in self.matches)

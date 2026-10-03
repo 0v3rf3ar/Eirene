@@ -17,7 +17,7 @@ from eirene.ui.chat import Block, NoticeBlock
 
 EXPECTED = {"help", "connect", "model", "schedule", "tasks", "exit", "usage", "git", "plan", "plugins", "sessions",
             "skills", "compact", "agents", "btw", "clear", "notification", "theme",
-            "review", "sandbox", "prompt-suggest", "keybindings"}
+            "review", "sandbox", "prompt-suggest", "keybindings", "search-api"}
 
 
 class Script:
@@ -84,6 +84,36 @@ def test_think_is_only_listed_for_local_ollama(workdir):
 def test_every_command_documents_itself():
     for command in commands():
         assert command.summary and command.usage.startswith("/")
+
+
+async def test_search_api_secret_prompt_does_not_record_key(workdir, monkeypatch):
+    from eirene.tools import search
+    from unittest.mock import AsyncMock
+
+    app, pilot, context = await start(workdir)
+    key = "tvly-secret-test-key"
+    monkeypatch.setattr(search, "check_key", AsyncMock(return_value="key verified"))
+    app.ask_choice = AsyncMock(return_value="tavily")
+    task = asyncio.create_task(dispatch(app, "/search-api"))
+    try:
+        await settle(pilot)
+        assert app.prompt.secret
+        assert app.prompt.placeholder == "Enter your API key"
+        app.prompt.value = key
+        assert key not in app.prompt.get_line(0).plain
+        await pilot.press("enter")
+        await task
+        await settle(pilot)
+        assert app.config.search_api_key() == key
+        assert key not in app.prompt.recent
+        assert key not in "\n".join(texts(app))
+        assert key not in json.dumps(app.session.messages)
+        assert not app.prompt.secret
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await context.__aexit__(None, None, None)
 
 
 async def test_help_lists_every_command(workdir):

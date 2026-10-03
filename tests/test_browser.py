@@ -110,6 +110,22 @@ def test_search_results_are_compact_and_decode_redirects():
                                "snippet": "A useful result."}]
 
 
+@pytest.mark.parametrize("status, body, message", [
+    (202, '<div class="anomaly-modal">Select ducks</div>', "CAPTCHA"),
+    (200, '<form action="//duckduckgo.com/anomaly.js"></form>', "CAPTCHA"),
+    (200, '<html>Unexpected response</html>', "unexpected page"),
+])
+async def test_search_reports_challenges_and_unexpected_pages(monkeypatch, status, body, message):
+    import httpx
+
+    async def download(client, method, url, **kwargs):
+        return httpx.Response(status, text=body, request=httpx.Request(method, url))
+
+    monkeypatch.setattr(browser, "_download", download)
+    with pytest.raises(ToolError, match=message):
+        await browser.search("example query")
+
+
 def test_web_fetch_rejects_local_network_targets():
     for url in ("http://localhost:8000", "http://127.0.0.1", "http://169.254.169.254"):
         with pytest.raises(ToolError, match="local network|private or local"):

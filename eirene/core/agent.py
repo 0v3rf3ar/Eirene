@@ -150,6 +150,8 @@ class Agent:
         self.session = session
         self.config = config
         self.sandbox = sandbox
+        from ..tools.search import SearchService
+        self.search_service = SearchService(config)
         from .platforms import Host
         self.host = Host.detect()
         self.mode = Mode(config.mode) if config.mode in Mode._value2member_map_ else Mode.MANUAL
@@ -998,6 +1000,8 @@ class Agent:
             except asyncio.QueueFull:
                 pass  # The complete bounded artifact remains available.
 
+        if name in {"web_search", "web_fetch"}:
+            kwargs["search_service"] = self.search_service
         task = asyncio.create_task(tools.execute(name, arguments, sandbox, on_output=feed, **kwargs))
         try:
             while not task.done() or not queue.empty():

@@ -49,6 +49,10 @@ Run `eirene` in your project folder, then `/connect` to choose a provider.
 Codex and Claude Code need their own CLI installed and signed in.
 Use `/help` or F1 for commands, and `/keybindings` for shortcuts.
 
+Use `/search-api` to choose Tavily and enter a key in the hidden prompt. Normal
+web search stays first; Tavily is used only when it fails and a key is configured.
+Run `/search-api` again to replace or remove the saved key.
+
 ## Skills and plugins
 
 Install portable plugins from GitHub (requires Git):

@@ -244,7 +244,9 @@ TOOLS: list[Tool] = [
          }),
     Tool("web_search", READ,
          "Search the web and return a small set of titles, URLs, and snippets. Use "
-         "for current or unfamiliar facts; make one precise query.", {
+         "for current or unfamiliar facts; make one precise query. May include selected "
+         "page passages: use them before fetching again, cite URLs, and do not repeat "
+         "a failed search immediately.", {
              "type": "object", "properties": {
                  "query": {"type": "string"},
                  "limit": {"type": "integer", "description": "Results, 1-8; default 5."},
@@ -413,18 +415,20 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
                   timeout: float | None = None, max_bytes: int = 200_000,
                   on_output: Callable[[str], None] | None = None,
                   isolation: str = "none", isolate_network: bool = False,
-                  plan_scope: str | None = None, read_only: bool = False) -> str:
+                  plan_scope: str | None = None, read_only: bool = False,
+                  search_service=None) -> str:
     with git_ops.execution_policy(backend=isolation, network=not isolate_network,
                                   read_only=read_only):
         return await _execute(name, args, box, timeout=timeout, max_bytes=max_bytes,
                               on_output=on_output, isolation=isolation,
                               isolate_network=isolate_network, plan_scope=plan_scope,
-                              read_only=read_only)
+                              read_only=read_only, search_service=search_service)
 
 
 async def _execute(name: str, args: dict[str, Any], box: Sandbox, *,
                   timeout=None, max_bytes=200_000, on_output=None, isolation="none",
-                  isolate_network=False, plan_scope=None, read_only=False) -> str:
+                  isolate_network=False, plan_scope=None, read_only=False,
+                  search_service=None) -> str:
     """Run a tool call and return its text result."""
     if name not in BY_NAME:
         raise ToolError(f"unknown tool '{name}'")
@@ -513,12 +517,14 @@ async def _execute(name: str, args: dict[str, Any], box: Sandbox, *,
     if name == "web_search":
         if isolate_network:
             raise ToolError("web search is disabled by isolate_network")
-        return await browser.search(
+        search = search_service.search if search_service is not None else browser.search
+        return await search(
             _text(args, "query"), limit=int(_number(args.get("limit"), 5) or 5))
     if name == "web_fetch":
         if isolate_network:
             raise ToolError("web access is disabled by isolate_network")
-        return await browser.fetch_text(
+        fetch = search_service.fetch if search_service is not None else browser.fetch_text
+        return await fetch(
             _text(args, "url"),
             timeout=float(_number(args.get("timeout"), 20) or 20))
     if name == "browser_screenshot":

@@ -352,7 +352,15 @@ async def search(query: str, *, limit: int = 5, timeout: float = 15) -> str:
     parser.feed(response.text)
     results = parser.results[:limit]
     if not results:
-        raise ToolError("web search returned no readable results")
+        page = response.text.lower()
+        if "anomaly-modal" in page or "duckduckgo.com/anomaly.js" in page:
+            raise ToolError(
+                "DuckDuckGo blocked automated search with a CAPTCHA on this network. "
+                "Retrying the query may return the same challenge; use a browser "
+                "to search manually or configure an alternative search tool.")
+        if re.search(r"no results found for\s*(?:<|&|\w)", page):
+            return f"No results found for: {wanted}. Refine the query rather than repeating it."
+        raise ToolError("DuckDuckGo returned an unexpected page without readable search results")
     lines = [f"Search results for: {wanted}"]
     for index, item in enumerate(results, 1):
         lines.extend((f"{index}. {item['title']}", item["url"], item["snippet"]))

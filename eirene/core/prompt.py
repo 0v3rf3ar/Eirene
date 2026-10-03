@@ -71,7 +71,9 @@ Rules:
   call or when a development task requires testing that endpoint. Never send secrets
   or perform consequential external actions without the required approval.
 - For current or unfamiliar information, start with one precise web_search. Use
-  web_fetch for ordinary readable pages. When a site requires JavaScript or visual
+  any page passages already included in the search result before calling web_fetch
+  for ordinary readable pages. Do not repeat a failed search immediately or claim
+  snippets are full-page evidence. When a site requires JavaScript or visual
   inspection, use browser_inspect, follow only relevant links from its rendered DOM,
   and use browser_screenshot followed by read_image when pixels or layout matter.
   Avoid revisiting unchanged pages, stop browsing once two reliable sources answer

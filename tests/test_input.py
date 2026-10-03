@@ -48,6 +48,14 @@ async def settle(pilot, times=4):
 
 # placeholder
 
+def test_slash_menu_delayed_redraw_after_close_is_safe():
+    from eirene.ui.complete import SlashMenu
+
+    menu = SlashMenu()
+    menu.matches = [("search-api", "configure a search API")]
+    menu.close()
+    menu._draw()
+
 async def test_there_is_no_placeholder(workdir):
     app, pilot, context = await start(workdir)
     try:

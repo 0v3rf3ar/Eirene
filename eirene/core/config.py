@@ -45,6 +45,7 @@ DEFAULTS: dict[str, Any] = {
     "reduce_motion": False,
     "accessible_icons": False,
     "credential_store": "file",
+    "search_api": {},
 }
 
 VALID_MODES = {"auto", "manual", "plan"}
@@ -135,6 +136,33 @@ class Config:
     def configured_providers(self) -> list[str]:
         return sorted(self.data.get("providers", {}))
 
+    def search_api_key(self) -> str | None:
+        entry = self.get("search_api", {})
+        if not isinstance(entry, dict) or entry.get("provider") != "tavily":
+            return None
+        if entry.get("api_key_ref") == "keyring":
+            from . import credentials
+            return credentials.get("search:tavily")
+        key = entry.get("api_key")
+        return key if isinstance(key, str) and key else None
+
+    def set_search_api(self, key: str) -> None:
+        entry = {"provider": "tavily"}
+        if self.get("credential_store") == "keyring":
+            from . import credentials
+            credentials.set("search:tavily", key)
+            entry["api_key_ref"] = "keyring"
+        else:
+            entry["api_key"] = key
+        self.set("search_api", entry)
+
+    def forget_search_api(self) -> None:
+        entry = self.get("search_api", {})
+        if isinstance(entry, dict) and entry.get("api_key_ref") == "keyring":
+            from . import credentials
+            credentials.delete("search:tavily")
+        self.set("search_api", {})
+
     # active selection
 
     @property
@@ -214,7 +242,7 @@ def _merge_defaults(data: dict[str, Any]) -> dict[str, Any]:
         merged["providers"] = {}
     if not isinstance(merged.get("skills"), dict):
         merged["skills"] = {}
-    for key in ("plugins", "hooks", "mcp_servers", "model_context_limits", "model_costs"):
+    for key in ("plugins", "hooks", "mcp_servers", "model_context_limits", "model_costs", "search_api"):
         if not isinstance(merged.get(key), dict):
             merged[key] = {}
     merged["auto_compact"] = bool(merged.get("auto_compact", False))

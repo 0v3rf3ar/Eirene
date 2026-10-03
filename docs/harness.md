@@ -108,6 +108,30 @@ Terminal displays and headless output strip control and escape sequences while
 preserving printable Unicode. Local web search cards show status and errors while
 keeping successful result bodies hidden.
 
+`/search-api` configures an optional Tavily fallback through a masked key prompt.
+Keys use the configured file or OS credential store and do not change the model
+provider. Setup checks Tavily's `/usage` endpoint without spending a search credit.
+Search always tries DuckDuckGo first; without a saved key no Tavily request is
+made. A fallback makes one basic search request (one credit), with automatic depth
+upgrades and generated answers disabled. Relevance-ranked page content is reused
+when available; otherwise at most four candidate URLs are fetched within a
+20-second page budget, stopping after two readable sources. URLs and compact
+query-related passages reach the model in the original search result, with no
+extra tool cards or provider-switch announcements.
+
+Successful searches and page text are cached in memory for ten minutes, with at
+most 64 entries each; duplicate concurrent searches share one operation. Page and
+search failures have short negative caches. Authentication failures pause API
+requests until the key changes; credit/spending limits pause them for an hour,
+and rate limits respect a bounded `Retry-After`. Normal search remains available
+during API cooldowns. Reopening `/search-api` and replacing the key clears the
+agent's cached results and cooldown. Search POSTs are not automatically retried,
+because a lost response may already have consumed a credit. API error bodies and
+credentials are never returned to the model. Sources are evidence, not trusted
+instructions. See Tavily's [Search reference](https://docs.tavily.com/documentation/api-reference/endpoint/search),
+[Usage reference](https://docs.tavily.com/documentation/api-reference/endpoint/usage),
+and [credit costs](https://docs.tavily.com/documentation/api-credits).
+
 Ordinary messages sent while working are queued for the next execution boundary.
 Reasoning activity appears only in the live status line, not as transcript entries.
 `/sandbox` opens a structured status popup like `/usage`.
