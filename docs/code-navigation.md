@@ -30,6 +30,32 @@ Eirene checks host PATH for these installed servers:
 | Rust | `rust-analyzer` |
 | Go | `gopls` |
 | C / C++ | `clangd --background-index=false` |
+| Bash / shell (`.sh`, `.bash`) | `bash-language-server start` |
+| HTML (`.html`, `.htm`) | `vscode-html-language-server --stdio` |
+| CSS / SCSS / Less | `vscode-css-language-server --stdio` |
+| JSON / JSONC | `vscode-json-language-server --stdio` |
+| YAML (`.yaml`, `.yml`) | `yaml-language-server --stdio` |
+| Lua | `lua-language-server` |
+
+Install only the servers you need, then ensure their executables are on the PATH
+of the terminal launching Eirene. The Node.js servers require Node.js and npm:
+
+```sh
+npm install -g bash-language-server
+npm install -g vscode-langservers-extracted
+npm install -g yaml-language-server
+```
+
+These packages provide [Bash](https://github.com/bash-lsp/bash-language-server),
+[HTML/CSS/JSON](https://github.com/hrsh7th/vscode-langservers-extracted), and
+[YAML](https://github.com/redhat-developer/yaml-language-server) servers.
+For Lua, install a release or package following the
+[LuaLS instructions](https://luals.github.io/). Bash linting also benefits from
+an installed ShellCheck. Servers expose different capabilities; a server may
+provide hover and diagnostics without supporting definitions or references.
+Remote schema fetching is unavailable with networking disabled; use local
+schemas when needed. Shell configuration uses the LSP language ID `shellscript`;
+SCSS, Less, and JSONC use `scss`, `less`, and `jsonc` respectively.
 
 Custom definitions go in `~/.local/eirene/config.json` (or the directory selected
 by `EIRENE_HOME`). Commands must be argv arrays, not shell command strings:

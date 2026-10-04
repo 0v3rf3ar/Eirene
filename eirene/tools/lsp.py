@@ -27,6 +27,11 @@ LANGUAGES = {
     ".py": "python", ".js": "javascript", ".jsx": "javascriptreact",
     ".ts": "typescript", ".tsx": "typescriptreact", ".rs": "rust", ".go": "go",
     ".c": "c", ".h": "c", ".cc": "cpp", ".cpp": "cpp", ".hpp": "cpp",
+    ".sh": "shellscript", ".bash": "shellscript",
+    ".html": "html", ".htm": "html",
+    ".css": "css", ".scss": "scss", ".less": "less",
+    ".json": "json", ".jsonc": "jsonc",
+    ".yaml": "yaml", ".yml": "yaml", ".lua": "lua",
 }
 COMMANDS = {
     "python": [["pyright-langserver", "--stdio"], ["pylsp"]],
@@ -35,6 +40,15 @@ COMMANDS = {
     "rust": [["rust-analyzer"]], "go": [["gopls"]],
     "c": [["clangd", "--background-index=false"]],
     "cpp": [["clangd", "--background-index=false"]],
+    "shellscript": [["bash-language-server", "start"]],
+    "html": [["vscode-html-language-server", "--stdio"]],
+    "css": [["vscode-css-language-server", "--stdio"]],
+    "scss": [["vscode-css-language-server", "--stdio"]],
+    "less": [["vscode-css-language-server", "--stdio"]],
+    "json": [["vscode-json-language-server", "--stdio"]],
+    "jsonc": [["vscode-json-language-server", "--stdio"]],
+    "yaml": [["yaml-language-server", "--stdio"]],
+    "lua": [["lua-language-server"]],
 }
 
 

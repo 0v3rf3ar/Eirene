@@ -107,6 +107,32 @@ def test_invalid_server_config():
         lsp.server_for(Path("main.py"), {"python": {"command": "pylsp --stdio"}})
 
 
+@pytest.mark.parametrize("filename,language_id,argv", [
+    ("script.sh", "shellscript", ["bash-language-server", "start"]),
+    ("script.bash", "shellscript", ["bash-language-server", "start"]),
+    ("index.htm", "html", ["vscode-html-language-server", "--stdio"]),
+    ("index.html", "html", ["vscode-html-language-server", "--stdio"]),
+    ("style.css", "css", ["vscode-css-language-server", "--stdio"]),
+    ("style.scss", "scss", ["vscode-css-language-server", "--stdio"]),
+    ("style.less", "less", ["vscode-css-language-server", "--stdio"]),
+    ("config.json", "json", ["vscode-json-language-server", "--stdio"]),
+    ("config.jsonc", "jsonc", ["vscode-json-language-server", "--stdio"]),
+    ("config.yaml", "yaml", ["yaml-language-server", "--stdio"]),
+    ("config.YML", "yaml", ["yaml-language-server", "--stdio"]),
+    ("main.lua", "lua", ["lua-language-server"]),
+])
+def test_additional_server_discovery(monkeypatch, filename, language_id, argv):
+    monkeypatch.setattr(lsp.shutil, "which", lambda name: f"/servers/{name}")
+    path = Path(filename)
+    assert lsp.server_for(path, {}) == (
+        language_id, {"command": [f"/servers/{argv[0]}", *argv[1:]]})
+    assert lsp.server_for(path, {language_id: False}) is None
+    custom = {"command": ["custom-server"], "read_paths": ["/custom"]}
+    assert lsp.server_for(path, {language_id: custom}) == (language_id, custom)
+    monkeypatch.setattr(lsp.shutil, "which", lambda name: None)
+    assert lsp.server_for(path, {}) is None
+
+
 @pytest.mark.skipif(sys.platform != "linux" or not shutil.which("bwrap"), reason="Linux Bubblewrap integration")
 async def test_server_cannot_write_workspace(box, workdir):
     (workdir / "main.py").write_text("def value(): return 1\n")

@@ -99,7 +99,8 @@ startup checks. Offline startup continues normally.
 The agent can query installed language servers for definitions, semantic
 references, hover information, and diagnostics using `code_navigation`. Supported
 automatic discovery includes Pyright/pylsp, typescript-language-server,
-rust-analyzer, gopls, and clangd. No server is installed automatically. Without a
+rust-analyzer, gopls, clangd, bash-language-server, the VS Code HTML/CSS/JSON
+servers, yaml-language-server, and lua-language-server. No server is installed automatically. Without a
 server, definitions/references fall back to explicitly labeled text matching and
 diagnostics fall back to installed parsers or compilers.
 
