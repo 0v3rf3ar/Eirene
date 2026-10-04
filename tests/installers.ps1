@@ -17,7 +17,12 @@ $corrupt = $false
 $downloadMode = 'normal'
 $downloadAttempts = 0
 $retryDelays = [Collections.Generic.List[double]]::new()
-function Start-Sleep([double]$Seconds) { $retryDelays.Add($Seconds) }
+function Start-Sleep([double]$Seconds, [int]$Milliseconds) {
+    if ($Milliseconds) {
+        # Replacement retries need real time for native executable cleanup.
+        [Threading.Thread]::Sleep($Milliseconds)
+    } else { $retryDelays.Add($Seconds) }
+}
 $savedProcessPath = $env:PATH
 $savedUserPath = if ($Target -eq 'windows-amd64') { [Environment]::GetEnvironmentVariable('Path', 'User') } else { $null }
 $savedProfile = $PROFILE
@@ -36,7 +41,20 @@ if ($Target -ne 'windows-amd64') {
 # Substitute only the transport; exercise the real streaming/progress loop.
 $installerSource = [IO.File]::ReadAllText((Join-Path $root 'install.ps1'))
 $installerSource = $installerSource.Replace('$request = [Net.WebRequest]::Create($Uri)', 'return Open-FixtureDownload $Uri')
+$installerSource = $installerSource.Replace('[IO.File]::Replace($Source, $Destination, [NullString]::Value)', 'Invoke-FixtureReplace $Source $Destination')
 $installer = [scriptblock]::Create($installerSource)
+$replaceMode = 'normal'
+$replaceAttempts = 0
+function Invoke-FixtureReplace([string]$Source, [string]$Destination) {
+    $script:replaceAttempts += 1
+    if ($replaceMode -eq 'transient' -and $replaceAttempts -le 2) {
+        throw [IO.IOException]::new('Simulated sharing violation.', -2147024864)
+    }
+    if ($replaceMode -eq 'permission') {
+        throw [UnauthorizedAccessException]::new('Simulated permission failure.')
+    }
+    [IO.File]::Replace($Source, $Destination, [NullString]::Value)
+}
 function Open-FixtureDownload([string]$Uri) {
     $requests.Add($Uri)
     $script:downloadAttempts += 1
@@ -115,6 +133,34 @@ try {
     & $installer -Version "v$fixtureVersion" -InstallDir $installDirectory -NoPathUpdate
     if ((Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash -ne $originalHash) { throw 'Unknown-size download changed the fixture binary.' }
     $downloadMode = 'normal'
+    if ($Target -eq 'windows-amd64') {
+        $replaceMode = 'transient'
+        $replaceAttempts = 0
+        & $installer -Version "v$fixtureVersion" -InstallDir $installDirectory -NoPathUpdate
+        if ($replaceAttempts -lt 3) { throw 'Transient replacement locks were not retried.' }
+        $replaceMode = 'permission'
+        $replaceAttempts = 0
+        $failed = $false
+        try { & $installer -Version "v$fixtureVersion" -InstallDir $installDirectory -NoPathUpdate }
+        catch {
+            if ($_.Exception.Message -notmatch 'Simulated permission failure') { throw }
+            $failed = $true
+        }
+        if (-not $failed -or $replaceAttempts -ne 1) { throw 'Permission failures must not be retried.' }
+        $replaceMode = 'normal'
+        $replaceAttempts = 0
+        $locked = [IO.File]::Open($binary, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+        $failed = $false
+        try { & $installer -Version "v$fixtureVersion" -InstallDir $installDirectory -NoPathUpdate }
+        catch {
+            if ($_.Exception.Message -notmatch 'executable is locked') { throw }
+            $failed = $true
+        } finally { $locked.Dispose() }
+        if (-not $failed -or $replaceAttempts -ne 26) { throw 'A persistent lock must fail after 26 bounded attempts.' }
+        if ((Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash -ne $originalHash) {
+            throw 'Locked-executable failure modified the existing installation.'
+        }
+    }
     $env:EIRENE_NO_PATH = '0'
     if ($Target -ne 'windows-amd64') {
         $profileFixture = Join-Path $testRoot 'profile.ps1'

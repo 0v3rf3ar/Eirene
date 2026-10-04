@@ -1,6 +1,6 @@
 [project]
 name = "eirene"
-version = "0.1.11"
+version = "0.1.12"
 description = "Terminal AI agent for coding, automation and deployment."
 readme = "README.md"
 authors = [{ name = "s3p" }]

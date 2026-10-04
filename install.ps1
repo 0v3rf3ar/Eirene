@@ -106,6 +106,30 @@ function Open-ReleaseDownload([string]$Uri) {
     return [pscustomobject]@{ Stream = $response.GetResponseStream(); Length = $response.ContentLength; Response = $response }
 }
 
+function Install-StagedExecutable([string]$Source, [string]$Destination) {
+    # PyInstaller cleanup and antivirus scans can briefly retain a handle after
+    # --version/--help return. Retry sharing/lock violations for at most 5 seconds;
+    # permission failures and other errors remain immediate failures.
+    for ($attempt = 0; $attempt -lt 26; $attempt++) {
+        try {
+            if (Test-Path -LiteralPath $Destination) {
+                [IO.File]::Replace($Source, $Destination, [NullString]::Value)
+            } else {
+                [IO.File]::Move($Source, $Destination)
+            }
+            return
+        } catch {
+            $cause = $_.Exception
+            while ($cause.InnerException) { $cause = $cause.InnerException }
+            $code = $cause.HResult -band 0xffff
+            if (-not $onWindows -or -not ($cause -is [IO.IOException]) -or
+                $code -notin @(32, 33) -or $attempt -eq 25) { throw }
+            if ($attempt -eq 0) { Write-Host 'Executable is briefly locked; waiting up to 5 seconds before retrying...' }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+}
+
 function Get-ReleaseFile([string]$Uri, [string]$Destination, [switch]$ShowProgress) {
     for ($attempt = 1; $attempt -le 4; $attempt++) {
         $download = $null
@@ -225,11 +249,7 @@ $temporary = Join-Path ([IO.Path]::GetTempPath()) ('eirene-install-' + [guid]::N
     Write-OK 'Staged executable responds to --version and --help'
     if (Test-Path -LiteralPath $destination -PathType Container) { throw "$destination is a directory." }
     $phase = "replacing $destination; close any running Eirene window and retry if the executable is locked"
-    if (Test-Path -LiteralPath $destination) {
-        [IO.File]::Replace($staged, $destination, [NullString]::Value)
-    } else {
-        [IO.File]::Move($staged, $destination)
-    }
+    Install-StagedExecutable $staged $destination
     $staged = $null
     $installed = $true
     Write-OK "Installed $destination"
