@@ -199,7 +199,7 @@ def test_pattern_read_includes_neighbors(box, workdir):
 def test_long_line_can_be_read_without_losing_bytes(box, workdir, unit):
     import re
     data = unit * 1000
-    (workdir / "long.txt").write_text(data)
+    (workdir / "long.txt").write_text(data, encoding="utf-8")
     body = files.read_file(box, "long.txt", max_chars=700)
     fragments = [body.split("1\t", 1)[1].split("\n…", 1)[0]]
     while match := re.search(r"byte_offset=(\d+)", body):
@@ -210,7 +210,7 @@ def test_long_line_can_be_read_without_losing_bytes(box, workdir, unit):
 
 
 def test_unicode_text_is_readable_and_controls_are_removed(box, workdir):
-    (workdir / "unicode.txt").write_text("سلام دنیا\n漢字\n\x1b]52;c;unsafe\x07text\n")
+    (workdir / "unicode.txt").write_text("سلام دنیا\n漢字\n\x1b]52;c;unsafe\x07text\n", encoding="utf-8")
     body = files.read_file(box, "unicode.txt")
     assert "سلام دنیا" in body and "漢字" in body
     assert "\x1b" not in body and "\x07" not in body and "unsafe" not in body

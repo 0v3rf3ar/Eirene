@@ -75,8 +75,7 @@ async def test_foreground_handoff_runs_once_and_keeps_late_output(workdir, pytho
     result = await shell.run(command, workdir, timeout=3, yield_after=.1, stall=0)
     assert not result.ok and result.process_id
     assert result.duration < .3
-    await asyncio.sleep(.35)
-    note = await processes.poll(result.process_id)
+    note = await processes.poll(result.process_id, wait=True)
     assert "exited 0" in note and "after" in note
     assert (workdir / "runs").read_text() == "x"
     from eirene.core import artifacts
@@ -87,15 +86,13 @@ async def test_handed_off_process_keeps_original_deadline(workdir, python_comman
     result = await shell.run(python_command("import time; time.sleep(10)"),
                              workdir, timeout=.25, yield_after=.05, stall=0)
     assert result.process_id
-    await asyncio.sleep(.4)
-    note = await processes.poll(result.process_id)
+    note = await processes.poll(result.process_id, wait=True)
     assert "exited" in note and "time limit reached" in note
 
 
 async def test_background_output_is_bounded_with_retrievable_artifact(workdir, python_command):
     note = await processes.start(python_command("print('x' * 15000); print('FINAL')"), workdir)
     process_id = note.split()[1]
-    await asyncio.sleep(.15)
-    result = await processes.poll(process_id, all_output=True)
+    result = await processes.poll(process_id, all_output=True, wait=True)
     assert len(result) < 6500
     assert "FINAL" in result and "output artifact" in result

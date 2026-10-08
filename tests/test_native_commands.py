@@ -51,6 +51,21 @@ async def test_native_missing_and_no_matches_differ(box, workdir, backend):
         await native.search_text(box, "hello", path="missing")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX binary probe")
+async def test_bsd_read_binary_probe(box, workdir, monkeypatch):
+    monkeypatch.setattr(native.sys, "platform", "darwin")
+    (workdir / "plain.txt").write_bytes(b"hello\n")
+    assert "hello" in await native.read_file(box, "plain.txt")
+    (workdir / "binary.txt").write_bytes(b"a\0b")
+    with pytest.raises(ToolError, match="binary"):
+        await native.read_file(box, "binary.txt")
+
+
+async def test_invalid_regex_without_candidate_files(box, backend):
+    with pytest.raises(ToolError):
+        await native.search_text(box, "[")
+
+
 async def test_native_generated_hidden_and_excluded(box, workdir, backend):
     for name in ("src/a.py", "node_modules/a.py", ".hidden/a.py", "src/b.py"):
         p = workdir / name
@@ -114,6 +129,8 @@ async def test_cwd_and_shell_are_explicit(box, workdir):
         {"command": "pwd" if os.name != "nt" else "Get-Location", "cwd": "sub"},
         box,
     )
+    if "Still running as managed process" in result:
+        result = await processes.poll(result.split("managed process ", 1)[1].split(".", 1)[0], wait=True)
     assert "sub" in result
     with pytest.raises(Exception):
         await registry.execute("run_command", {"command": "echo no", "cwd": ".."}, box)

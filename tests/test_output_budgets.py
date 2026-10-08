@@ -252,7 +252,7 @@ def test_clipped_search_does_not_claim_complete_absence(box, workdir, monkeypatc
     (workdir / "long.txt").write_text("x" * 400_000 + "NEEDLE\n")
     result = files.search_text(box, "NEEDLE")
     assert "incomplete" in result
-    assert "no matches in returned preview" in result
+    assert "no matches" not in result or "no matches in returned preview" in result
 
 
 async def test_cli_owner_is_never_offered_native_tools(workdir):

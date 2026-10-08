@@ -13,6 +13,7 @@ import os
 import re
 import shlex
 import shutil
+import sys
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -471,8 +472,6 @@ foreach ($p in $d.paths) {
                     counts[r["path"]] = counts.get(r["path"], 0) + 1
             engine = "PowerShell/.NET"
         else:
-            if not paths:
-                return "no matches" + ("\n" + note if note else "")
             # One awk process per bounded argv batch. Regex matching happens in awk.
             awk = shutil.which("awk")
             if not awk:
@@ -488,15 +487,21 @@ foreach ($p in $d.paths) {
                     "multiline patterns are unsupported; search individual lines"
                 )
             expression = "|".join("(" + p + ")" for p in patterns)
-            script = r"""BEGIN { pat=ENVIRON["EIRENE_PATTERN"]; lit=ENVIRON["EIRENE_LITERAL"]+0; np=split(ENVIRON["EIRENE_PATTERNS"],pats,"\n"); fold=ENVIRON["EIRENE_FOLD"]+0; word=ENVIRON["EIRENE_WORD"]+0; ctx=ENVIRON["EIRENE_CONTEXT"]+0; if(fold)pat=tolower(pat) }
+            script = r"""BEGIN { pat=ENVIRON["EIRENE_PATTERN"]; lit=ENVIRON["EIRENE_LITERAL"]+0; np=split(ENVIRON["EIRENE_PATTERNS"],pats,"\n"); fold=ENVIRON["EIRENE_FOLD"]+0; word=ENVIRON["EIRENE_WORD"]+0; ctx=ENVIRON["EIRENE_CONTEXT"]+0; if(fold)pat=tolower(pat); if(!lit)valid=(""~pat); nul=sprintf("%c",0) }
 FNR==1 { through=0; last=0; for(key in before)delete before[key] }
-{ if(index($0,sprintf("%c",0)))next; text=$0; value=fold?tolower(text):text; matched=0; if(lit){for(j=1;j<=np;j++){needle=fold?tolower(pats[j]):pats[j];at=index(value,needle);if(at>0&&(!word||((at==1||substr(value,at-1,1)!~/[[:alnum:]_$]/)&&(at+length(needle)>length(value)||substr(value,at+length(needle),1)!~/[[:alnum:]_$]/))))matched=1}}else{matched=value~pat};
+{ if(nul!=""&&index($0,nul))next; text=$0; value=fold?tolower(text):text; matched=0; if(lit){for(j=1;j<=np;j++){needle=fold?tolower(pats[j]):pats[j];at=index(value,needle);if(at>0&&(!word||((at==1||substr(value,at-1,1)!~/[[:alnum:]_$]/)&&(at+length(needle)>length(value)||substr(value,at+length(needle),1)!~/[[:alnum:]_$]/))))matched=1}}else{matched=value~pat};
  if(word&&!lit) matched=value~("(^|[^[:alnum:]_$])("pat")([^[:alnum:]_$]|$)");
  before[FNR]=text;
  if(matched) { for(i=FNR-ctx;i<FNR;i++)if(i>0&&i>last&&i in before)printf "%s%c%d%c%s%c0%c",FILENAME,0,i,0,substr(before[i],1,2000),0,0; through=FNR+ctx }
  if(matched||FNR<=through){printf "%s%c%d%c%s%c%d%c",FILENAME,0,FNR,0,substr(text,1,2000),0,matched,0; last=FNR}
  delete before[FNR-ctx-1]
 }"""
+            if not paths:
+                try:
+                    await command(box, [awk, script, os.devnull], env={"EIRENE_PATTERN": expression, "EIRENE_LITERAL": str(int(literal))})
+                except ToolError as exc:
+                    raise ToolError(f"bad regular expression: {exc}") from exc
+                return "no matches" + ("\n" + note if note else "")
             result = None
             for start in range(0, len(paths), 128):
                 result = await command(
@@ -516,6 +521,7 @@ FNR==1 { through=0; last=0; for(key in before)delete before[key] }
                     location, number, text, matched = parts[i : i + 4]
                     if not number.isdigit() or not box.contains(location):
                         continue
+                    selected_partial = selected_partial or len(text) >= 2000
                     rows.append((location, int(number), text))
                     if matched == "1":
                         counts[location] = counts.get(location, 0) + 1
@@ -628,9 +634,9 @@ Get-Content -LiteralPath $d.path -Encoding UTF8 -Delimiter "`n" | ForEach-Object
  if($n -le $d.offset){return};
  $match=(-not $d.pattern -or [regex]::IsMatch($line,$d.pattern));
  if($match -and $d.pattern){$through=$n+$d.context; foreach($r in $before){if($r.n -gt $last){$rows.Add($r);$last=$r.n}}};
- if($match -or $n -le $through){if($d.tail -or ($rows.Count -lt $d.wanted+1 -and $used -lt $d.room+1)){ $rows.Add($row);$last=$n;$used+=$row.text.Length+12 }};
+ if($match -or $n -le $through){if($d.tail -or ($rows.Count -lt $d.wanted+1 -and $used -lt $d.room+1)){ $rows.Add($row);$last=$n;$used+=$row.text.Length+([string]$row.n).Length+2 }};
  $before.Add($row);if($before.Count -gt $d.context){$before.RemoveAt(0)};
- if($d.tail){while($rows.Count -gt 1 -and ($rows.Count -gt $d.wanted -or $used -gt $d.room)){$used-=$rows[0].text.Length+12;$rows.RemoveAt(0)}}
+ if($d.tail){while($rows.Count -gt 1 -and ($rows.Count -gt $d.wanted -or $used -gt $d.room)){$used-=$rows[0].text.Length+([string]$rows[0].n).Length+2;$rows.RemoveAt(0)}}
 }; foreach($r in $rows){$r|ConvertTo-Json -Compress}; @{total=$n;binary=$binary}|ConvertTo-Json -Compress
 """
         )
@@ -653,19 +659,25 @@ Get-Content -LiteralPath $d.path -Encoding UTF8 -Delimiter "`n" | ForEach-Object
             raise ToolError(
                 "bad regular expression: bounded reads use POSIX ERE on this host"
             )
-        script = r"""BEGIN{start=ENVIRON["EIRENE_OFFSET"]+0;wanted=ENVIRON["EIRENE_WANTED"]+0;room=ENVIRON["EIRENE_ROOM"]+0;tail=ENVIRON["EIRENE_TAIL"]+0;pat=ENVIRON["EIRENE_PATTERN"];ctx=ENVIRON["EIRENE_CONTEXT"]+0;pos=0;first=1}
+        if sys.platform == "darwin":
+            # BSD awk cannot retain NUL in strings; compare a native NUL-filtered stream.
+            probe = "LC_ALL=C tr -d '\\000' < " + shlex.quote(str(target)) + " | cmp -s " + shlex.quote(str(target)) + " -"
+            checked = await command(box, [], script=probe, allowed=(0, 1))
+            if checked.exit_code == 1:
+                raise ToolError(f"{path} is binary ({size} bytes); use read_image or a bounded hex dump")
+        script = r"""BEGIN{start=ENVIRON["EIRENE_OFFSET"]+0;wanted=ENVIRON["EIRENE_WANTED"]+0;room=ENVIRON["EIRENE_ROOM"]+0;tail=ENVIRON["EIRENE_TAIL"]+0;pat=ENVIRON["EIRENE_PATTERN"];ctx=ENVIRON["EIRENE_CONTEXT"]+0;pos=0;first=1;nul=sprintf("%c",0)}
 function keep(n,p,l,t) {
  if(!tail && (kept>=wanted+1||used>room))return;
- kept++; a[kept]=sprintf("%d%c%d%c%d%c%s%c",n,0,p,0,l,0,t,0); sizes[kept]=length(t)+length(n)+2;used+=sizes[kept];
+ gsub(sprintf("%c",28),"",t); kept++; a[kept]=sprintf("%d%c%d%c%d%c%s%c",n,28,p,28,l,28,t,28); sizes[kept]=length(t)+length(n)+2;used+=sizes[kept];
  if(tail)while(first<kept&&(kept-first+1>wanted||used>room)){used-=sizes[first];delete a[first];delete sizes[first];first++}
 }
-{len=length($0);if(index($0,sprintf("%c",0))){binary=1; next};
+{len=length($0);if(nul!=""&&index($0,nul)){binary=1; next};
  if(NR>start){text=substr($0,1,room);matched=(pat==""||$0~pat);
  if(matched&&pat!=""){for(i=NR-ctx;i<NR;i++)if(i>last&&i>start&&i in b){keep(i,bp[i],bl[i],b[i]);last=i};through=NR+ctx}
  if(matched||NR<=through){keep(NR,pos,len,text);last=NR}; b[NR]=text;bp[NR]=pos;bl[NR]=len;delete b[NR-ctx];delete bp[NR-ctx];delete bl[NR-ctx];
  }pos+=len+1
 }
-END{for(i=first;i<=kept;i++)printf "%s",a[i];printf "TOTAL%c%d%c%d%c",0,NR,0,binary,0}"""
+END{for(i=first;i<=kept;i++)printf "%s",a[i];printf "TOTAL%c%d%c%d%c",28,NR,28,binary,28}"""
         env = {
             "LC_ALL": "C",
             "EIRENE_OFFSET": str(params["offset"]),
@@ -678,7 +690,7 @@ END{for(i=first;i<=kept;i++)printf "%s",a[i];printf "TOTAL%c%d%c%d%c",0,NR,0,bin
         result = await command(
             box, [shutil.which("awk") or "awk", script, str(target)], env=env
         )
-        parts = result.output.split("\0")
+        parts = result.output.split("\x1c")
         rows = []
         total = 0
         binary = False
