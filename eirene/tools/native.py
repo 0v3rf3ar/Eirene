@@ -452,6 +452,7 @@ async def search_text(
                 )
                 + r"""
 $pats=@($d.patterns); if ($d.whole) { $pats=@($pats | ForEach-Object { '\b(?:' + $(if ($d.literal) { [regex]::Escape($_) } else { $_ }) + ')\b' }) }
+if (-not $d.literal -or $d.whole) { foreach ($pat in $pats) { $null=[regex]::new($pat) } }
 foreach ($p in $d.paths) {
  Select-String -LiteralPath $p -Pattern $pats -SimpleMatch:($d.literal -and -not $d.whole) -CaseSensitive:$d.case -Context $d.context | ForEach-Object {
   @{ path=$_.Path; number=$_.LineNumber; text=$_.Line; match=$true } | ConvertTo-Json -Compress

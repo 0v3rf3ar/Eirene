@@ -644,6 +644,13 @@ class Transcript(VerticalScroll):
         self.scroll_end(animate=False)
         self.call_after_refresh(self.refresh_navigation)
 
+    def scroll_home(self, *args, **kwargs):
+        # Explicit navigation cancels pending follow callbacks even if the
+        # current scroll position is already zero during initial layout.
+        self._follow_token += 1
+        self._following = False
+        return super().scroll_home(*args, **kwargs)
+
     def _schedule_follow(self) -> None:
         self._follow_token += 1
         token = self._follow_token

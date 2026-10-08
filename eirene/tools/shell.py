@@ -488,7 +488,7 @@ async def _start(command: str, cwd: Path, env: dict[str, str] | None,
         script = ("$ErrorActionPreference='Stop'; "
                   "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); "
                   "$global:LASTEXITCODE=0; & {\n" + command +
-                  "\n}; if (-not $?) { exit 1 }; exit $LASTEXITCODE")
+                  "\n} | Out-String -Stream -Width 4096; if (-not $?) { exit 1 }; exit $LASTEXITCODE")
         encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
         launch_argv = [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
     elif selected == "cmd":
