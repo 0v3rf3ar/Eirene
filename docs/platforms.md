@@ -79,3 +79,23 @@ the dependencies of the selected browser plugin.
 Use `eirene --doctor --json` for environment facts, `/sandbox` for the current
 execution boundary, and `/plugins doctor` for plugin dependencies. The doctor
 report does not contact providers or prove their credentials work.
+
+## Sandbox environment and runtime mounts
+
+Bubblewrap exposes system executable/library paths read-only, the workspace
+writable for normal execution, and private `/tmp` and home locations. A read-only
+command template makes the workspace read-only too. Extra read/write mounts
+must already exist and cannot grant the filesystem root. Network isolation uses
+a separate network namespace unless a network grant applies.
+
+Seatbelt restricts filesystem operations through a generated profile and uses a
+private scratch directory. Both mechanisms use the host kernel and installed
+runtime; neither creates a container image or a virtual machine. System runtime
+paths differ, so a launcher found on PATH can still fail if its dependencies are
+in an unexposed home directory.
+
+Isolated child environments retain a small allowlist including PATH, locale, TZ,
+and Windows system path variables, then add explicit tool/server environment
+values. They do not inherit every credential/loader variable. Outside isolation,
+process inheritance differs. PTY execution is unavailable in Eirene's Windows
+runtime. For server mounts/env, see [MCP fields](config-file.md#standalone-mcp-declarations).

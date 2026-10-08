@@ -62,3 +62,16 @@ For a skill-by-skill alternative, see [Superpowers](superpowers.md). Eirene's
 [session plan](../plans.md) can retain progress across either workflow.
 
 Source: [Anthropic official plugins](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/feature-dev).
+
+## Profile and progress representation
+
+The importer stores the Markdown `agents/` profiles in the normalized index.
+Profile commands use the `agent-` prefix and run in the main conversation;
+independence requires an actual delegation operation. Profile names do not
+select a different provider credential or model tier.
+
+`plugins.feature-dev` controls bundle availability. Progress maintained with
+Eirene's plan tools follows the [structured plan schema](../plans.md#stored-schema-and-validation);
+workspace design files remain separate artifacts. Read
+[plugin format](../plugins.md#local-bundle-format) and
+[config maps](../config-file.md#skill-and-plugin-maps) when customizing the bundle.

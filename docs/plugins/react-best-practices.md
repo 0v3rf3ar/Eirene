@@ -47,3 +47,16 @@ For visual design use [Frontend Design](frontend-design.md); for accessibility
 and interface compliance use [Web Design Guidelines](web-design-guidelines.md).
 
 Source: [Vercel agent skills](https://github.com/vercel-labs/agent-skills/tree/main/skills/react-best-practices).
+
+## Rule files and configuration
+
+The installed skill ID is `react-best-practices:react-best-practices` and the
+bundle key is `plugins.react-best-practices`. Supporting rules remain beneath
+`plugins/react-best-practices/` in the data directory. Reading a rule is a bounded
+resource read, not execution of a profiler.
+
+An installed rule snapshot changes only when the bundle's files are replaced;
+`/plugins refresh` rebuilds the index from those files. Project Next.js/React
+versions and benchmarks still come from the workspace. See
+[plugin storage/refresh](../plugins.md#local-bundle-format) and
+[activation config](../config-file.md#skill-and-plugin-maps).

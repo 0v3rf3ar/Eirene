@@ -109,3 +109,54 @@ Retries may repeat actions from a partially completed failed run. Use tasks whos
 side effects you understand and check recorded outcomes. See [headless runs](headless.md)
 for output and access limits, and [notifications](notifications.md) for failure
 notification setup.
+
+## tasks.json schema
+
+Task definitions are separate from `config.json`. The top-level object contains
+`version: 2` and a `tasks` array. Each record stores a 12-character hexadecimal
+`id`, `name`, `prompt`, absolute `cwd`, canonical `provider`, `model`, numeric
+Unix `created`, and the run-control fields above. An illustrative record is:
+
+```json
+{
+  "version": 2,
+  "tasks": [
+    {
+      "id": "012345abcdef",
+      "name": "Daily project summary",
+      "prompt": "Summarize changes without editing files",
+      "cwd": "/absolute/path/to/project",
+      "provider": "anthropic",
+      "model": "your-model-id",
+      "created": 1700000000.0,
+      "schedule": {"kind": "daily", "minutes": 60, "hour": 9, "minute": 0, "weekday": 0},
+      "enabled": true,
+      "retries": 0,
+      "retry_delay": 30,
+      "timeout": 3600,
+      "allow_overlap": false,
+      "timezone": "local",
+      "env": {}
+    }
+  ]
+}
+```
+
+This example explains the schema; adding it to the file does not install an OS
+scheduler entry. Use `/schedule` to create/register a task. `schedule.kind` is
+`interval`, `hourly`, `daily`, `weekly`, or `boot`. Intervals use `minutes`;
+calendar tasks use `hour`/`minute`, and weekly uses a zero-based weekday
+(Monday 0 through Sunday 6). Preserve unused schedule defaults when editing.
+
+The runner loads configuration from the selected data root and uses the task's
+recorded provider/model. It does not embed a copy of all provider credentials
+inside each task. Environment keys must match `[A-Za-z_][A-Za-z0-9_]*`, values
+are converted to strings and bounded to 10000 characters, and the blocked keys
+listed above are omitted. A stored zero `retry_delay` currently becomes the
+30-second default during loading; use a positive delay for predictable behavior.
+
+`task-runs/TASK_ID.jsonl` contains timestamped events such as run starts and
+finishes. `task-locks/TASK_ID.lock` contains the owning PID/start time for overlap
+coordination. Task records, run history, locks, and installed OS scheduler entries
+are four separate pieces of state. See [data layout](data-layout.md) and
+[headless execution](headless.md) before relocating a scheduled installation.

@@ -111,3 +111,18 @@ Use `/mcp` to disable management, `/plugins` to disable the bundle, or
 `/plugins untrust omniroute` to revoke its MCP activation. A gateway started
 separately continues running independently of Eirene. See [MCP](mcp.md),
 [providers](providers.md), and [permissions](harness.md).
+
+## Configuration locations
+
+Chat settings live in `providers.omniroute` in `config.json`; active selection
+uses top-level `provider`/`model`. The management declaration is in
+`plugins/omniroute/plugin.json` and its normalized index. Activation uses
+`mcp_enabled.omniroute__gateway`. An API key in the provider connection does not
+itself enable that server. See [config.json](config-file.md) for credential
+precedence and [plugin formats](plugins.md#local-bundle-format) for refresh behavior.
+
+The management data directory is external to Eirene's application data. The
+adapter uses `EIRENE_OMNIROUTE_DATA_DIR` when set; otherwise it selects an existing
+`~/.omniroute`, then platform config defaults, with `~/.omniroute` as the POSIX
+fallback. The database and its encryption material need their own backup. See
+[data layout](data-layout.md#backup-transfer-and-recovery) for the distinction.

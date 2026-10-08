@@ -44,3 +44,16 @@ For an audit against current web interface rules, use
 skill; namespaced commands distinguish the two installations.
 
 Source: [Anthropic official plugins](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/frontend-design).
+
+## Guidance identity and runtime
+
+The standalone skill uses the config ID `frontend-design:frontend-design`; the
+Anthropic collection's variant uses `skills:frontend-design`. These are separate
+preferences even when their short aliases collide. Bundle enablement is stored
+under `plugins`, individual guidance under `skills`.
+
+The imported command supplies instructions to the selected model and tools;
+it does not supply a rendering engine or dependency installation step. Workspace
+output and screenshots are separate from the plugin's copied resource files.
+See [skill parsing/loading](../skills.md#discovery-identifiers-and-parsing-limits)
+and [config.json](../config-file.md#skill-and-plugin-maps).

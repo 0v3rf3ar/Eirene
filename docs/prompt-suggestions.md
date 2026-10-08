@@ -33,3 +33,17 @@ Use the provider's usage controls if those extra requests matter to your budget.
 
 For a one-off question without changing the main conversation, see
 [side questions](side-questions.md).
+
+## Bounds and discarded generations
+
+The suggestion request includes at most the first 4000 characters of the previous
+user request and the last 8000 characters of the reply, encoded as an exchange
+object. It requests at most 1024 output tokens with no tools. The UI waits up to
+120 seconds for generation and discards stale generations when the session/input
+or toggle state changes.
+
+Returned text is normalized to one line. Token-truncated outputs, drafts longer
+than 240 characters or 30 words, missing terminal punctuation, and obvious
+assistant-voice replies are rejected instead of showing a sliced sentence. This
+is a narrow output filter, not a semantic guarantee of a useful next task.
+The stored switch is `prompt_suggest`; see [config.json](config-file.md#modes-access-and-interface).

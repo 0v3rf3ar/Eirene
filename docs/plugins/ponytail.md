@@ -70,3 +70,18 @@ Use `/plugins untrust ponytail` to revoke hook execution. If installed hook file
 changed, refresh, inspect, and trust again. See [plugin management](../plugins.md).
 
 Source: [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail).
+
+## Concrete state locations
+
+The imported hooks receive `PLUGIN_DATA` pointing to
+`plugin-data/ponytail/SESSION_UUID`, and persistent `XDG_CONFIG_HOME` pointing to
+`plugin-data/ponytail/config`. The session mode is read from `.ponytail-active`;
+the default control checks `config/ponytail/config.json` for `defaultMode` beneath
+that persistent settings directory.
+
+A control operation invokes the trusted hook path and validates the resulting
+state. When changing levels, Eirene loads the upstream rule generator so an old
+startup ruleset is not retained after `off` or another level. Plan mode suppresses
+this execution. Trust is stored under `plugin_trust.ponytail`, while bundle
+activation uses `plugins.ponytail` in [config.json](../config-file.md#skill-and-plugin-maps).
+See [hook protocol](../plugins.md#imported-lifecycle-hooks) for stdin/environment.

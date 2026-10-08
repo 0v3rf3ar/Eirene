@@ -55,3 +55,19 @@ read a page merely because a search result lists it.
 For rendered-page inspection and screenshots, see [browser work](browser.md).
 For audits against current interface guidance, see
 [Web Design Guidelines](plugins/web-design-guidelines.md).
+
+## Cache and request bounds
+
+The search service accepts queries up to 1500 characters, bounds result counts
+to 1–8, and bounds its formatted output to 12000 characters. Successful repeated
+queries can use an in-memory cache for 600 seconds with at most 64 entries. This
+cache is not a saved research database and does not survive process restart.
+
+Normal search and selected-page fetches have separate download/text bounds.
+Fetches extract readable text; they do not execute site JavaScript or maintain an
+interactive authenticated browser session. Tavily basic search is a fallback
+with independent credit/cooldown state, not the model provider's search mode.
+
+The saved fallback object is `search_api`, distinct from `providers`. Its keyring
+identity is `search:tavily`; generic provider API-key environment lookup does not
+apply to it. See [search configuration](config-file.md#search-api).

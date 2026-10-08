@@ -72,3 +72,33 @@ Name relevant paths, ask for the error range rather than an entire log, and use
 Disable irrelevant [skills](skills.md) or plugin bundles. For a local model, use a
 context limit that fits the model and available memory; a larger configured number
 does not increase the model's supported context.
+
+## Budget calculation and persistence
+
+For managed providers, the budget considers the estimated history, system
+instructions, and serialized tool schemas. A configured exact-model limit or
+local Ollama effective limit supplies the hard context boundary. The runtime
+reserves response tokens and overhead, then applies `context_warning`. The
+[configuration reference](config-file.md#context-limits-and-cost-rates) documents
+the arithmetic and numeric ranges. `context_warning: 0` currently falls back to
+the default threshold; it does not disable compaction.
+
+The token estimator uses roughly one token per four characters and also counts
+tool arguments. It is not a provider tokenizer. Large catalogs, project guidance,
+and output can consume budget before the conversational text becomes large.
+With `auto_compact: false`, crossing the budget returns an error rather than
+sending an intentionally over-budget request.
+
+Compaction requires at least three messages. It requests a bounded summary with
+a 60-second overall summarization wait, keeps a safe recent tail of roughly four
+messages, and preserves a bounded execution-memory block based on actual tool
+observations. Earlier message JSON is also saved as an output artifact. Automatic
+compaction can fall back to quoted earlier instructions if summarization fails;
+manual compaction reports the failure instead.
+
+The session log appends a `compact` record rather than deleting its earlier
+records. Active context is rebuilt from that replacement history, while the UI
+can still replay earlier transcript content. JSON/Markdown session exports use
+active context, not the entire raw log. See [session formats](sessions.md#event-log-format).
+Usage counters are held in memory and reset on session switching; they are not
+restored as historical billing totals from JSONL.

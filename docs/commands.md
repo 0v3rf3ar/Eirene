@@ -98,3 +98,17 @@ Provider, model, and mode overrides apply to `-p` runs. Interactive launches use
 saved settings and their slash commands. `--json` does not make headless agent
 answers JSON. Headless prompts are task text, not an interactive slash-command
 interface. See [headless runs](headless.md) for output, exit codes, and limitations.
+
+## Argument parsing and saved settings
+
+Slash commands dispatch inside the interactive application; shell launch options
+are parsed before the UI starts. An installed plugin command expands guidance
+and starts an agent turn, while a built-in handler can update settings without
+a model request. Commands accepting paths can have their own parsing rules;
+`/sessions` uses shell-like argument splitting, so quote a path with spaces.
+
+There is no general `/config`, `/mcp add`, or `--config PATH` interface.
+Standalone servers and settings without an interactive control are declared in
+[config.json](config-file.md). Its reference maps commands to saved fields and
+explains process-local choices. Use [data layout](data-layout.md) to find the
+configuration, sessions, outputs, and installed bundles.

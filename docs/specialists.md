@@ -63,3 +63,18 @@ correct.
 Use read-only review passes for independent assessment, then request a specific
 fix in the main conversation or an authorized implementation pass. See
 [permissions](harness.md) and [review](review.md).
+
+## State and configuration of delegated passes
+
+A delegated managed task has its own session UUID and JSONL log in the same
+application data root. It shares the workspace and provider connection but gets
+fresh conversation context. A profile supplies additional task instructions;
+it does not define a separate API credential or paid model tier.
+
+The child receives the supplied prompt and enabled host/plugin guidance. Pass
+paths, revisions, exact requirements, and expected output in that prompt rather
+than assuming the parent transcript is visible. Its reported usage is combined
+with parent accounting during the live turn, while the saved child session is
+separate. Read-only children use Plan mode and cannot start imported executable
+integrations. See [config selection](config-file.md#provider-selection-and-credentials)
+and [session storage](data-layout.md#sessions-and-artifacts).

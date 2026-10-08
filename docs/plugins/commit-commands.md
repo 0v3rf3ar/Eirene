@@ -66,3 +66,16 @@ behavior. Embedded upstream shell snippets are performed through normal tools,
 with host-appropriate adaptations where necessary.
 
 Source: [Anthropic official plugins](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/commit-commands).
+
+## Configuration and Git state
+
+`plugins.commit-commands` controls command availability; this written bundle
+requires no executable hook trust or MCP grant. Git identity, remote URLs, and
+GitHub CLI authentication are external Git/gh configuration, not provider API
+keys in Eirene's file. A working model connection does not authenticate a push.
+
+The session stores requests and results, not a rollback transaction over Git.
+After a partial failure inspect both `git status` and the actual commit/remote
+state before repeating the workflow. See [config.json](../config-file.md),
+[session event records](../sessions.md#event-log-format), and
+[execution boundaries](../harness.md).

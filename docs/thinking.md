@@ -23,3 +23,14 @@ correctness, enlarge context, or enable tool calling in an unsupported model.
 The live status may display reasoning activity separately from the saved answer.
 For selecting models and diagnosing local service issues, see
 [providers](providers.md) and [troubleshooting](troubleshooting.md).
+
+## Stored field and provider rebuild
+
+The setting is `providers.ollama-local.think`, a boolean defaulting to true when
+absent. The command saves it and rebuilds the local provider with the current
+model, so later requests use the new option. This is independent of the hosted
+`ollama` connection and the top-level `max_tokens` setting.
+
+For a manual example and credential/base-URL lookup, see
+[provider configuration](config-file.md#provider-selection-and-credentials).
+Use a JSON boolean; a string such as `"false"` is truthy in the provider lookup.

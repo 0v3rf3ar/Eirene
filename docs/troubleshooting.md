@@ -87,3 +87,29 @@ Remove API keys, private URLs, conversation content, and other secrets before
 sharing logs or exports. Use the repository's [security policy](../SECURITY.md)
 for a security issue. Back up data before manually replacing configuration; do not
 remove the whole data directory just to repair one provider connection.
+
+## Configuration loads defaults unexpectedly
+
+Confirm `EIRENE_HOME` and the config path for the process you launched. A wrong
+root can resemble a lost provider because each root has its own preferences.
+Malformed JSON or a top-level array is copied best-effort to `config.json.bak`
+and defaults are loaded. Preserve the original and backup before the next save;
+check syntax, then restore an object with the settings you need. A file access
+error is a different failure and raises a configuration error.
+
+Some values are deliberately normalized: full access is not restored, backend
+selection becomes `auto`, integers are clamped, and wrong top-level object types
+become empty maps. Nested fields are not all validated. The
+[full config reference](config-file.md) explains these cases and boolean-string
+pitfalls. Use [data layout](data-layout.md) to recover individual state files
+without deleting unrelated history.
+
+## Runtime log format
+
+Each line in `logs/eirene.jsonl` has UTC `ts`, `level`, `event`, and `logger`, with
+additional event-specific fields such as `session_id`, duration, or token counts.
+Exception events can include a traceback. Rotation uses `log_max_bytes` and
+`log_backups`; `.1` is the newest rotated log. Debug logging is configured through
+`log_level`, not a general `/debug` command. A session event log and a runtime
+log serve different purposes; include the relevant error rather than assuming
+one contains all content from the other.

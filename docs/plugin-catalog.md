@@ -52,3 +52,22 @@ See [plugin management](plugins.md) for installation, updates, and activation,
 [MCP](mcp.md) for external tool servers, and [specialists](specialists.md) for
 independent task passes. Tool-less providers cannot execute these workflows;
 provider-neutral guidance does not remove a provider's actual capability limits.
+
+## Shortcut resolution and installed names
+
+Catalog names resolve to source declarations; they are not package-manager
+commands or automatic dependency installers. Most shortcuts fetch GitHub content,
+while `omniroute` generates a local adapter without cloning/installing the gateway.
+The imported manifest determines the installed identity, which can differ from
+the shortcut, as with `anthropic-skills` → `skills`.
+
+The installer records the catalog shortcut in the normalized index so inspect
+and management can find that installed bundle. Saved preference keys use the
+installed name. Read [plugin formats](plugins.md#local-bundle-format),
+[config activation maps](config-file.md#skill-and-plugin-maps), and
+[data layout](data-layout.md) when editing installed declarations.
+
+A repository containing server source code is not necessarily an importable
+plugin bundle. Use [standalone MCP declarations](mcp.md#declare-a-standalone-server)
+for a server executable. Build and install its runtime dependencies separately
+according to the server's own instructions.

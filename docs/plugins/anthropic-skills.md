@@ -81,3 +81,18 @@ The standalone [Frontend Design](frontend-design.md) bundle overlaps with
 unneeded skills in `/skills` to keep guidance focused.
 
 Source: [anthropics/skills](https://github.com/anthropics/skills).
+
+## Installed identity and per-skill loading
+
+The catalog shortcut `anthropic-skills` can differ from the imported manifest
+name `skills`. Configuration keys use the installed identity: `plugins.skills`
+and individual IDs such as `skills:docx`. The inspector accepts the catalog
+shortcut for lookup; the built-in `/skills` command still takes precedence over
+a plugin alias with the same name.
+
+Support files are retained under `plugins/skills/`. On managed tool-capable
+providers the model loads the selected skill, then can read relevant resources
+with `load_plugin_resource`; importing does not execute its Python/Node scripts.
+Relative resource paths stay inside the installed bundle. For parsing/loading
+budgets see [skills](../skills.md#discovery-identifiers-and-parsing-limits), and
+for stored preferences see [config.json](../config-file.md#skill-and-plugin-maps).

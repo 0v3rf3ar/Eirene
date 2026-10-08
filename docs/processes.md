@@ -75,3 +75,21 @@ Ask for a longer deadline when a legitimate task needs it; explicit command
 timeouts can be as long as 24 hours. A timeout stops the command and is a failed
 or incomplete check, not a passed result. Headless prompts and scheduled tasks
 also have a separate overall run timeout; see [headless](headless.md).
+
+## Output files and process identity
+
+Saved output uses `outputs/ARTIFACT_ID.txt` under the application data root.
+The ID is 32 hexadecimal characters and can appear on a tool-result record as
+`artifact_id`. It is not an arbitrary path supplied by the model. Artifact reads
+use byte offsets; continuation instructions provide the next offset so UTF-8
+text can be paged without treating a character count as a byte position.
+
+The writer caps retained content at 20000000 bytes plus a truncation marker.
+The output setting, UI preview, model context budget, and artifact capacity are
+separate limits. Raising `max_output_bytes` does not increase the artifact cap.
+See [config limits](config-file.md#numeric-limits) and [storage layout](data-layout.md).
+
+A managed process ID refers to live application state, whereas an artifact ID
+refers to a stored output file. Resuming a conversation can restore the output
+reference but cannot recreate a process that exited with the earlier application.
+Use an external terminal/service manager for processes meant to outlive Eirene.

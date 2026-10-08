@@ -67,3 +67,26 @@ For simple rendered-page checks without an MCP plugin, use the
 
 Sources: [catalog bundle](https://github.com/anthropics/claude-plugins-official/tree/main/external_plugins/playwright),
 [Playwright MCP](https://github.com/microsoft/playwright-mcp).
+
+## Adapter fields and cache paths
+
+The recognized standard declaration is marked internally as the `playwright`
+adapter. On binding, Eirene sets default environment values:
+
+| Variable | Default value |
+| --- | --- |
+| `XDG_CACHE_HOME` | `EIRENE_HOME/plugin-data/playwright/mcp` |
+| `npm_config_cache` | the same MCP data directory |
+| `PLAYWRIGHT_BROWSERS_PATH` | that directory's `browsers/` subdirectory |
+
+Explicit manifest environment values win because binding uses defaults only when
+absent. The MCP data directory is created and added to `write_paths`; the resolved
+launcher's parent is added to `read_paths`. The adapter only matches the standard
+upstream argv, so changing the launcher can change these automatic grants.
+
+The source declaration is copied to `plugins/playwright/`, and
+`.eirene-plugin.json` is its normalized index. Edit the installed source and run
+`/plugins refresh playwright` before reenabling the changed server. See
+[plugin format](../plugins.md#local-bundle-format),
+[MCP fields](../config-file.md#standalone-mcp-declarations), and
+[data layout](../data-layout.md) for the exact storage/grant distinctions.

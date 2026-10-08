@@ -119,3 +119,24 @@ If this works, installation succeeded and PATH needs refreshing. Open a new
 terminal or follow the installer's printed recovery instructions. See
 [troubleshooting](troubleshooting.md) for platform and permission errors, and
 [updates](updates.md) for replacing an existing release.
+
+## Running the Python source tree
+
+The package requires Python 3.11 or newer. From a checkout, create an isolated
+Python environment, install the package, then launch its module:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m eirene -C /absolute/path/to/project
+```
+
+On Windows, use `py -3 -m venv .venv` and `.venv/Scripts/python.exe` for the
+remaining commands. Runtime dependencies are declared in `pyproject.toml`.
+A standalone release bundles its Python runtime; a source installation uses the
+interpreter/environment you chose. Neither supplies project compilers or MCP
+server dependencies. `/update` does not update an editable Python checkout.
+
+The command wrapper, source checkout, and data directory are separate. See
+[data layout](data-layout.md) for their structure and [config.json](config-file.md)
+for persistence and an alternate `EIRENE_HOME`.

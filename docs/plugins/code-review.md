@@ -54,3 +54,16 @@ Use [built-in review](../review.md) for working-tree checks or
 focused concerns.
 
 Source: [Anthropic official plugins](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/code-review).
+
+## Command execution and saved state
+
+The namespaced command loads installed Markdown and starts a normal agent turn.
+It does not force the built-in review command's temporary Plan-mode boundary.
+Select Plan mode and explicitly request local read-only findings when that is
+your required scope; posting through `gh` needs a normal authorized execution.
+
+Bundle enablement is `plugins.code-review`; a command's upstream model/allowed-tool
+metadata does not override Eirene's provider or access checks. Findings are part
+of the active session. Independent passes have separate child contexts/sessions;
+see [specialist state](../specialists.md#state-and-configuration-of-delegated-passes)
+and [config maps](../config-file.md#skill-and-plugin-maps).

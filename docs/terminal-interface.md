@@ -89,3 +89,16 @@ Linux may need `wl-clipboard` or `xclip` for system clipboard copying. Terminal
 clipboard integration and host utilities affect whether the copy reaches your
 desktop clipboard. `/theme`, `--no-color`, and `--reduce-motion` control display;
 see [appearance](appearance.md).
+
+## Displayed history versus active model context
+
+The transcript can replay the original event log after compaction, while the
+model sees the replacement summary and retained recent messages. Expanding a tool
+block changes its presentation; it does not automatically resend all artifact
+bytes to the model. Request a bounded output read when those details matter.
+
+Output artifacts, session logs, and live process records have separate identities.
+The [session schema](sessions.md#event-log-format) and [data layout](data-layout.md)
+explain which state survives restart. Theme/notification/suggestion choices are
+saved in [config.json](config-file.md), whereas an unfinished composer draft or
+live native CLI thread is not a project snapshot.

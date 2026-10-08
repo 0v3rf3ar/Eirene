@@ -77,3 +77,63 @@ Session files live under `~/.local/eirene/sessions` by default, or beneath
 `EIRENE_HOME` when you select another data directory. `/exit` and Ctrl+D leave the
 application and stop its managed processes. See [configuration](configuration.md)
 for data backup locations.
+
+## Event log format
+
+The on-disk log is `sessions/SESSION_UUID.jsonl`, schema version 2. Every line is
+an independent JSON object with a `t` discriminator and usually a numeric `ts`
+Unix timestamp. It is different from the object returned by JSON export.
+
+```json
+{"t":"meta","schema":2,"id":"SESSION_UUID","name":"Example","sandbox":"/absolute/project","started":1700000000.0,"ts":1700000000.0}
+{"t":"user","content":"Explain the importer","ts":1700000001.0}
+{"t":"assistant","content":"The importer validates each row.","ts":1700000002.0}
+```
+
+| Record | Fields and purpose |
+| --- | --- |
+| `meta` | `schema`, `id`, `name`, `sandbox`, `started`; initial session identity and workspace. |
+| `user` | `content`, optional `attachments`; user input. |
+| `assistant` | `content`, optional `tool_calls` and `thinking`; response and requested tools. |
+| `tool_result` | `tool_call_id`, `name`, `content`, `is_error`, `seconds`, `artifact_id`; result associated with a call. |
+| `rename` | `name`; later title, independent of the filename. |
+| `compact` | `summary`, `messages`; replacement active context. Earlier lines remain in the log. |
+| `provider_tool` | Native CLI activity, with `id`, `name`, `finished`, result/error/artifact metadata. |
+| Other notes | `tool_state`, `permissions`, `guard`, `cancelled`, `error`, `turn_status`, and headless/recovery events; diagnostics rather than chat messages. |
+
+The reader skips blank, malformed, and non-object lines. Reopening a log whose
+last line has no newline inserts one before appending, so a torn record does not
+swallow the next record. This supports partial recovery, not a guarantee that
+missing records can be reconstructed. Writes are flushed; assistant, tool-state,
+tool-result, compaction, and native tool records also sync the file.
+
+Resume rebuilds active messages by applying `compact` records. The transcript
+can replay the earlier messages without applying compaction, so visible history
+and the model's current context can differ. Pending tool calls are repaired with
+an unknown-outcome result; they are not executed merely by replaying the log.
+Inspect current state before requesting a repeated action.
+
+## Search, export, and import details
+
+Picker listing uses newest file modification time first, with a default recent
+list limit of 50. Search examines up to 500 recent workspace sessions, matches
+normalized case-insensitive substrings in titles and user/assistant content,
+and returns at most 20 results with up to two short snippets. It is not a
+full-text database over every tool artifact.
+
+JSON export has `schema`, `id`, `name`, `sandbox`, and `messages`. It exports the
+replayed active context, so after compaction it is not an archive of every raw
+record. Markdown export also uses active messages. Neither export copies the
+artifact files, the plan file, provider credentials, or the project itself.
+Keep the raw log and referenced outputs when you need a full archive.
+
+Import assigns a new session UUID and the current workspace; the exported ID
+and original workspace are not reused as storage identity. Supported message
+roles are user, assistant, and tool. Notes, original log timestamps, and native
+CLI execution state are not restored as executable state. A bare `.jsonl` file
+is not an importable JSON export.
+
+Switching sessions resets the in-memory usage accumulator and native provider
+thread state. Historical token totals are not reconstructed from the log, so
+`/usage` after a switch is not lifetime billing for that conversation. See
+[data layout](data-layout.md) for backup paths and artifact relationships.

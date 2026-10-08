@@ -121,3 +121,24 @@ Subscription credentials remain with the external CLI.
 A rejected key, exhausted quota, inaccessible model, or unsupported endpoint must
 be resolved with the provider. Switching models does not increase an account's
 quota. See [troubleshooting](troubleshooting.md) for connection and retry behavior.
+
+## Saved connection structure and runtime ownership
+
+`provider` and `model` select the active conversation connection.
+`providers.CANONICAL_NAME` stores that connection's `base_url`, remembered
+`model`, and either `api_key` or `api_key_ref`. The exact lookup order and a
+complete example are in the [config file reference](config-file.md#provider-selection-and-credentials).
+API key environment overrides do not replace the API root or model selection.
+
+Eirene-managed providers use the tool schemas and permission checks implemented
+in this repository. The Codex bridge uses its app-server protocol; the Claude
+Code bridge uses the installed CLI's streamed output. Native connections own
+context and tool execution, so Eirene passes enabled stdio declarations and
+policy through those interfaces rather than running its own tool loop for them.
+Changing providers can therefore change which tool features and limits apply.
+
+The bundled model lists in `providers/registry.py` are fallback identifiers, not
+a guarantee of current account access. Live discovery and connection validation
+are the relevant checks for your endpoint. Both hosted and local Ollama are
+constructed with a timeout of at least 600 seconds, regardless of a lower global
+`request_timeout`. Other deadlines remain independent; see [config numeric limits](config-file.md#numeric-limits).

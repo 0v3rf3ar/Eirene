@@ -54,3 +54,18 @@ Fix the first finding, add a regression test, and leave the unrelated cleanup al
 Plugin commands follow their own written workflow and can include edits or
 external actions. The built-in `/review` read-only behavior does not automatically
 apply to every plugin command. State the scope you want before invoking one.
+
+## Revision semantics and mode restoration
+
+The built-in handler temporarily sets the agent to Plan mode and restores the
+previous mode when the review finishes. Its initial requested commands are
+`git status --short`, `git diff`, and `git diff --cached`, or `git diff BASE`
+when a base is supplied. This is a comparison with the specified revision,
+not an automatic merge-base/three-dot comparison.
+
+Untracked files do not appear in ordinary `git diff`; mention relevant new files
+explicitly when they must be included in the review. Base arguments are restricted
+to a revision-like character set, rather than accepted as arbitrary shell text.
+A review's observations are recorded as a turn in the active session. Runtime
+limits still come from [configuration](config-file.md), and tests needing writes
+or arbitrary execution can be unavailable in this read-only pass.

@@ -52,3 +52,19 @@ instead of an in-place update.
 upstream changes. Eirene has no automatic plugin upgrade or removal slash command.
 See [plugin management](plugins.md) for safely replacing a bundle and reactivating
 its executable capabilities.
+
+## Verification and staging files
+
+The in-application updater requires a matching platform archive and `SHA256SUMS`
+from the release. It verifies the archive hash, extracts a unique bounded
+executable, and smoke-tests its `--version` output before staging it under
+`EIRENE_HOME/updates/`. Verification failure leaves the installed executable
+unchanged. This flow differs from the POSIX installer script's verification.
+
+A frozen POSIX executable is copied to a temporary file beside the installation
+and replaced atomically. Windows uses a helper to wait for the target to unlock
+and preserves a `.previous.exe` backup for recovery. A Python source run only
+downloads/verifies the standalone binary; it does not replace the interpreter or
+update the checkout. Startup checks are controlled by
+[configuration](config-file.md#modes-access-and-interface); staging data is listed
+in [data layout](data-layout.md).

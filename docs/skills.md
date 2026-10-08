@@ -71,3 +71,23 @@ and dependencies still need the normal environment and approvals.
 See [plugins](plugins.md) for installation, [Anthropic Skills](plugins/anthropic-skills.md)
 for document workflows, and [Superpowers](plugins/superpowers.md) for engineering
 workflows. Put project-specific rules in [project instructions](project-instructions.md).
+
+## Discovery identifiers and parsing limits
+
+Local discovery checks `skills/*.md` and `skills/*/SKILL.md`; it does not recurse
+through arbitrarily deep local directories. Flat-file IDs use the filename
+stem, and directory skill IDs use the parent directory name. Plugin skill IDs
+add `plugin:`. These IDs are the keys of the `skills` activation map in
+[config.json](config-file.md#skill-and-plugin-maps); the display title can differ.
+
+The front-matter parser reads simple `key: value` pairs and folded/indented
+continuation text. It does not implement a general YAML schema. `name` determines
+the title and `description` the summary; absent values fall back to the first
+heading and first usable body line. Approximate size is file bytes divided by
+four, not a tokenizer measurement.
+
+A loaded body is bounded to 60000 characters. Inline guidance has a 24000-character
+body budget and lists deferred skills with their paths. Tool-capable managed
+models instead receive a catalog and can request `load_skill`. Discovery does
+not install dependencies or execute support scripts. First launch does not copy
+the example files from the source `skills/` directory into your data directory.

@@ -69,3 +69,18 @@ For a local read-only review without plugins, use [built-in `/review`](../review
 For the upstream GitHub commenting workflow, see [Code Review](code-review.md).
 
 Source: [Anthropic official plugins](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/pr-review-toolkit).
+
+## Profiles, aliases, and permissions
+
+`plugins.pr-review-toolkit` controls the installed bundle. Its agent profiles
+produce `agent-PROFILE` command suffixes and are indexed separately from skills.
+The root entry forwards to an installed `review-pr` command when present. Short
+aliases depend on all enabled plugins, so use the canonical namespaced command
+in saved procedures.
+
+`parallel` is workflow text interpreted by the agent; the managed delegation
+tool enforces its own batch/concurrency limits. A requested simplification edit
+changes which permissions the turn requires. See
+[delegation state](../specialists.md#state-and-configuration-of-delegated-passes),
+[plugin adaptation](../plugins.md#command-adaptation), and
+[config maps](../config-file.md#skill-and-plugin-maps).

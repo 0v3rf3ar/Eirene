@@ -16,7 +16,9 @@ an action or the [plugin catalog](plugin-catalog.md) to choose a workflow.
 | [Installation](installation.md) | Install, choose a version, configure PATH, and download manually. |
 | [Providers and models](providers.md) | Connect API, local, custom, and subscription providers. |
 | [Platform support](platforms.md) | Supported releases, shells, isolation, and OS requirements. |
-| [Configuration](configuration.md) | Settings, credentials, environment variables, and data locations. |
+| [Configuration](configuration.md) | Overview of settings, credentials and environment variables. |
+| [config.json reference](config-file.md) | Complete defaults, fields, nested schemas, validation, lookup order and examples. |
+| [Data layout and source structure](data-layout.md) | Filesystem trees, session/artifact identities, backups and source modules. |
 | [Updates](updates.md) | Check for releases and update an installation. |
 
 ## Work in a project
@@ -46,7 +48,7 @@ an action or the [plugin catalog](plugin-catalog.md) to choose a workflow.
 | [Skills](skills.md) | Add reusable Markdown guidance and control enabled skills. |
 | [Plugins](plugins.md) | Install bundles, inspect them, and manage their capabilities. |
 | [Plugin catalog](plugin-catalog.md) | Compare all 14 named installation shortcuts. |
-| [MCP servers](mcp.md) | Enable external tool servers and diagnose startup problems. |
+| [MCP servers](mcp.md) | Declare and enable stdio servers, understand protocol/grants and diagnose startup. |
 | [Specialist agents](specialists.md) | Use plugin profiles and request independent review passes. |
 | [Headless runs](headless.md) | Run one task from a shell or script. |
 | [Scheduled tasks](scheduling.md) | Create recurring work with your OS scheduler. |
@@ -70,3 +72,14 @@ an action or the [plugin catalog](plugin-catalog.md) to choose a workflow.
 Examples inside a `text` block are prompts or slash commands to enter in Eirene.
 Examples marked `sh` or `powershell` run in your terminal. Names such as
 `SESSION_ID`, `TASK_ID`, and `MODEL_NAME` are placeholders to replace.
+
+## Reading the technical references
+
+Start with [config.json](config-file.md) when editing settings by hand, and
+[data layout](data-layout.md) when inspecting saved state. Feature guides describe
+the corresponding command, stored schema, runtime dependencies, and limits.
+Examples with placeholder paths/model IDs require substitution; JSON fragments
+should be merged into the existing object rather than replacing unrelated fields.
+The implementation references in these guides identify the code responsible for
+the behavior. Remote plugin guides describe imported guidance; exact content can
+change with the upstream version you install.

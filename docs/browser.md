@@ -63,3 +63,22 @@ Ask Eirene to start the app as a managed process, then inspect its reported URL.
 Do not guess that a server started successfully or assume its default port was
 available. Ctrl+B lets you check output and stop it. See [running commands](processes.md)
 for service lifetime and temporary host-access grants.
+
+## Implementation limits and image encoding
+
+Built-in rendered inspection uses a discovered Chromium executable and a fresh
+temporary profile. Interaction uses the Chrome DevTools Protocol and can require
+the optional Python `websockets` dependency in a source installation. The core
+package declaration does not make every optional browser dependency available.
+The process is terminated and temporary profile discarded after the call.
+
+Rendered DOM is bounded to 120000 characters; interaction result text is bounded
+separately. File image reads identify PNG/JPEG/GIF/WebP by MIME type, reject files
+larger than 10000000 bytes, and base64-encode the image for the provider. The image
+bytes are sent to the selected model service when vision is used; a local path
+is not just a text-only reference. The managed MCP bridge serializes non-text
+blocks, so it does not guarantee native image rendering for every MCP result.
+
+Browser executable overrides are environment values set before launch, rather
+than a `config.json` browser-path field. See [configuration](configuration.md#environment-variables),
+[data layout](data-layout.md), and [Playwright adapter caches](plugins/playwright.md).

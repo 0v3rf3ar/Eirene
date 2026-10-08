@@ -45,3 +45,19 @@ Use [web research](web-search.md) for finding sources and reading public pages.
 Use [browser work](browser.md) when JavaScript, page interaction, or screenshots
 are needed. Use [MCP](mcp.md) for an installed service integration with its own
 tools and authorization, such as [OmniRoute management](omniroute.md).
+
+## Response bounds and redirect behavior
+
+The built-in request helper defaults to 30 seconds, sends the supplied body as
+encoded text, and converts header keys/values to strings. It follows HTTP
+redirects. The result starts with JSON metadata containing status, final URL,
+and response headers, followed by decoded body text.
+
+Downloads are bounded to 2000000 bytes and displayed response text to 120000
+characters. A truncation marker indicates partial content; a status code alone
+does not mean the full response was retained. This helper does not parse an
+application schema or retry a mutating operation as a transaction.
+
+This deadline is separate from provider `request_timeout` and MCP deadlines in
+[config.json](config-file.md#numeric-limits). HTTP helper output enters ordinary
+tool results and session storage; see [session formats](sessions.md#event-log-format).

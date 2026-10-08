@@ -77,3 +77,17 @@ Older upstream instructions may mention `/brainstorm`, `/write-plan`, or
 check `/help` for your installed version. Refresh does not fetch upstream updates.
 
 Source: [obra/superpowers](https://github.com/obra/superpowers).
+
+## Instruction and plan storage
+
+This bundle's skills are imported Markdown, with config IDs such as
+`superpowers:systematic-debugging`. `/skills` persists individual preferences;
+`plugins.superpowers` controls the whole bundle and
+`plugin_trust.superpowers` separately controls imported hooks. Missing skill and
+bundle preferences default to enabled, while missing hook trust does not.
+
+A skill-written design document belongs wherever that workflow writes it in the
+workspace. Eirene's structured plan is a separate hashed JSON file under `plans/`.
+A skill does not automatically synchronize those formats. Read the selected
+installed skill for its file paths; see [plan schema](../plans.md#stored-schema-and-validation)
+and [config activation maps](../config-file.md#skill-and-plugin-maps).

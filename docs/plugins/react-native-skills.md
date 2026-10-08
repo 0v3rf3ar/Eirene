@@ -47,3 +47,17 @@ For browser-based React/Next.js guidance, use
 [React Best Practices](react-best-practices.md).
 
 Source: [Vercel agent skills](https://github.com/vercel-labs/agent-skills/tree/main/skills/react-native-skills).
+
+## Host tooling and saved activation
+
+The skill ID is `react-native-skills:react-native-skills` and bundle activation
+is `plugins.react-native-skills`. The copied rules are instruction resources;
+Xcode, Android SDK, emulators and signing configuration are external host/project
+state. They are not stored as Eirene provider credentials or installed by the
+bundle importer.
+
+A delegated read-only pass can examine code but cannot acquire an interactive
+device environment by using a specialist profile. Specify which host/platform
+checks are available. See [platform runtime](../platforms.md),
+[resource import](../plugins.md#local-bundle-format), and
+[config activation](../config-file.md#skill-and-plugin-maps).

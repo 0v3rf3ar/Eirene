@@ -99,3 +99,22 @@ allowed tools does not override Eirene's permissions.
 
 See [plugins](plugins.md), [MCP servers](mcp.md), and the project's
 [security policy](../SECURITY.md) for related guidance.
+
+## Configuration and enforcement layers
+
+`mode` is the saved workflow preference. `permissions` and `execution_isolation`
+are normalized on config load; writing `full-access` or a legacy backend into
+JSON does not make a new process unrestricted. The [config reference](config-file.md#modes-access-and-interface)
+describes the stored fields. Permission commands modify the current process,
+while saved activation maps control which executable integrations are available.
+
+File tools resolve paths and enforce workspace containment in the application,
+including symlink resolution. Command tools apply the platform runtime boundary.
+Browser/HTTP helpers run in the application and request the appropriate network
+access. Native CLI connections forward policy to their own execution runtimes.
+These are distinct enforcement points, not one shell setting shared by all tools.
+
+An MCP declaration can expose additional paths and network to that server when
+manually activated. It does not change the global `isolate_network` preference.
+Read-only guidance and a service's own authorization are separate from process
+access; see [MCP runtime boundaries](mcp.md#runtime-and-grant-boundaries).

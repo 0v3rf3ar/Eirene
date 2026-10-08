@@ -71,3 +71,27 @@ finished. See [MCP](../mcp.md) and [code navigation](../code-navigation.md).
 
 Sources: [catalog bundle](https://github.com/anthropics/claude-plugins-official/tree/main/external_plugins/serena),
 [Serena user guide](https://oraios.github.io/serena/02-usage/020_running.html).
+
+## Adapter environment and project identity
+
+The recognized standard declaration is adapted to include `-p 3.13`,
+`--project-from-cwd`, and `--open-web-dashboard false`. Runtime binding supplies
+default cache/state environment values:
+
+| Variable | Default beneath `EIRENE_HOME/plugin-data/serena/mcp` |
+| --- | --- |
+| `XDG_CACHE_HOME` | the MCP directory itself |
+| `UV_CACHE_DIR` | the MCP directory itself |
+| `UV_PYTHON_INSTALL_DIR` | `python/` |
+| `SERENA_HOME` | `serena/` |
+
+Explicit declaration values win over these defaults. The adapter creates the
+MCP data directory and adds writable access, plus read access to the resolved
+launcher's parent. A custom launcher that does not match the recognized standard
+argv is not rewritten automatically.
+
+The working directory is the workspace supplied by Eirene. Serena's own project
+activation and memory are separate from Eirene's `projects/` cache and session
+UUID. For custom declarations or runtime paths, read
+[MCP fields](../config-file.md#standalone-mcp-declarations) and
+[plugin import/refresh](../plugins.md#local-bundle-format).

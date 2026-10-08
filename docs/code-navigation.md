@@ -65,3 +65,28 @@ A command still running is not a passed check. See [running commands](processes.
 for output and background work, [review](review.md) for a read-only second pass,
 and [project instructions](project-instructions.md) for recurring verification
 rules.
+
+## Text edits and diagnostic engines
+
+Exact-text editing fails when the old text is absent or occurs more than once
+without an explicit replace-all request. Include enough surrounding text to make
+a replacement unique. Identical old/new strings are rejected. File writes and
+replacements operate on the actual resolved workspace path.
+
+Built-in language diagnostics choose installed engines by file type:
+
+| Input | Diagnostic operation |
+| --- | --- |
+| JSON | Parse JSON in the application. |
+| Python | Compile source syntax without executing the module. |
+| JavaScript | `node --check`. |
+| TypeScript/TSX | `tsc --noEmit`; a root `tsconfig.json` uses the project configuration. |
+| C/C++ | Installed clang or gcc with `-fsyntax-only`. |
+| Go module | `go test -run ^$ ./...` to compile without running ordinary tests. |
+| Rust Cargo project | Offline `cargo check`, with a temporary target directory. |
+
+These operations have compiler-specific side effects and dependency needs. A
+missing engine reports unsupported diagnostics; it is not a clean result.
+Search/reference discovery uses bounded text and fixed native templates, not a
+persistent language-server index. [Serena](plugins/serena.md) supplies that separate
+integration. Settings affecting command limits are in [config.json](config-file.md#numeric-limits).

@@ -48,3 +48,33 @@ the current session plan while clearing the conversation.
 
 For a more structured design-to-implementation workflow, see
 [Superpowers](plugins/superpowers.md) and [Feature Dev](plugins/feature-dev.md).
+
+## Stored schema and validation
+
+Plan JSON contains `root`, `objective`, `steps`, `notes`, and a numeric Unix
+`updated` timestamp. Each step contains `text`, `status`, and `verification`:
+
+```json
+{
+  "root": "/absolute/path/to/project",
+  "objective": "Implement CSV export",
+  "steps": [
+    {"text": "Define exported columns", "status": "completed", "verification": "Reviewed the field mapping"},
+    {"text": "Implement endpoint", "status": "in_progress", "verification": ""}
+  ],
+  "notes": "Preserve the existing authorization rules",
+  "updated": 1700000000.0
+}
+```
+
+The allowed statuses are `pending`, `in_progress`, `completed`, and `blocked`.
+Updates accept at most 100 steps and at most one step in progress. Step text and
+verification are each truncated to 500 characters; text must not be empty.
+Setting a step in progress through the status operation returns any previous
+in-progress step to pending. Step indices are one-based.
+
+Plans are saved atomically under `plans/` using a hash of workspace/session
+identity, rather than a human-readable filename. The UI can clear a fully
+completed plan when refreshing it; use a separate project document when you need
+a permanent completion record. See [data layout](data-layout.md) for identities
+and [sessions](sessions.md) for the event log, which is a separate file.

@@ -92,3 +92,16 @@ open workspace -> connect -> inspect -> approve changes -> verify -> resume late
 For longer work, use [plans](plans.md). To add a reusable workflow, start with the
 [plugin catalog](plugin-catalog.md); installing a plugin does not automatically
 enable its executable hooks or external tool servers.
+
+## What is persisted during this sequence
+
+`/connect` and `/model` save active selection and provider-specific settings to
+`config.json`; mode selection is also saved. The first actual user message opens
+`sessions/UUID.jsonl`, recording the resolved workspace path and conversation.
+A plan and command-output artifacts use separate files. Opening the interface
+without submitting a task does not create an empty conversation log.
+
+The next launch reads saved configuration, but starts sandboxed even if an earlier
+process used full access. Resume restores history against the files that exist
+now. Read [config loading and defaults](config-file.md#loading-defaults-and-saves)
+and [data layout](data-layout.md) before moving or backing up an installation.

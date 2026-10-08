@@ -56,3 +56,15 @@ Use `/keybindings` or Ctrl+K for the shortcut list. Slash commands provide acces
 to the same controls without relying on clickable status elements. See
 [terminal interface](terminal-interface.md) for composing multiline prompts,
 copying text, and interrupting work.
+
+## Preference precedence
+
+`theme`, `reduce_motion`, and `accessible_icons` are saved in
+[config.json](config-file.md#modes-access-and-interface). A nonempty
+`EIRENE_REDUCE_MOTION` enables reduced motion; setting it to the string `0` does
+not disable the environment override. The launch flag can also enable it.
+`NO_COLOR`/`--no-color` affect rendering rather than changing the provider request.
+
+Display preferences do not restore the terminal's own font, background, clipboard
+utilities, or keybindings. The data directory is independent of terminal profiles;
+see [data layout](data-layout.md).

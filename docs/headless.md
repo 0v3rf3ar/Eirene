@@ -70,3 +70,21 @@ deadlines. Scheduled tasks support a stored per-run timeout.
 Managed processes are stopped when the headless run ends. Use
 [scheduled tasks](scheduling.md) for recurring work and [command reference](commands.md)
 for the complete launch options.
+
+## Configuration and lifecycle
+
+A headless process uses the same `EIRENE_HOME` lookup and config normalization as
+interactive use. `--provider` selects a connection; it does not accept an API key
+or create a new saved connection. Credential environment overrides and keyring
+references still apply. The exact selection order is in the
+[config reference](config-file.md#provider-selection-and-credentials).
+
+The runner creates a session UUID, persists the prompt and subsequent conversation
+as work begins, closes provider/MCP/managed-process resources, and closes the session.
+Output redirection is independent of the saved JSONL history. An incomplete
+run can still have persisted messages and project edits. Each task attempt is a
+new run; resume does not automatically attach `-p` to an earlier context.
+
+Set PATH and `EIRENE_HOME` explicitly in an external automation environment when
+its inherited environment differs from your terminal. See [data layout](data-layout.md)
+for saved state and [scheduling](scheduling.md#tasksjson-schema) for task records.

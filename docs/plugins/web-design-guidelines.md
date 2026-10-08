@@ -45,3 +45,16 @@ or [React Best Practices](react-best-practices.md) for performance-focused revie
 
 Sources: [skill bundle](https://github.com/vercel-labs/agent-skills/tree/main/skills/web-design-guidelines),
 [current guideline source](https://raw.githubusercontent.com/vercel-labs/web-interface-guidelines/main/command.md).
+
+## Installed guidance versus fetched rules
+
+The config skill ID is `web-design-guidelines:web-design-guidelines`; the bundle
+key is `plugins.web-design-guidelines`. The installed instruction file and its
+live guideline URL are separate inputs. Refreshing the bundle reindexes local
+files; fetching current guideline text happens during the requested audit.
+
+Record the source URL and concrete rules used in findings if you need to assess
+an audit later. A session retains the tool observations that were actually
+returned, subject to output/context bounds. See [web search limits](../web-search.md#cache-and-request-bounds),
+[session formats](../sessions.md#event-log-format), and
+[config.json](../config-file.md#skill-and-plugin-maps).

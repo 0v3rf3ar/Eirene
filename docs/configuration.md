@@ -80,7 +80,7 @@ shows its status and does not select a container or image.
 | `context_warning` | `60000` | Context warning/compaction budget input; actual model limits also matter. |
 | `model_context_limits` | `{}` | Explicit context limits by model identifier. |
 | `model_costs` | `{}` | Input/output USD per million token rates by model identifier. |
-| `request_timeout` | `300` | Provider request timeout in seconds; local Ollama uses at least 600 seconds. |
+| `request_timeout` | `300` | Provider request timeout in seconds; both Ollama connections use at least 600 seconds. |
 | `retry_attempts` | `12` | Retry attempts for eligible transient API failures, range 1–100. |
 | `max_iterations` | `0` | Agent iteration limit; zero means no configured cap. |
 
@@ -131,3 +131,16 @@ For installer-only variables, see [installation](installation.md). For plugin
 execution grants, use `/plugins`, `/plugins trust`, and `/mcp` rather than editing
 activation fields by guesswork. Scheduled-task environment fields are described
 in [scheduling](scheduling.md).
+
+## Full schema and storage references
+
+The [config.json reference](config-file.md) lists every built-in field, accepted
+numeric ranges, nested provider/credential objects, activation maps, tool hooks,
+and standalone MCP declarations. It also explains default overlay, migration,
+malformed-file recovery, atomic saves, and which settings are normalized rather
+than honored as written.
+
+Use [data layout and source structure](data-layout.md) to distinguish executable,
+workspace, and application data paths, identify session/output/plan files, and
+plan a backup or transfer. For a server that is not a plugin, follow
+[standalone MCP configuration](mcp.md#declare-a-standalone-server).
