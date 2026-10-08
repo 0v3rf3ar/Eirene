@@ -25,6 +25,7 @@ class Plugin:
     lifecycle: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     imported: bool = False
+    catalog_shortcut: str = ""
 
 
 def discover() -> list[Plugin]:
@@ -66,7 +67,7 @@ def discover() -> list[Plugin]:
                                 {str(k): v for k, v in servers.items() if isinstance(v, dict)},
                                 markdown("commands"), markdown("agents"),
                                 body.get("lifecycle", {}), body.get("warnings", []),
-                                bool(body.get("imported"))))
+                                bool(body.get("imported")), str(body.get("catalog_shortcut", ""))))
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             continue
     return found
@@ -92,15 +93,36 @@ def merged_hooks(config) -> dict[str, list[str]]:
     return merged
 
 
-def merged_mcp_servers(config) -> dict[str, dict[str, Any]]:
-    servers = config.get("mcp_servers", {})
-    merged = dict(servers) if isinstance(servers, dict) else {}
+def available_mcp_servers(config) -> dict[str, dict[str, Any]]:
+    """Installed declarations, including servers that have not been enabled."""
+    configured = config.get("mcp_servers", {})
+    servers = {name: {**definition, "_plugin": None, "_plugin_enabled": True}
+               for name, definition in configured.items() if isinstance(definition, dict)} if isinstance(configured, dict) else {}
     for plugin in discover():
-        if config.plugin_enabled(plugin.name) and executable_enabled(plugin, config):
-            for name, definition in plugin.mcp_servers.items():
-                merged.setdefault(f"{plugin.name}__{name}" if plugin.imported else name,
-                                  {**expand_definition(definition, plugin.path),
-                                   "read_paths": [str(plugin.path), *definition.get("read_paths", [])]})
+        for name, definition in plugin.mcp_servers.items():
+            definition = expand_definition(definition, plugin.path)
+            servers.setdefault(f"{plugin.name}__{name}" if plugin.imported else name,
+                {**definition, "read_paths": [str(plugin.path), *definition.get("read_paths", [])],
+                 "_plugin": plugin.name, "_plugin_enabled": config.plugin_enabled(plugin.name)})
+    return servers
+
+
+def merged_mcp_servers(config) -> dict[str, dict[str, Any]]:
+    """Only servers explicitly enabled through /mcp are executable."""
+    enabled = config.get("mcp_enabled", {})
+    merged = {}
+    for name, definition in available_mcp_servers(config).items():
+        if enabled.get(name) is not True or not definition["_plugin_enabled"]:
+            continue
+        owner = definition["_plugin"]
+        definition = {key: value for key, value in definition.items()
+                      if key not in {"_plugin", "_plugin_enabled"}}
+        if owner == "omniroute" and definition.get("eirene_provider") == "omniroute":
+            from .omniroute_mcp import bind
+            definition = bind(definition, config)
+        from .plugin_adapters import bind_mcp
+        definition = bind_mcp(definition, owner)
+        merged[name] = definition
     return merged
 
 

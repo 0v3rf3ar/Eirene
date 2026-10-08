@@ -24,15 +24,18 @@ async def run(app, args):
         available = bool(shutil.which("bwrap"))
         notes = ["No unsandboxed fallback.", "Requires Linux, bwrap, and permitted user namespaces."]
     external = getattr(app.agent.provider, "owns_context", False)
+    from ..core.permissions import full_access
+    full = full_access(app.config)
     styles = _styles(app)
     width = 64
     body = Text("╭─ sandbox " + "─" * (width - 10) + "─╮\n", style=styles["heading"])
-    rows = [("Runtime", "External CLI" if external else runtime),
-            ("Status", "Managed by provider" if external else "Installed" if available else "Unavailable"),
+    rows = [("Permissions", app.config.get("permissions", "sandboxed")),
+            ("Runtime", "External CLI" if external else "Host (no isolation)" if full else runtime),
+            ("Status", "Full access" if full else "Managed by provider" if external else "Installed" if available else "Unavailable"),
             ("Workspace", str(app.sandbox.root)),
             ("Edits", "Applied directly to your project"),
-            ("External paths", "Explicit approval required"),
-            ("Network", "Explicit approval required" if app.config.get("isolate_network", True) else "Enabled in configuration")]
+            ("External paths", "Allowed" if full else "Explicit approval required"),
+            ("Network", "Allowed" if full else "Explicit approval required" if app.config.get("isolate_network", True) else "Enabled in configuration")]
     for label, value in rows:
         line = Text(f"{label:<16}", style=styles["muted"])
         line.append(value, style=styles["value"])
@@ -40,6 +43,9 @@ async def run(app, args):
         _append_box_line(body, line, width, styles)
     _append_rule(body, width, styles)
     notes = (["External CLI owns its sandbox.", "Eirene forwards its approval requests."] if external else notes)
+    if full:
+        notes = ["Host access without approval; OS privileges still apply.", "Plan mode remains read-only."]
+    notes.append("Use /permissions to change access for this process.")
     for note in notes:
         _append_box_line(body, note, width, styles, styles["muted"])
     body.append("╰" + "─" * width + "╯", style=styles["frame"])

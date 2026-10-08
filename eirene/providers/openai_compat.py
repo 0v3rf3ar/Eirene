@@ -48,6 +48,8 @@ class OpenAICompatible(Provider):
         if self.name == "groq":
             payload["max_completion_tokens"] = payload.pop("max_tokens")
             payload["stream_options"] = {"include_usage": True}
+        if self.name == "omniroute":
+            payload["stream_options"] = {"include_usage": True}
         if tools and self.supports_tools:
             payload["tools"] = [{"type": "function", "function": spec} for spec in tools]
             payload["tool_choice"] = "auto"

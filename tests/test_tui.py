@@ -2437,7 +2437,11 @@ async def test_a_picker_without_descriptions_still_works(workdir):
         await context.__aexit__(None, None, None)
 
 
-async def test_skills_lists_the_shipped_examples(workdir):
+async def test_skills_lists_user_installed_examples(workdir):
+    import shutil
+    from eirene.core import skills, paths
+    for example in skills.examples_dir().glob("*.md"):
+        shutil.copy2(example, paths.skills_dir() / example.name)
     from eirene import commands
     from eirene.ui.skill_picker import SkillPickerScreen
     from eirene.ui.picker import Picker

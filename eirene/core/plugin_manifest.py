@@ -58,7 +58,7 @@ def normalize(root: Path, fallback: str) -> dict:
     commands = markdown("commands", ["commands"])
     agents = markdown("agents", ["agents"])
     if agents:
-        warnings.append("agent definitions are exposed as instruction commands; native subagent spawning is not emulated")
+        warnings.append("agent profiles use the selected provider/model through delegate_tasks; native CLIs use their own delegation tools")
     raw_hooks = body.get("hooks", "hooks/hooks.json")
     if isinstance(raw_hooks, str):
         hook_path = inside(root, raw_hooks)
@@ -112,7 +112,8 @@ def normalize(root: Path, fallback: str) -> dict:
     for feature in ("lspServers", "outputStyles"):
         if body.get(feature):
             warnings.append(f"{feature} requires a native host and is not imported")
-    return {"version": 1, "name": name, "description": str(body.get("description", "")),
+    from .plugin_adapters import adapt_manifest
+    return adapt_manifest({"version": 1, "name": name, "description": str(body.get("description", "")),
             "skills": skills, "commands": commands, "agents": agents,
             "lifecycle": lifecycle, "mcp_servers": mcp, "imported": True,
-            "warnings": warnings}
+            "warnings": warnings})

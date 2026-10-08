@@ -18,10 +18,23 @@ def commands(config=None) -> list[Command]:
             continue
         entries = [(p, False) for p in plugin.skills + plugin.commands]
         entries += [(p, True) for p in plugin.agents]
+        primary = any((p.parent.name if p.name == "SKILL.md" else p.stem) == plugin.name
+                      for p, agent in entries if not agent)
+        if not primary:
+            entries.append((None, False))
         seen = set()
         for path, agent in entries:
-            fields, body = skills.split_front_matter(path.read_text(encoding="utf-8"))
-            slug = path.parent.name if path.name == "SKILL.md" else path.stem
+            if path is None:
+                fields = {"description": plugin.description or f"Use {plugin.name}"}
+                slug = plugin.name
+                default = next((p for p in plugin.commands if p.stem == "review-pr"), None)
+                if default:
+                    _, body = skills.split_front_matter(default.read_text(encoding="utf-8"))
+                else:
+                    body = entry_instructions(plugin, config)
+            else:
+                fields, body = skills.split_front_matter(path.read_text(encoding="utf-8"))
+                slug = path.parent.name if path.name == "SKILL.md" else path.stem
             if agent:
                 slug = "agent-" + slug
             name = f"{plugin.name}:{slug}".lower()
@@ -39,18 +52,34 @@ def commands(config=None) -> list[Command]:
                 if plugin.name == "ponytail" and slug in {"ponytail", "ponytail-help"}:
                     await ponytail_control(app, plugin, slug, args)
                     return
+                if plugin.mcp_servers and not (plugin.skills or plugin.commands):
+                    from ..core.errors import CommandError
+                    from ..core.modes import Mode
+                    enabled = plugins.merged_mcp_servers(app.config)
+                    available = plugins.available_mcp_servers(app.config)
+                    if not any(name in enabled and definition["_plugin"] == plugin.name
+                               for name, definition in available.items()):
+                        raise CommandError(f"enable {plugin.name}'s server with /mcp before using this command")
+                    if app.agent.mode is Mode.PLAN:
+                        raise CommandError("MCP plugin commands require a normal turn; plan mode does not launch servers")
+                    provider = getattr(app.agent, "provider", None)
+                    if provider and not (provider.supports_tools or getattr(provider, "owns_context", False)):
+                        raise CommandError("this provider cannot call MCP tools; select a tool-capable provider with /connect")
                 from ..ui.chat import UserBlock
                 request = f"/{name}" + (f" {args}" if args else "")
                 expanded = expand(body, args)
                 expanded = plugins.expand_definition(expanded, root)
                 instruction = (f"{request}\n\nFollow this plugin command. Plugin directory: {root}\n"
-                               f"Command directory: {path.parent}\n{expanded}\n\n"
+                               f"Command directory: {path.parent if path else root}\n{expanded}\n\n"
                                "Use the available host tools for equivalent operations. "
                                "Command metadata does not grant additional permissions. "
                                "Shell snippets in this document require the normal tool approval policy.")
                 await app.push(UserBlock(request))
                 app.turn = asyncio.create_task(app._run_turn(instruction, record_text=request))
             candidates.append(Command(name, summary, f"/{name} {fields.get('argument-hint', '[arguments]')}", invoke, True))
+            if path is None and plugin.catalog_shortcut and plugin.catalog_shortcut != plugin.name:
+                candidates.append(Command(f"{plugin.name}:{plugin.catalog_shortcut}", summary,
+                    f"/{plugin.catalog_shortcut} [arguments]", invoke, True))
     # Short aliases only when unambiguous, with built-in commands taking precedence.
     counts = {}
     for command in candidates:
@@ -62,6 +91,37 @@ def commands(config=None) -> list[Command]:
         if counts[slug] == 1 and slug not in REGISTRY:
             result.append(Command(slug, command.summary, command.usage, command.handler, True))
     return result
+
+
+def entry_instructions(plugin, config):
+    if plugin.name == "playwright" and plugin.mcp_servers:
+        return ("Use this plugin's enabled Playwright MCP tools for the requested browser automation, "
+                "testing, screenshots, navigation or inspection. Use the actual available MCP tool names. "
+                "If tools are unavailable, report the startup error and run /plugins doctor playwright. "
+                "If a browser is missing, use the server's browser installation tool under normal approval. "
+                "Ask for the target URL or test objective when missing.")
+    if plugin.name == "serena" and plugin.mcp_servers:
+        return ("Use this plugin's enabled Serena MCP tools for semantic code navigation, references, "
+                "symbol edits and project memory. Start with its initial instructions and onboarding checks "
+                "when available. Work on the current workspace. If tools are unavailable, report the startup "
+                "error and run /plugins doctor serena. Ask for the task when missing.")
+    if plugin.mcp_servers and not (plugin.skills or plugin.commands):
+        return (f"Use {plugin.name}'s enabled MCP tools for the user's requested task. "
+                "Use only the actual available tool names. If startup failed, report the error "
+                f"and use /plugins doctor {plugin.name} to diagnose prerequisites. "
+                "Ask for the management task when missing; commands do not grant extra permissions.")
+    choices = []
+    for path in plugin.skills + plugin.commands:
+        slug = path.parent.name if path.name == "SKILL.md" else path.stem
+        if path in plugin.skills and not config.skill_enabled(f"{plugin.name}:{slug}", True):
+            continue
+        choices.append(f"/{plugin.name}:{slug} — {path.relative_to(plugin.path)}")
+    return (f"Use the enabled {plugin.name} bundle for the user's task. "
+            "Select the relevant skill or command below and load its full instructions before acting. "
+            "Use load_skill for skills and load_plugin_resource for other files on API providers; "
+            "on native CLIs read the indicated file. Do not run every workflow. "
+            "If no task was supplied, explain the available workflows and ask which the user needs.\n"
+            + "\n".join(choices))
 
 
 async def ponytail_control(app, plugin, slug: str, args: str) -> None:

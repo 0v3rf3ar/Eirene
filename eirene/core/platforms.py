@@ -54,21 +54,27 @@ class Host:
     gpu_memory_gb: float
     available: tuple[str, ...]
     missing: tuple[str, ...]
+    distribution: str = "unknown"
+    package_manager: str = "unknown"
 
     @classmethod
     def detect(cls) -> "Host":
         from ..providers.local_profile import _ram_gb, _gpu_vram_gb
         system = platform.system()
-        candidates = ("git", "rg", "node", "npm", "pytest", "cargo", "go")
+        candidates = ("git", "rg", "node", "npm", "pytest", "cargo", "go",
+                      "dnf", "dnf5", "apt-get", "yum", "pacman", "zypper", "apk",
+                      "brew", "winget", "sudo")
         candidates += (("pwsh", "powershell", "python", "py") if system == "Windows"
                        else ("python3", "find", "awk", "grep", "sed", "head", "tail", "base64", "make"))
         installed = tuple(name for name in candidates if shutil.which(name))
+        distribution, package_manager = detect_distribution(system, installed)
         selected_shell = ("PowerShell (powershell=true; shell=cmd for batch syntax)"
                           if system == "Windows" and {"pwsh", "powershell"} & set(installed)
                           else "cmd" if system == "Windows" else shell_name())
         return cls(system, selected_shell, platform.machine() or "unknown",
                    os.cpu_count() or 1, _ram_gb(), _gpu_vram_gb(), installed,
-                   tuple(name for name in candidates if name not in installed))
+                   tuple(name for name in candidates if name not in installed),
+                   distribution, package_manager)
 
     def hardware_line(self) -> str:
         gpu = f"~{self.gpu_memory_gb:g} GiB" if self.gpu_memory_gb else "unknown"
@@ -79,11 +85,20 @@ class Host:
         return "Host tools: " + (", ".join(self.available) or "none detected")
 
     def prompt_block(self) -> str:
-        return (self.hardware_line() + "\n" + self.tools_line() +
+        return (f"Environment preflight: {self.system}; "
+                f"distribution: {self.distribution}; shell: {self.shell}; "
+                f"system package manager: {self.package_manager}\n" +
+                self.hardware_line() + "\n" + self.tools_line() +
                 "\nAbsent from host PATH: " + (", ".join(self.missing) or "none") +
                 "\nThis startup inventory is already checked. Use native read/search tools "
                 "when a utility is absent; project-installed tools may differ. "
-                "Host installation does not imply sandbox access.")
+                "Host installation does not imply sandbox access.\n"
+                "Before any task action, use these verified environment facts. Before using "
+                "a tool not in this inventory, do a small read-only check of its availability "
+                "and relevant version/help or project configuration. Check only what the task "
+                "needs. Never guess the distribution or package manager from 'Linux'. "
+                "For system installations, use the detected system package manager; if unknown, "
+                "inspect the OS release and manager availability before choosing an install command.")
 
     def read_commands(self) -> str:
         """Only examples for this host, selected from installed utilities."""
@@ -125,3 +140,27 @@ class Host:
                 properties["shell"]["enum"] = choices
             result.append(spec)
         return result
+
+
+def detect_distribution(system: str, installed: tuple[str, ...]) -> tuple[str, str]:
+    """Read OS metadata locally; do not execute a package manager."""
+    if system != "Linux":
+        manager = "brew" if system == "Darwin" else "winget" if system == "Windows" else "unknown"
+        return system, manager if manager in installed else "unknown"
+    try:
+        release = platform.freedesktop_os_release()
+    except OSError:
+        return "unknown", "unknown"
+    distribution = release.get("PRETTY_NAME") or release.get("ID", "unknown")
+    families = [release.get("ID", ""), *release.get("ID_LIKE", "").split()]
+    managers = {
+        "fedora": ("dnf", "dnf5", "yum"), "rhel": ("dnf", "dnf5", "yum"),
+        "centos": ("dnf", "dnf5", "yum"), "debian": ("apt-get",),
+        "ubuntu": ("apt-get",), "arch": ("pacman",), "alpine": ("apk",),
+        "suse": ("zypper",), "opensuse": ("zypper",),
+    }
+    for family in families:
+        for manager in managers.get(family, ()):
+            if manager in installed:
+                return distribution, manager
+    return distribution, "unknown"

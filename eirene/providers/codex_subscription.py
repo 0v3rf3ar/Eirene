@@ -278,7 +278,7 @@ class CodexSubscription(Provider):
     def _thread_options(self, model: str, system: str = "") -> dict[str, Any]:
         policy = self._turn_policy()
         sandbox = policy.pop("sandboxPolicy")
-        legacy = "read-only" if sandbox["type"] == "readOnly" else "workspace-write"
+        legacy = {"readOnly": "read-only", "dangerFullAccess": "danger-full-access"}.get(sandbox["type"], "workspace-write")
         return {"model": model, "cwd": str(self.root), "sandbox": legacy,
                 "approvalPolicy": policy["approvalPolicy"],
                 "developerInstructions": system or None,
@@ -289,6 +289,8 @@ class CodexSubscription(Provider):
         if self.mode == "plan":
             return {"approvalPolicy": "never",
                     "sandboxPolicy": {"type": "readOnly"}}
+        if getattr(self, "permissions", "sandboxed") == "full-access":
+            return {"approvalPolicy": "never", "sandboxPolicy": {"type": "dangerFullAccess"}}
         if self.mode == "auto":
             return {"approvalPolicy": "on-request", "sandboxPolicy": {
                 "type": "workspaceWrite", "writableRoots": [str(self.root)],
@@ -298,6 +300,11 @@ class CodexSubscription(Provider):
         return {"approvalPolicy": "untrusted", "sandboxPolicy": {
             "type": "workspaceWrite", "writableRoots": [str(self.root)],
             "networkAccess": False}}
+
+    def set_permissions(self, level: str) -> None:
+        if getattr(self, "permissions", "sandboxed") != level:
+            self.reset_thread()
+        self.permissions = level
 
     async def _approve_request(self, message: dict[str, Any]) -> dict[str, Any]:
         method = str(message.get("method") or "")

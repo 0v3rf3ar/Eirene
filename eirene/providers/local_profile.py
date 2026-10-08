@@ -10,10 +10,12 @@ from pathlib import Path
 
 
 COMPACT_TOOLS = {
+    "request_full_access",
     "ask_user", "read_file", "list_dir", "glob", "search_text",
     "write_file", "edit_file", "apply_patch", "run_command", "web_search", "web_fetch",
     "read_output", "start_process", "poll_process", "stop_process", "list_processes",
 }
+PLUGIN_TOOLS = {"load_skill", "load_plugin_resource", "delegate_tasks", "plan_show", "plan_update", "plan_set_status"}
 BALANCED_TOOLS = COMPACT_TOOLS | {
     "read_image", "project_info",
     "language_diagnostics", "find_symbol", "find_references",
@@ -67,8 +69,14 @@ class LocalProfile:
     def tools(self, specs: list[dict] | None) -> list[dict] | None:
         if not specs or self.tier == "full":
             return specs
-        allowed = COMPACT_TOOLS if self.tier == "compact" else BALANCED_TOOLS
-        selected = [spec for spec in specs if spec.get("name") in allowed]
+        allowed = set(COMPACT_TOOLS if self.tier == "compact" else BALANCED_TOOLS)
+        if any(spec.get("name") in {"load_plugin_resource", "delegate_tasks"} for spec in specs):
+            allowed |= PLUGIN_TOOLS
+        else:
+            # The host only sends load_skill when an enabled skill exists.
+            allowed.add("load_skill")
+        selected = [spec for spec in specs if spec.get("name") in allowed
+                    or str(spec.get("name", "")).startswith("mcp__")]
         return selected or None
 
     def system(self, original: str) -> str:
@@ -89,15 +97,20 @@ class LocalProfile:
         if selected != "unknown":
             commands = selected
         facts = ""
-        for label in ("Hardware", "Host tools"):
+        for label in ("Environment preflight", "Hardware", "Host tools"):
             value = _field(original, label)
             if value != "unknown":
-                facts += f"{label}: {value[:160]}\n"
+                facts += f"{label}: {value[:240] if label == 'Environment preflight' else value[:160]}\n"
+        access = _field(original, "Permissions")
+        policy = ("Full access: host files/network/commands allowed; OS privileges apply."
+                  if access.startswith("full-access") and mode != "plan" else
+                  "Sandboxed: host approval or request_full_access grants access for this response; plan: reads only.")
         base = f"""You are Eirene. Use tools; be concise.
 Sandbox: {sandbox}
 OS: {host}
 Mode: {mode}
-{facts}Stay in sandbox. manual: approve writes/commands; plan: reads only.
+{facts}{policy}
+Use preflight facts first; check unknown tools with bounded read-only probes. Never guess a package manager.
 Use focused file/search tools; don't repeat calls.
 Reads: pattern/context, tail, offset/limit, byte_offset.
 Quote paths; retain errors and exit status.
@@ -112,6 +125,13 @@ Research: web_search; use passages; cite URLs.
             base += ("Prefer targeted reads and searches. Batch independent work. "
                      "After edits, run the narrowest useful verification. Ask through "
                      "ask_user only when a decision is essential.\n")
+        # Shorten generic host prose, never discard the user's active command,
+        # enabled skill routes, agent profiles or MCP instructions.
+        markers = ("Available skills (", "Current command instructions:",
+                   "Plugin lifecycle instructions (", "Plugin host tools:", "MCP server instructions:")
+        matches = [original.find(marker) for marker in markers if marker in original]
+        if matches:
+            base += "\n" + original[min(matches):].strip()
         return base
 
     @property

@@ -117,18 +117,19 @@ class ClaudeCode(Provider):
                 prompt = f"Prior Eirene conversation:\n{history}\n\nCurrent user request:\n{prompt}"
 
         native_windows = os.name == "nt"
-        if native_windows and self.mode != "plan":
+        full = getattr(self, "permissions", "sandboxed") == "full-access" and self.mode != "plan"
+        if native_windows and self.mode != "plan" and not full:
             reason = "Claude Code on native Windows has no kernel sandbox; this turn may run commands with your user account's filesystem and network access"
             if self.approve is None or await self.approve("native_execution", "Claude Code on Windows", "", reason) not in ("yes", "always"):
                 raise ProviderError("Native Windows Claude Code execution needs approval; use WSL2 for sandboxed execution")
-        gate = self.mode != "plan" and self.approve is not None
+        gate = self.mode != "plan" and self.approve is not None and not full
         asking = self.choose is not None
         broker = None
         args = ["-p", prompt, "--output-format", "stream-json",
                 "--verbose", "--include-partial-messages", "--model", model,
                 "--permission-mode", self._permission_mode(),
-                "--settings", json.dumps({"sandbox": {"enabled": not native_windows,
-                    "allowUnsandboxedCommands": native_windows, "failIfUnavailable": not native_windows}}),
+                "--settings", json.dumps({"sandbox": {"enabled": not native_windows and not full,
+                    "allowUnsandboxedCommands": self.approve is not None or native_windows or full, "failIfUnavailable": not native_windows and not full}}),
                 "--append-system-prompt", _system_prompt(system, asking)]
         if native_windows and self.mode == "plan":
             args.extend(["--disallowedTools", "Bash,PowerShell,Write,Edit,NotebookEdit"])
@@ -298,7 +299,14 @@ class ClaudeCode(Provider):
             yield event
 
     def _permission_mode(self) -> str:
+        if getattr(self, "permissions", "sandboxed") == "full-access" and self.mode != "plan":
+            return "bypassPermissions"
         return {"plan": "plan", "auto": "auto"}.get(self.mode, "manual")
+
+    def set_permissions(self, level: str) -> None:
+        if getattr(self, "permissions", "sandboxed") != level:
+            self.reset_thread()
+        self.permissions = level
 
     def reset_thread(self) -> None:
         self._session_id = ""

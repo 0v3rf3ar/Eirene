@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -180,29 +181,29 @@ def examples_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "skills"
 
 
-def seed() -> int:
-    """Copy the examples in on the first run only."""
+def remove_seeded_examples() -> int:
+    """Remove only unchanged copies left by the former first-run installer."""
     target = paths.skills_dir()
     marker = target / SEED_MARKER
     try:
-        target.mkdir(parents=True, exist_ok=True)
-        if marker.exists():
+        if marker.read_text(encoding="utf-8").strip() != "examples copied once; delete to get them again":
             return 0
-        marker.write_text("examples copied once; delete to get them again\n",
-                          encoding="utf-8")
-        if any(target.glob("*.md")):
-            return 0
-        source = examples_dir()
-        if not source.is_dir():
-            return 0
-        copied = 0
-        for path in sorted(source.glob("*.md")):
-            (target / path.name).write_text(
-                path.read_text(encoding="utf-8"), encoding="utf-8")
-            copied += 1
-        return copied
-    except OSError:
+    except (OSError, UnicodeError):
         return 0
+    original = {
+        "python-project.md": "636d81ec966512172a1968150b6311ac85f4728eebc0ae6c81c0105d527d6088",
+        "systemd-service.md": "926136e946b8b221bed386e27683a224b2d6b2281c6fcb73f5828c77b3a5af46",
+    }
+    removed = 0
+    for name, digest in original.items():
+        path = target / name
+        try:
+            if not path.is_symlink() and hashlib.sha256(path.read_text(encoding="utf-8").encode()).hexdigest() == digest:
+                path.unlink()
+                removed += 1
+        except (OSError, UnicodeError):
+            continue
+    return removed
 
 
 def apply_config(skills: list[Skill], config) -> list[Skill]:

@@ -15,9 +15,9 @@ from eirene.providers import base, registry
 from eirene.providers.base import Done, TextDelta
 from eirene.ui.chat import Block, NoticeBlock
 
-EXPECTED = {"help", "connect", "model", "schedule", "tasks", "exit", "usage", "plan", "plugins", "sessions",
+EXPECTED = {"mcp", "help", "connect", "model", "schedule", "tasks", "exit", "usage", "plan", "plugins", "sessions",
             "skills", "compact", "agents", "btw", "clear", "notification", "theme",
-            "review", "sandbox", "prompt-suggest", "keybindings", "search-api", "update"}
+            "review", "sandbox", "permissions", "prompt-suggest", "keybindings", "search-api", "update"}
 
 
 class Script:
@@ -809,6 +809,27 @@ async def test_the_theme_picker_opens_on_the_theme_in_use(workdir):
             assert highlighted == wanted, f"opened on {highlighted}, not {wanted}"
             await pilot.press("escape")
             await pilot.pause()
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_permissions_picker_selects_both_access_levels(workdir):
+    app, pilot, context = await start(workdir)
+    try:
+        for current, wanted in (("sandboxed", "full-access"), ("full-access", "sandboxed")):
+            app.prompt.value = "/permissions"
+            await pilot.press("enter")
+            for _ in range(40):
+                await pilot.pause()
+                if app.picker.waiting:
+                    break
+            assert app.picker.waiting
+            assert [row[0] for row in app.picker.options] == ["sandboxed", "full-access"]
+            assert app.picker.options[app.picker.index][0] == current
+            await pilot.press("down" if current == "sandboxed" else "up", "enter")
+            await pilot.pause()
+            assert app.config.get("permissions") == wanted
+            assert app.sandbox.full_access == (wanted == "full-access")
     finally:
         await context.__aexit__(None, None, None)
 

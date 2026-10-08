@@ -1,83 +1,81 @@
 # Platform support
 
-Eirene gives local/API models host-specific command guidance and passes native host guidance to Codex and Claude Code. File/search/edit tools keep the same schema on each host.
+[Documentation](README.md) / Platform support
 
-| Host | Commands | Isolation |
-| --- | --- | --- |
-| Linux | Bash with pipefail, sh fallback | Bubblewrap |
-| macOS | System Bash/sh, BSD utility guidance, BSD PTY launcher | sandbox-exec (required; no silent fallback) |
-| Windows | PowerShell when installed; shell=cmd for CMD; powershell=true remains supported | Each native command needs explicit approval; no kernel isolation backend |
+Eirene uses your operating system's shell and installed tools. Standalone
+release availability and command execution requirements are separate: installing
+the binary does not install your compiler, package manager, browser, or sandbox.
 
-PowerShell is launched without profiles, noninteractively, with UTF-8 output and error/exit-code propagation. Install pwsh or Windows PowerShell to use it. Windows plan mode permits fixed native read/search templates; native command execution cannot guarantee read-only behavior. Headless Windows commands requiring approval fail closed. Codex and Claude Code continue to own their native tools and permission policies. Native Windows Claude Code requires approval for each turn without kernel isolation; plan mode disables command and edit tools. Use WSL2 for Claude sandboxing.
+## Releases and command environments
 
-## Installer behavior
+| System | Standalone release | Command environment | Native execution boundary |
+| --- | --- | --- | --- |
+| Linux | AMD64, ARM64 | Bash, with POSIX sh fallback | Bubblewrap and permitted user namespaces |
+| macOS | Apple Silicon | System Bash/sh and macOS utilities | `sandbox-exec` / Seatbelt |
+| Windows | AMD64 | PowerShell; CMD available for CMD syntax | Explicit command approval; no kernel isolation backend |
 
-The installers show numbered steps, an embedded terminal rendering of the Eirene
-picture, and live archive-download progress. Redirected output stays plain; set
-`NO_COLOR=1` to disable colors. Small terminals omit the portrait.
+Paths and filenames follow the host's conventions. Eirene receives host guidance
+so it can choose installed utilities rather than assume every machine behaves
+like Linux. Commands start without ordinary shell profiles, so put required
+executables on the environment's PATH rather than relying on interactive aliases.
 
-The Bash installer uses `~/.local/bin` on Linux and macOS. It detects supported
-shells through PATH, the login shell (`SHELL`), and executable entries in
-`/etc/shells`, then saves PATH for each detected shell:
+## Linux
 
-| Shell | User configuration |
-| --- | --- |
-| Sh, Dash | `.profile` |
-| Bash | `.bashrc`, plus the first existing `.bash_profile` or `.bash_login`; otherwise `.profile`, with a new `.bash_profile` on macOS |
-| Zsh | `.zshrc` and `.zprofile`, respecting `ZDOTDIR` |
-| Fish | `fish/conf.d/eirene.fish`, respecting `XDG_CONFIG_HOME` |
-| Ksh | `.profile` and `.kshrc` |
-| Csh, Tcsh | `.cshrc`, `.tcshrc` respectively |
-| PowerShell | `powershell/profile.ps1` under the user configuration directory |
-| Nushell | `nushell/env.nu` under the user configuration directory |
+Sandboxed command execution needs `bwrap` and a system policy that permits user
+namespaces. If either is unavailable, Eirene reports the failure and does not
+silently execute without isolation. Install Bubblewrap through your distribution's
+package manager and check local namespace restrictions if `/sandbox` reports a
+problem. File inspection alone does not prove command isolation works.
 
-`.profile` is always configured as the POSIX login fallback. Existing profiles
-are backed up before modification; repeating installation does not add duplicate
-PATH lines. Custom shell wrappers and custom startup-file locations may need
-manual configuration.
+The command environment uses a private temporary directory and home. A dependency
+available only through your usual home configuration may need explicit access or
+project-local configuration.
 
-The installer sources `.bashrc` in an interactive child Bash and checks that
-`eirene` resolves to the installed executable from the original PATH. This check
-has a two-second deadline on Linux and macOS; a slow or failing profile produces
-a warning and a full-path launch command. The watchdog stops the verification
-shell and its child processes so profile startup cannot stall installation.
-A child process cannot update the terminal that launched it: run the printed
-`source` command to refresh that terminal, or open a new one.
+## macOS
 
-On Windows, the PowerShell installer uses `%LOCALAPPDATA%\Programs\eirene` and
-updates the persistent user PATH without administrator access. That user PATH
-applies to newly launched shells, including CMD and PowerShell. It also refreshes
-the current PowerShell process. Close and reopen terminal apps that still have an
-old PATH. Third-party shells that replace PATH may need their own configuration.
+Sandboxed execution requires the system `sandbox-exec` utility. Commands use
+macOS shell and BSD utility conventions. If Seatbelt cannot start, Eirene reports
+that failure instead of bypassing the boundary. Use a matching Apple Silicon
+release archive for standalone installation.
 
-On Linux and macOS, the PowerShell installer updates its `CurrentUserAllHosts`
-profile and runs the matching release's checksum-verified Bash installer in
-shell-configuration mode to configure other installed shells.
+## Windows
 
-Both installers support `EIRENE_INSTALL_DIR`, `EIRENE_VERSION`, and
-`EIRENE_NO_PATH=1`. The Bash installer downloads only the archive after resolving
-the release; it does not fetch or verify release checksums. The PowerShell
-installer retains checksum verification. Both check `--version` and `--help`
-before replacement, then run `--version` once through PATH (or by full path when
-PATH setup is disabled). They avoid repeating expensive binary startup checks.
-With PATH setup enabled, they also verify command discovery. Errors
-identify the failed phase; PATH failures leave a working executable and print
-recovery instructions. Close running Eirene processes before updating on Windows.
+Eirene selects PowerShell 7 or Windows PowerShell when available, then CMD as a
+fallback. Ask explicitly for CMD when a task requires batch syntax. PowerShell
+5.1 does not support Bash-style `&&`; dependent commands need host-appropriate
+exit-code checks.
 
-## Build on the target machine
+There is no native kernel isolation backend for arbitrary commands. They require
+explicit approval and run with your user account's filesystem and network access,
+unless you have explicitly enabled full access for this process. Headless runs
+cannot answer these approvals and fail closed. Plan mode uses portable file tools
+and validated fixed search/read operations rather than arbitrary shell scripts.
 
-Use Python 3.11+ and Git for tests. From the repository root:
+Claude Code on native Windows requires approval for each normal turn without
+kernel isolation. Plan mode disables its command and edit tools. A WSL2 setup
+uses the Linux environment and its separate installation requirements.
 
-- Linux/macOS: `python3 build.py`
-- Windows CMD or PowerShell: `py -3 build.py` (or `python build.py`)
-- `python bulid.py` is also accepted for compatibility with that spelling.
+## Shell profiles and PATH
 
-The script creates a separate build environment per OS/architecture, installs dependencies, runs tests, packages with PyInstaller, then checks --version and --help. Output is dist/eirene or dist/eirene.exe. Build on each target OS/architecture; PyInstaller does not cross-compile. Internet is needed to install build dependencies. Existing unrelated dist files are preserved. With dependencies already installed, --no-install uses the current Python environment without contacting package servers. --dist-dir PATH selects a writable output directory; --work-dir PATH selects the temporary packaging directory. Use --test-only to validate without packaging and --skip-tests only when tests have already passed.
+The Bash installer configures detected Sh/Dash, Bash, Zsh, Fish, Ksh, Csh/Tcsh,
+PowerShell, and Nushell profiles. It respects supported user configuration
+locations such as `ZDOTDIR` and `XDG_CONFIG_HOME`, backs up changed profiles, and
+avoids duplicate PATH entries on repeated installs. Custom shell wrappers or
+startup-file locations may need manual configuration.
 
-## Connections and animation
+Windows installation updates the persistent user PATH and the current PowerShell
+process. Other already-open terminal apps can retain their old PATH. Restart them
+if `eirene` is not found. See [installation](installation.md).
 
-Slow streams show a waiting status after 15 seconds without model events. Codex willRetry and Claude Code api_retry events keep the existing turn alive and show reconnect details. Retryable API failures before content/tool activity use up to 12 attempts by default (config: retry_attempts, 1–100), with exponential delays capped at 60 seconds; Retry-After may require a longer wait. Escape cancels waits. Authentication, quota, and other permanent errors stop immediately. Exhausting attempts means recovery was unsuccessful, not proof of a permanent outage. A stalled native CLI turn or partially delivered answer is not automatically replayed, because it may have executed tools.
+## Optional desktop tools
 
-Each turn randomly selects braille, orbit, or wave animation. Accessible icons and reduced motion use a static marker.
+System clipboard support may need `wl-clipboard` or `xclip` on Linux. Desktop
+notifications prefer `notify-send` on Linux, `terminal-notifier` or `osascript` on
+macOS, and PowerShell on Windows; the [notification guide](notifications.md)
+lists supported alternatives. Browser features need a supported installed
+Chromium-based browser or
+the dependencies of the selected browser plugin.
 
-Protocol references: [Codex app server](https://learn.chatgpt.com/docs/app-server), [OpenAI error codes](https://developers.openai.com/api/docs/guides/error-codes), [Claude sandbox platforms](https://code.claude.com/docs/en/sandboxing).
+Use `eirene --doctor --json` for environment facts, `/sandbox` for the current
+execution boundary, and `/plugins doctor` for plugin dependencies. The doctor
+report does not contact providers or prove their credentials work.

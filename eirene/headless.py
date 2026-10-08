@@ -94,6 +94,8 @@ def run_task(task_id: str) -> int:
 async def _drive(text: str, cwd: Path, provider_key: str, model: str,
                  mode: str, quiet: bool, task_timeout: int = TASK_TIMEOUT) -> int:
     paths.ensure_tree()
+    from .core.skills import remove_seeded_examples
+    remove_seeded_examples()
     config = Config.load()
     runtime_logging.configure(config)
     key = provider_key or config.provider or ""

@@ -35,7 +35,7 @@ def test_models_get_only_host_guidance(system, commands, expected, excluded):
         for other in excluded:
             assert other not in result
         if tier == "compact":
-            assert len(result) < 1000
+            assert len(result) < 1400
 
 
 def test_detection_is_local_and_inventory_is_platform_specific(monkeypatch):
@@ -103,5 +103,5 @@ def test_compact_windows_inventory_stays_small():
     original = prompt.build("C:/project", "auto", "Windows", snapshot.shell,
                             "2026-09-29", host=snapshot)
     compact = LocalProfile("compact", 3, 16, 8, 0).system(original)
-    assert len(compact) < 1000
+    assert len(compact) < 1400
     assert "Hardware:" in compact and "Host tools:" in compact

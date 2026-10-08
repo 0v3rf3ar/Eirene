@@ -7,9 +7,20 @@ from ..ui import art
 from . import register
 
 
-@register("agents", "change the mode (auto / manual / plan)", "/agents [mode]")
+@register("agents", "change mode or list plugin specialists", "/agents [auto|manual|plan|list]")
 async def run(app, args: str) -> None:
     wanted = args.strip().lower()
+    if wanted == "list":
+        from ..core.plugin_resources import agent_definitions
+        profiles = agent_definitions(app.config)
+        if not profiles:
+            app.say("no enabled plugin specialists; install feature-dev or pr-review-toolkit")
+            return
+        app.say("Plugin specialists (delegate_tasks uses these names):\n" + "\n".join(
+            f"{name} — {fields.get('description', '')[:240]}\n"
+            f"  /{plugin.name}:agent-{path.stem} [task]"
+            for name, (plugin, path, fields, _) in profiles.items()))
+        return
     if wanted:
         for mode in Mode:
             if mode.value.startswith(wanted):

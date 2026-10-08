@@ -34,11 +34,13 @@ DEFAULTS: dict[str, Any] = {
     "log_max_bytes": 2_000_000,
     "log_backups": 3,
     "execution_isolation": "auto",
+    "permissions": "sandboxed",
     "prompt_suggest": False,
     "isolate_network": True,
     "plugins": {},
     "hooks": {},
     "mcp_servers": {},
+    "mcp_enabled": {},
     "auto_compact": True,
     "model_context_limits": {},
     "model_costs": {},
@@ -81,7 +83,8 @@ class Config:
         return cls(merged, path)
 
     def save(self) -> None:
-        _atomic_write(self.path, self.data)
+        # Full access is an explicit process-local choice, never a startup default.
+        _atomic_write(self.path, {**self.data, "permissions": "sandboxed"})
 
     # generic access
 
@@ -243,7 +246,7 @@ def _merge_defaults(data: dict[str, Any]) -> dict[str, Any]:
         merged["providers"] = {}
     if not isinstance(merged.get("skills"), dict):
         merged["skills"] = {}
-    for key in ("plugins", "hooks", "mcp_servers", "model_context_limits", "model_costs", "search_api"):
+    for key in ("plugins", "hooks", "mcp_servers", "mcp_enabled", "model_context_limits", "model_costs", "search_api"):
         if not isinstance(merged.get(key), dict):
             merged[key] = {}
     merged["auto_compact"] = bool(merged.get("auto_compact", False))
@@ -254,6 +257,7 @@ def _merge_defaults(data: dict[str, Any]) -> dict[str, Any]:
     level = str(merged.get("log_level", "INFO")).upper()
     merged["log_level"] = level if level in VALID_LOG_LEVELS else "INFO"
     merged["execution_isolation"] = "auto"
+    merged["permissions"] = "sandboxed"
     merged.pop("container_image", None)
     store = str(merged.get("credential_store", "file")).lower()
     merged["credential_store"] = store if store in {"file", "keyring"} else "file"

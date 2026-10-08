@@ -37,6 +37,10 @@ async def run(app, args: str) -> None:
         token = await _ask_key(app, spec)
         if not token:
             return
+    elif spec.optional_key:
+        token = await _ask_key(app, spec, optional=True)
+        if token is None:
+            return
 
     app.say(f"checking {spec.label}…")
     try:
@@ -66,11 +70,16 @@ async def _pick(app, args: str) -> str:
     name = args.strip().rstrip("!")
     if name:
         try:
-            return providers.resolve_alias(name)
+            key = providers.resolve_alias(name)
+            if not providers.available(key):
+                raise CommandError("install the provider plugin first: /plugins install omniroute")
+            return key
         except ProviderError as exc:
             raise CommandError(str(exc)) from exc
     options = []
     for key in providers.ORDER:
+        if not providers.available(key):
+            continue
         spec = providers.SPECS[key]
         marks = []
         if app.config.api_key(key) or not spec.needs_key:
@@ -120,7 +129,7 @@ async def _switch(app, key: str) -> bool:
     return True
 
 
-async def _ask_key(app, spec) -> str:
+async def _ask_key(app, spec, *, optional=False) -> str | None:
     for attempt in range(3):
         label = f"{spec.label} API key"
         if spec.key_hint:
@@ -128,6 +137,8 @@ async def _ask_key(app, spec) -> str:
         raw = await app.ask_text(label, secret=True)
         if raw is None:
             app.say("cancelled")
+            return None
+        if optional and not raw.strip():
             return ""
         try:
             return providers.validate_key(spec.key, raw)
@@ -135,17 +146,19 @@ async def _ask_key(app, spec) -> str:
             remaining = 2 - attempt
             suffix = f", {remaining} tries left" if remaining else ""
             app.say(f"{exc.user_message()}{suffix}", "warn")
-    return ""
+    return None
 
 
 async def _ask_base_url(app, key: str, spec) -> str:
+    default = app.config.base_url(key) or spec.base_url
     for attempt in range(3):
-        raw = await app.ask_text(f"{spec.label} base URL (https://host/v1)")
+        hint = f"Enter for {default}" if default else "https://host/v1"
+        raw = await app.ask_text(f"{spec.label} base URL ({hint})")
         if raw is None:
             app.say("cancelled")
             return ""
         try:
-            return providers.validate_base_url(raw)
+            return providers.validate_base_url(raw or default)
         except ProviderError as exc:
             remaining = 2 - attempt
             suffix = f", {remaining} tries left" if remaining else ""

@@ -149,6 +149,8 @@ class Agent:
         self.session = session
         self.config = config
         self.sandbox = sandbox
+        from .permissions import full_access, isolation, isolate_network
+        self.sandbox.full_access = full_access(config)
         from ..tools.search import SearchService
         self.search_service = SearchService(config)
         from .platforms import Host
@@ -162,9 +164,11 @@ class Agent:
         self.approve: ApprovalFn | None = None
         self.choose: ChoiceFn | None = None
         self.always: set[str] = set()
+        self._temporary_permissions: str | None = None
+        self._temporary_access_started = 0.0
         self.project = project_mod.discover(self.sandbox.root)
-        definitions = {name: {**definition, "_isolation": config.get("execution_isolation", "auto"),
-                              "_isolate_network": config.get("isolate_network", True)}
+        definitions = {name: {**definition, "_isolation": isolation(config),
+                              "_isolate_network": isolate_network(config) and definition.get("network") is not True}
                        for name, definition in merged_mcp_servers(config).items()}
         self.mcp = MCPManager(definitions, self.sandbox.root)
         self.logger = get_logger()
@@ -174,9 +178,12 @@ class Agent:
         self.plugin_runtime = PluginRuntime(session.id)
         self._turn_instructions = ""
         self._mcp_definitions = merged_mcp_servers(config)
+        self._mcp_permissions = config.get("permissions", "sandboxed")
         self._scoped_seen: set[str] = set()
         self._tool_cache: dict[str, tuple[str, bool, str, int]] = {}
         self._work_revision = 0
+        self._delegation_depth = 0
+        self._delegated_usage = Usage()
 
     def steer(self, text: str) -> None:
         self.pending_input.append(text)
@@ -272,6 +279,13 @@ class Agent:
         if self._turn_instructions:
             extra += "\n\nCurrent command instructions:\n" + self._turn_instructions
         extra += "\n\n" + self.plugin_runtime.block(self.config)
+        from .plugin_resources import guidance
+        extra += "\n\n" + guidance(self.config, native=getattr(self.provider, "owns_context", False),
+                                   delegation=not self._delegation_depth)
+        if not getattr(self.provider, "owns_context", False):
+            instructions = getattr(self.mcp, "instruction_block", None)
+            if instructions:
+                extra += "\n\n" + instructions()
         return self._base_system_prompt() + extra
 
     def _base_system_prompt(self) -> str:
@@ -282,7 +296,9 @@ class Agent:
             # The CLI owns its tools and sandbox; contribute only host guidance
             # and enabled skills, without Eirene tool instructions.
             from .platforms import guidance
-            return guidance(native=True) + "\n\n" + skills_mod.inline_block(active_skills)
+            return (self.host.prompt_block() + "\n" + guidance(native=True, host=self.host)
+                    + "\n" + self._permission_guidance(native=True) + "\n\n"
+                    + skills_mod.inline_block(active_skills))
         self.project = project_mod.discover(self.sandbox.root)
         text = prompts.build(sandbox=str(self.sandbox.root), mode=self.mode.value,
                              os_name={"Darwin": "macOS"}.get(self.host.system, self.host.system),
@@ -296,13 +312,38 @@ class Agent:
         plan = plan_mod.load(self.sandbox.root, self.session.id)
         if plan.active:
             text = f"{text}\n\nDurable session plan:\n{plan.render()}"
-        return text
+        return text + "\n\n" + self._permission_guidance()
+
+    def _permission_guidance(self, *, native: bool = False) -> str:
+        from .permissions import full_access
+        if self.mode is Mode.PLAN:
+            return "Permissions: plan mode is read-only, regardless of access level."
+        if full_access(self.config):
+            return ("Permissions: full-access. Host file access, network and command execution "
+                    "are enabled without Eirene approval or command isolation. "
+                    "Perform authorized work; OS privileges still apply. Use sudo -n when needed. "
+                    + ("This approval lasts only until the current response finishes."
+                       if self._temporary_permissions is not None else ""))
+        request = ("Use the CLI's native command escalation/approval mechanism. " if native else
+                   "Request execution approval for host actions, or use request_full_access with a concrete reason. ")
+        return ("Permissions: sandboxed. " + request + "A yes grants temporary "
+                "full access until this response finishes, then sandboxing returns automatically. "
+                "System installation needs host access; approval must precede execution. "
+                "Do not substitute project dependencies for a requested system installation. "
+                "Do not ask for approval and then claim the tool was executed.")
 
     def tool_specs(self) -> list[dict[str, Any]] | None:
         if (not self.provider or getattr(self.provider, "owns_context", False)
                 or not self.provider.supports_tools):
             return None
         specs = tools.specs(include_exec=self.mode is not Mode.PLAN)
+        from .plugins import discover
+        if not any(self.config.plugin_enabled(plugin.name) for plugin in discover()):
+            specs = [spec for spec in specs if spec["name"] not in {"delegate_tasks", "load_plugin_resource"}]
+        if not any(skill.enabled for skill in self.skills):
+            specs = [spec for spec in specs if spec["name"] != "load_skill"]
+        if self._delegation_depth:
+            specs = [spec for spec in specs if spec["name"] != "delegate_tasks"]
         if self.mode is Mode.PLAN:
             specs.extend(spec for spec in tools.specs() if spec["name"] == "run_command")
         if self.mode is not Mode.PLAN:
@@ -313,17 +354,90 @@ class Agent:
 
     async def run(self, text: str, *, record_text: str | None = None
                   ) -> AsyncIterator[AgentEvent]:
+        """Keep approved host access inside this response's lifetime."""
+        stream = self._run(text, record_text=record_text)
+        try:
+            async for event in stream:
+                if isinstance(event, TurnDone):
+                    await self._revoke_turn_access()
+                yield event
+        finally:
+            try:
+                await stream.aclose()
+            finally:
+                await self._revoke_turn_access()
+
+    def _grant_turn_access(self) -> None:
+        from .permissions import full_access
+        if self.mode is Mode.PLAN or full_access(self.config):
+            return
+        self._temporary_permissions = self.config.get("permissions", "sandboxed")
+        self._temporary_access_started = time.monotonic()
+        self.config.set("permissions", "full-access")
+        self.sandbox.full_access = True
+        self.session.add_note("permissions", level="full-access", scope="turn")
+
+    async def _revoke_turn_access(self) -> None:
+        if self._temporary_permissions is None:
+            return
+        previous = self._temporary_permissions
+        self._temporary_permissions = None
+        self.config.set("permissions", previous)
+        self.sandbox.full_access = previous == "full-access"
+        self._tool_cache.clear()
+        from ..tools import processes
+        await processes.stop_owned(self.session.id, since=self._temporary_access_started)
+        if self._mcp_permissions == "full-access":
+            await self.mcp.close()
+        setter = getattr(self.provider, "set_permissions", None)
+        if setter:
+            setter(previous)
+        self.session.add_note("permissions", level=previous, scope="turn-ended")
+
+    async def _sync_mcp_permissions(self) -> None:
+        from .permissions import isolation, isolate_network
+        wanted = self.config.get("permissions", "sandboxed")
+        if wanted != self._mcp_permissions:
+            await self.mcp.close()
+            self._mcp_permissions = wanted
+            self.mcp = MCPManager({name: {**definition,
+                "_isolation": isolation(self.config),
+                "_isolate_network": isolate_network(self.config) and definition.get("network") is not True}
+                for name, definition in self._mcp_definitions.items()}, self.sandbox.root)
+            await self.mcp.ensure()
+
+    async def _approve_native(self, name, label, preview, reason):
+        from .permissions import full_access
+        if self.mode is Mode.PLAN:
+            return NO
+        if full_access(self.config):
+            return YES
+        if self.approve is None:
+            return NO
+        if self.mode is not Mode.PLAN:
+            reason = (reason + "; " if reason else "") + "Yes allows full host access until this response finishes; sandboxing then returns."
+        answer = await self.approve(name, label, preview, reason)
+        if answer in (YES, ALWAYS):
+            self._grant_turn_access()
+        # Native adapters must not translate this into a standing session grant.
+        return YES if answer == ALWAYS else answer
+
+    async def _run(self, text: str, *, record_text: str | None = None
+                   ) -> AsyncIterator[AgentEvent]:
         if not self.ready:
             yield Failed("no provider selected; run /connect")
             yield TurnDone(0.0, 0.0, Usage())
             return
         definitions = merged_mcp_servers(self.config)
-        if definitions != self._mcp_definitions:
+        permissions = self.config.get("permissions", "sandboxed")
+        if definitions != self._mcp_definitions or permissions != self._mcp_permissions:
+            from .permissions import isolation, isolate_network
             await self.mcp.close()
             self._mcp_definitions = definitions
+            self._mcp_permissions = permissions
             self.mcp = MCPManager({name: {**definition,
-                "_isolation": self.config.get("execution_isolation", "auto"),
-                "_isolate_network": self.config.get("isolate_network", True)}
+                "_isolation": isolation(self.config),
+                "_isolate_network": isolate_network(self.config) and definition.get("network") is not True}
                 for name, definition in definitions.items()}, self.sandbox.root)
         native_plugins = getattr(self.provider, "set_plugins", None)
         if native_plugins:
@@ -335,6 +449,7 @@ class Agent:
         self.session.repair_pending()
         self._consume_input()
         self._turn_instructions = text if record_text is not None and record_text != text else ""
+        self._delegated_usage = Usage()
         self.session.add_user(record_text if record_text is not None else text)
         self._tool_cache.clear()
         self._work_revision = 0
@@ -565,6 +680,8 @@ class Agent:
             self.logger.exception("turn.crashed", extra={"session_id": self.session.id})
 
         seconds = time.monotonic() - started
+        turn_usage.input_tokens += self._delegated_usage.input_tokens
+        turn_usage.output_tokens += self._delegated_usage.output_tokens
         self.usage.record(turn_usage.input_tokens, turn_usage.output_tokens,
                           seconds, self.model)
         self.logger.info("turn.finished", extra={"session_id": self.session.id,
@@ -670,7 +787,7 @@ class Agent:
                 async for event in self._stream_once():
                     if isinstance(event, (Notice, pbase.ConnectionStatus)):
                         waiting = True
-                    elif waiting:
+                    elif waiting and not isinstance(event, pbase.Usage):
                         yield Phase(ANSWERING if isinstance(event, TextDelta) else THINKING)
                         waiting = False
                     if not isinstance(event, (Notice, pbase.ConnectionStatus, pbase.Usage)):
@@ -711,8 +828,12 @@ class Agent:
         """One provider call."""
         assert self.provider is not None
         configure = getattr(self.provider, "set_context", None)
+        setter = getattr(self.provider, "set_permissions", None)
+        if setter:
+            setter(self.config.get("permissions", "sandboxed"))
         if configure:
-            configure(self.sandbox.root, self.mode.value, self.approve, self.choose)
+            configure(self.sandbox.root, self.mode.value,
+                      self._approve_native if self.approve is not None else None, self.choose)
         queue: asyncio.Queue = asyncio.Queue(maxsize=256)
         sentinel = object()
 
@@ -779,6 +900,11 @@ class Agent:
             async for event in self._ask_user(call):
                 yield event
             return
+        if call.name == "delegate_tasks":
+            if self._delegation_depth:
+                raise ToolError("delegated agents cannot start more agents")
+            from .delegation import validate_tasks
+            validate_tasks(call.arguments.get("tasks"), self.config)
         result_limit = min(await self._tool_output_limit(output_share), max(512, 12000 // output_share))
         is_mcp = self.mcp.owns(call.name)
         self.session.add_note("tool_state", call_id=call.id, tool=call.name, state="requested")
@@ -823,6 +949,10 @@ class Agent:
             return
         escape = ("external MCP tool requires explicit approval" if is_mcp else
                   tools.sandbox_escape(call.name, call.arguments, self.sandbox))
+        if call.name == "request_full_access":
+            if not str(call.arguments.get("reason", "")).strip():
+                raise ToolError("reason is required for temporary full access")
+            escape = "request temporary full host access: " + str(call.arguments.get("reason", ""))
         network_tools = {"web_search", "web_fetch", "http_request", "browser_inspect", "browser_interact", "browser_screenshot"}
         if call.name in network_tools and self.config.get("isolate_network", True):
             escape = escape or "this tool requires network access outside command isolation"
@@ -832,6 +962,11 @@ class Agent:
         if native_windows:
             escape = "Windows native execution has no kernel filesystem or network isolation; approve this command with your user account's access"
         verdict, reason = decide(self.mode, kind, escape)
+        from .permissions import full_access
+        unrestricted = full_access(self.config) and self.mode is not Mode.PLAN
+        self.sandbox.full_access = full_access(self.config)
+        if unrestricted:
+            verdict, reason = ALLOW, ""
         if native_windows and self.mode is Mode.PLAN:
             verdict, reason = BLOCK, "native Windows commands cannot enforce plan mode; use portable file/search tools"
         if verdict != BLOCK and not escape and tools.harmless(call.name, call.arguments):
@@ -857,6 +992,9 @@ class Agent:
 
         if verdict == ASK and (escape or call.name not in self.always):
             yield Phase(WAITING)
+            host_approval = self.mode is not Mode.PLAN
+            if host_approval:
+                reason = (reason + "; " if reason else "") + "Yes allows full host access until this response finishes; sandboxing then returns."
             answer = await self._ask(call, label, reason, preview)
             if answer == ALWAYS:
                 # "always" covers a tool, never a standing exit from the sandbox.
@@ -869,6 +1007,9 @@ class Agent:
                 yield ToolFinished(call.id, call.name, label, message, True, 0.0)
                 yield Notice(_ABORT)
                 return
+            if host_approval and self.approve is not None:
+                self._grant_turn_access()
+                unrestricted = full_access(self.config)
 
         yield Phase(RUNNING if kind == tools.EXEC else
                     (WRITING if kind == tools.WRITE else THINKING))
@@ -885,6 +1026,7 @@ class Agent:
             if before_hooks:
                 yield Notice(f"ran {len(before_hooks)} before-tool hook(s)", transient=True)
             if is_mcp:
+                await self._sync_mcp_permissions()
                 result = await self.mcp.call(call.name, call.arguments)
             else:
                 if call.name == "load_skill":
@@ -899,10 +1041,10 @@ class Agent:
                         timeout=float(self.config.get("shell_timeout", 120) or 120),
                         max_bytes=min(result_limit, int(self.config.get("max_output_bytes", 200_000) or 200_000)),
                         output=output,
-                        isolation="none" if native_windows else str(self.config.get("execution_isolation", "auto")),
-                        isolate_network=bool(self.config.get("isolate_network", True)) and call.name not in network_tools,
+                        isolation="none" if native_windows or unrestricted else str(self.config.get("execution_isolation", "auto")),
+                        isolate_network=not unrestricted and bool(self.config.get("isolate_network", True)) and call.name not in network_tools,
                         plan_scope=self.session.id,
-                        read_only=(self.mode is Mode.PLAN or kind == tools.READ) and not native_windows):
+                        read_only=(self.mode is Mode.PLAN or kind == tools.READ) and not native_windows and not unrestricted):
                         if isinstance(item, ToolOutput):
                             yield item
                         else:
@@ -1031,7 +1173,12 @@ class Agent:
 
         if name in {"web_search", "web_fetch"}:
             kwargs["search_service"] = self.search_service
-        task = asyncio.create_task(tools.execute(name, arguments, sandbox, on_output=feed, call_id=call.id, **kwargs))
+        if name == "delegate_tasks":
+            from .delegation import run_tasks
+            task = asyncio.create_task(run_tasks(self, arguments["tasks"], on_output=feed))
+        else:
+            task = asyncio.create_task(tools.execute(name, arguments, sandbox, on_output=feed,
+                call_id=call.id, config=self.config, **kwargs))
         try:
             while not task.done() or not queue.empty():
                 try:

@@ -267,7 +267,7 @@ async def test_an_approved_escape_actually_reaches_the_file(workdir, outside):
     assert not runner.sandbox.permitted(secret), "the sandbox must close again"
 
 
-async def test_always_never_becomes_a_standing_exit_from_the_sandbox(workdir, outside):
+async def test_host_approval_lasts_for_the_response_not_the_session(workdir, outside):
     first, second = outside / "one.txt", outside / "two.txt"
     provider = Script([ToolCall("c1", "write_file", {"path": str(first), "content": "a"}),
                        Done("tool_use")],
@@ -283,7 +283,9 @@ async def test_always_never_becomes_a_standing_exit_from_the_sandbox(workdir, ou
 
     runner.approve = approve
     await drive(runner)
-    assert len(asked) == 2, "each step outside must be approved on its own"
+    assert len(asked) == 1, "one host approval covers this response"
+    assert not runner.sandbox.contains(first), "full access ends with the response"
+    assert runner.config.get("permissions") == "sandboxed"
 
 
 async def test_tool_failure_is_reported_not_raised(workdir):

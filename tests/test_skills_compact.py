@@ -223,28 +223,27 @@ def test_the_examples_ship_with_the_source():
         assert body.strip(), f"{path.name} needs a body"
 
 
-def test_the_examples_are_copied_once(eirene_home):
-    from eirene.core import paths, skills as skills_mod
-
-    assert skills_mod.seed() >= 2
-    names = {p.name for p in paths.skills_dir().glob("*.md")}
-    assert "systemd-service.md" in names
-    assert "python-project.md" in names
-
-    assert skills_mod.seed() == 0, "the examples arrive once, not every run"
-    for path in paths.skills_dir().glob("*.md"):
-        path.unlink()
-    assert skills_mod.seed() == 0, "deleted skills stay deleted"
+def test_old_seeded_examples_are_removed_without_touching_custom_skills():
+    target = paths.skills_dir()
+    (target / skills.SEED_MARKER).write_text("examples copied once; delete to get them again\n")
+    for path in skills.examples_dir().glob("*.md"):
+        (target / path.name).write_text(path.read_text())
+    (target / "custom.md").write_text("# Custom\nUser instructions")
+    assert skills.remove_seeded_examples() == 2
+    assert {skill.name for skill in skills.discover()} == {"custom"}
+    assert skills.remove_seeded_examples() == 0
 
 
-def test_the_shipped_examples_describe_themselves(eirene_home):
-    from eirene.core import skills as skills_mod
-
-    skills_mod.seed()
-    found = {s.name: s for s in skills_mod.discover()}
-    assert "systemd" in found["systemd-service"].description.lower()
-    assert found["python-project"].description
-    assert all(s.title and s.description for s in found.values())
+def test_edited_or_manually_added_examples_are_preserved():
+    target = paths.skills_dir()
+    source = skills.examples_dir() / "python-project.md"
+    copied = target / source.name
+    copied.write_text(source.read_text())
+    assert skills.remove_seeded_examples() == 0
+    (target / skills.SEED_MARKER).write_text("examples copied once; delete to get them again\n")
+    copied.write_text(copied.read_text() + "\nMy custom rule")
+    assert skills.remove_seeded_examples() == 0
+    assert "My custom rule" in copied.read_text()
 
 
 async def test_local_compaction_bounds_summary_requests_and_preserves_latest(workdir):

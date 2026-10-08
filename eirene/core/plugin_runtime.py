@@ -1,5 +1,6 @@
 """Provider-independent lifecycle hooks with explicit executable trust."""
 from __future__ import annotations
+from .permissions import isolation, isolate_network
 
 import json
 import os
@@ -71,8 +72,8 @@ class PluginRuntime:
                         env=env, input_text=json.dumps({"session_id": self.session_id,
                             "cwd": str(sandbox.root), "hook_event_name": event,
                             "source": "startup", "prompt": prompt}),
-                        isolation=str(config.get("execution_isolation", "auto")),
-                        isolate_network=bool(config.get("isolate_network", True)),
+                        isolation=isolation(config),
+                        isolate_network=isolate_network(config),
                         read_paths=[str(plugin.path)], write_paths=[str(data), str(settings)])
                     if not result.ok:
                         raise ToolError(f"{plugin.name} {event} hook failed: {result.summary()}")
@@ -108,8 +109,8 @@ class PluginRuntime:
                             subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv),
                             sandbox.root, timeout=10, max_bytes=60_000,
                             env={"PLUGIN_ROOT": str(plugin.path), "EIRENE_PONYTAIL_MODE": mode},
-                            isolation=str(config.get("execution_isolation", "auto")),
-                            isolate_network=True, read_paths=[str(plugin.path)])
+                            isolation=isolation(config),
+                            isolate_network=isolate_network(config), read_paths=[str(plugin.path)])
                         if not result.ok:
                             raise ToolError(f"Ponytail rules could not load: {result.summary()}")
                         rules = result.output.strip()

@@ -11,6 +11,7 @@ from .base import Provider
 from .gemini import Gemini
 from .ollama import Ollama
 from .openai_compat import OpenAICompatible
+from .omniroute import OmniRoute
 from .codex_subscription import CodexSubscription
 from .claude_code import ClaudeCode
 
@@ -29,6 +30,7 @@ class Spec:
     key_hint: str = ""
     models: list[str] = field(default_factory=list)
     note: str = ""
+    optional_key: bool = False
 
 
 SPECS: dict[str, Spec] = {
@@ -70,6 +72,12 @@ SPECS: dict[str, Spec] = {
         key_hint="from console.groq.com/keys",
         models=["openai/gpt-oss-120b", "openai/gpt-oss-20b",
                 "llama-3.3-70b-versatile", "llama-3.1-8b-instant"]),
+    "omniroute": Spec(
+        "omniroute", "OmniRoute", "openai", "http://localhost:20128/v1",
+        needs_key=False, needs_base_url=True, optional_key=True,
+        key_hint="from OmniRoute Dashboard → Endpoints; leave empty if auth is disabled",
+        models=["auto/coding", "auto"],
+        note="routing, providers, combos, and compression are configured in the OmniRoute dashboard"),
     "deepseek": Spec(
         "deepseek", "DeepSeek", "openai", "https://api.deepseek.com/v1",
         key_hint="starts with 'sk-'",
@@ -96,6 +104,13 @@ SPECS: dict[str, Spec] = {
 }
 
 ORDER = list(SPECS)
+
+
+def available(key: str) -> bool:
+    if key != "omniroute":
+        return True
+    from ..core.plugins import discover
+    return any(plugin.name == "omniroute" for plugin in discover())
 
 
 def spec(key: str) -> Spec:
@@ -155,6 +170,8 @@ def build(key: str, config: Config, *, api_key: str | None = None,
             think = bool(config.provider_config(key).get("think", True))
         return Ollama(token, url, name=key, static_models=info.models,
                       timeout=max(timeout, 600.0), think=think)
+    if key == "omniroute":
+        return OmniRoute(token, url, timeout=timeout)
     return OpenAICompatible(token, url, name=key, supports_tools=info.supports_tools,
                             static_models=info.models, timeout=timeout)
 

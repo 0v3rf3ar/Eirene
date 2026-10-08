@@ -35,13 +35,15 @@ def register(name: str, summary: str, usage: str = "", wants_args: bool = False)
 
 def lookup(name: str, app=None) -> Command | None:
     _load()
+    if name == "plugin":
+        name = "plugins"
     return REGISTRY.get(name) or next((command for command in commands(app) if command.name == name), None)
 
 
 def _load() -> None:
     from . import (agents, btw, clear, compact, connect, exit as exit_cmd, plan, plugins,
-                   help as help_cmd, keybindings, model, notification, schedule, sessions, skills,
-                   review, sandbox, search_api, prompt_suggest, tasks, theme, think, update, usage)  # noqa: F401
+                   help as help_cmd, keybindings, mcp, model, notification, schedule, sessions, skills,
+                   permissions, review, sandbox, search_api, prompt_suggest, tasks, theme, think, update, usage)  # noqa: F401
 
 
 async def dispatch(app, text: str) -> None:
@@ -54,6 +56,8 @@ async def dispatch(app, text: str) -> None:
     parts = body.split(maxsplit=1)
     name, args = parts[0], parts[1] if len(parts) > 1 else ""
     name = name.lower()
+    if name == "plugin":
+        name = "plugins"
     if name == "udpate":
         name = "update"
     available = {**{command.name: command for command in commands(app)}, **REGISTRY}

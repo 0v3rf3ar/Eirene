@@ -1,148 +1,132 @@
-# Plugins in Eirene
+# Plugin management
 
-Install a catalog shortcut, local directory, `owner/repo`, repository subdirectory,
-or GitHub repository/tree URL:
+[Documentation](README.md) / Plugins
 
-```text
-/plugins install DietrichGebert/ponytail
-/plugins inspect ponytail
-/plugins trust ponytail
-/ponytail ultra
-/ponytail-review
-/ponytail off
-```
+Plugins bundle reusable guidance, task commands, specialist profiles, and optional
+executable integrations. Start with one workflow you need, inspect its imported
+capabilities, and activate only the executable parts you intend to use.
 
-Individual plugins inside a larger repository can be installed without importing
-the other plugins:
+## Find and install
 
 ```text
-/plugins install frontend-design
-/plugins install anthropics/claude-plugins-official/plugins/commit-commands
-/plugins install https://github.com/anthropics/claude-plugins-official/tree/main/plugins/feature-dev
+/plugins browse
+/plugins install superpowers
+/plugins inspect superpowers
 ```
 
-`owner/repo/path` uses the repository's default branch. Tree URLs select a branch
-or tag with a single path segment; branch names containing `/` are not supported.
-Catalog shortcuts resolve to repository paths, and a matching local directory
-takes precedence. `/plugins install anthropic-skills` installs the bundle as
-`skills`; inspect, trust, and toggle using the installed name printed by Eirene.
+The catalog currently has [14 named shortcuts](plugin-catalog.md). GitHub installs
+require Git on PATH and network access. The installer downloads and imports the
+bundle without running its repository installer. It preserves supporting files
+and licenses and rejects symlink-containing bundles.
 
-`trust` shows executable hook commands and MCP servers before asking whether to
-allow them. Installation does not run repository installers. Markdown skills and
-commands are available immediately; imported hooks and MCP processes stay disabled
-until trusted. `/plugins untrust <name>` revokes executable access. `/plugins`
-toggles the whole bundle; `/skills` toggles individual skills. Changes apply on the
-next turn. Plan mode never launches plugin hooks or imported MCP servers.
-
-For a Ponytail installation made by the older skills-only importer:
+Other supported source forms are:
 
 ```text
-/plugins refresh ponytail
-/plugins inspect ponytail
-/plugins trust ponytail
+/plugins install owner/repository
+/plugins install owner/repository/path/to/plugin
+/plugins install https://github.com/owner/repository/tree/main/path/to/plugin
+/plugins install /absolute/path/to/local-plugin
 ```
 
-Refresh reindexes the files already installed, including preserved Claude/Codex
-manifests; it does not fetch updates or replace supporting files. It revokes
-executable trust so changed declarations can be reviewed. Installation refuses to
-overwrite an existing plugin. Repositories containing symlinks are rejected.
+These illustrate source formats; replace the owner, repository, and path with a
+real bundle. A GitHub tree URL must include a branch or tag and plugin directory;
+branch names with slashes are not supported by that form. Private repositories
+need working Git authentication, since Eirene does not open a credential prompt
+for the clone.
 
-## Commands and provider support
+If a bundle is already installed, its files are preserved and installation reports
+that it exists. Installation does not overwrite it or fetch an upgrade in place.
 
-Skills and `commands/*.md` become `/plugin:command`. A short `/command` alias is
-also available when unique and not reserved by Eirene. They appear in completion
-and `/help`. Arguments replace `$ARGUMENTS`, `$ARGUMENTS[0]`, and `$0` (zero based).
-Without placeholders, arguments are appended. Expansion is literal: shell snippets
-are instructions for the model and do not execute during command expansion.
+## Understand activation
 
-Eirene resolves commands before invoking a provider. API providers receive the
-expanded instructions and lifecycle context in their system prompt. The Codex
-app-server and Claude Code headless providers receive the same instructions;
-trusted stdio MCP definitions are translated into their native configuration.
-Eirene does not modify either CLI's global plugin installation or configuration.
-Native threads are recreated, with Eirene conversation history, when instructions
-or MCP definitions change, so disabled plugins cannot leave stale host guidance.
-Large native skill bundles retain a path catalogue for skills exceeding the inline
-budget; the native agent can read those files when needed.
+```text
+install bundle
+    |
+    +-- written skills and commands -> available when enabled
+    +-- hooks -> inspect -> /plugins trust NAME
+    `-- external MCP tools -> inspect -> /mcp -> enable each server
+```
 
-Ponytail controls (`/ponytail`, mode switches, `default`, and `/ponytail-help`)
-are handled by Eirene without starting an AI turn. Invalid arguments, missing
-hooks, untrusted hooks, and plan mode produce local errors. Markdown task commands
-such as reviews and audits start an AI turn with the resolved plugin instructions.
+Installed bundles are enabled by default unless a saved preference disables them.
+Use `/plugins` to toggle the bundle and `/skills` for individual skills. Changes
+apply on the next turn. Turning a bundle off removes its guidance and commands;
+it also prevents its executable integrations from being active.
 
-| Component | Portable behavior |
+Hooks and MCP have separate controls. `/plugins trust NAME` approves hooks after
+showing compatibility and execution details. It does not enable MCP. `/mcp`
+requires a separate choice for each server, even if hooks are trusted.
+
+## Use commands
+
+```text
+/feature-dev Add a CSV export for filtered invoices.
+/pr-review-toolkit:review-pr tests errors
+```
+
+A plugin command loads written instructions into a normal agent turn. It can use
+files, commands, questions, and external tools according to the selected provider
+and permission policy. It does not automatically execute every workflow in the
+bundle or bypass approval.
+
+Namespaced commands use `/installed-name:command`. A short `/command` alias appears
+only when unambiguous and not reserved by a built-in. Use namespaced commands in
+saved instructions for predictability. `/help` and slash completion show the
+currently available commands.
+
+Arguments are inserted as literal task text. Embedded upstream shell snippets
+are performed through ordinary tools when needed, rather than executed simply
+because a Markdown command was expanded.
+
+The `anthropic-skills` shortcut installs the upstream bundle under the name
+`skills`. Use `/skills:docx`, for example; the built-in `/skills` remains the skill
+picker. Catalog shortcuts can be used for inspection and management of the bundles
+installed through them.
+
+## Diagnose, revoke, and refresh
+
+```text
+/plugins doctor
+/plugins doctor playwright
+/plugins untrust ponytail
+/plugins refresh superpowers
+```
+
+Doctor checks activation, executable prerequisites, provider limitations, and
+known startup errors without running plugin code. It cannot prove that a browser,
+remote account, or every language server works.
+
+Untrust revokes hook trust and disables the plugin's MCP servers. Refresh rebuilds
+the imported index from files already installed and also revokes these executable
+grants. Reinspect afterward, then trust hooks or enable MCP again if appropriate.
+Finish or stop the current turn before changing executable plugin settings.
+
+Refresh is not an updater. To replace a bundle, disable it, stop Eirene, back up
+and move its installed directory out of `plugins/`, then install the desired
+source again. Review any restored configuration and reapprove executable parts.
+There is no `/plugins remove` or `/plugins update` command. For removal, disable
+the bundle and remove its directory yourself while Eirene is closed; keep a backup
+if you need its files or state.
+
+## Provider compatibility
+
+Written workflows are adapted to Eirene's selected provider. API specialist work
+uses the same provider and model instead of imposing upstream Claude model names.
+Codex and Claude Code receive guidance and enabled stdio MCP definitions through
+their own interfaces.
+
+This does not make every connection equally capable. A text-only provider cannot
+run tools. Vision requires a suitable model. Dependencies such as Node.js, Git,
+browsers, document renderers, and language servers must be available separately.
+See [specialists](specialists.md) and [MCP](mcp.md).
+
+| Imported capability | User-visible support |
 | --- | --- |
-| Claude `.claude-plugin/plugin.json`, Codex `.codex-plugin/plugin.json`, `.agent-plugin/plugin.json`, `.github/plugin/plugin.json`, root `plugin.json` | Import metadata and supported declarations; semantic plugin versions are accepted |
-| `skills/*/SKILL.md`, `skills/*.md`, root `SKILL.md` | Skill catalogue, loading, and explicit slash commands |
-| Markdown commands, including declared custom directories | Slash commands and argument expansion |
-| `agents/*.md` | `/plugin:agent-name` instruction commands; does not spawn an isolated subagent |
-| `SessionStart`, `UserPromptSubmit` command hooks | Run in Eirene with JSON stdin, plugin-root environment variables, timeout, and configured isolation |
-| Hook context and blocking | Plain text or `hookSpecificOutput.additionalContext`; `systemMessage` notices; failures and block decisions stop the turn |
-| Stdio MCP (`command`, `args`, `env`) in `.mcp.json`, `mcp.json`, or manifest declarations | Eirene tools for API providers; native configuration for Codex/Claude Code |
-| HTTP/SSE MCP, OAuth/app connectors | Not imported; reported by inspection |
-| Other lifecycle events, prompt/agent/async hooks, LSP, output styles | Not emulated; declared unsupported features are reported |
-| Native statuslines, marketplace management, automatic dependency installation | Not provided by Eirene |
+| Markdown skills and commands | Guidance and task commands, with supporting resources retained. |
+| Specialist agent profiles | Profile commands and independent task passes where supported. |
+| Session-start, prompt-submit, and stop hooks | Trusted hooks run under the configured execution policy. |
+| Stdio MCP servers | Explicit server activation for API or native CLI connections. |
+| HTTP/SSE MCP and OAuth/app connectors | Not imported by this bundle installer. |
+| Native status lines, LSP declarations, output styles, and other hook events | Not emulated; inspection reports compatibility limits. |
 
-`/plugins inspect <name>` reports commands, executable declarations, and known
-compatibility limits. This is a portable subset, not complete Claude Code runtime
-emulation. Model-specific instructions may still refer to unavailable tools;
-Eirene asks models to use equivalent host tools without widening permissions.
-Dependencies and model capability still matter, especially for small local models.
-
-## Ponytail
-
-Ponytail needs `node` on the non-interactive PATH. Its upstream activation and mode
-tracking scripts run in Eirene, with separate state for each Eirene session. The
-adapter uses Ponytail's own instruction generator when modes change, so `off`
-removes the startup rules and `lite`, `full`, `ultra`, and review mode load the
-corresponding rules. `/ponytail default <mode>` persists defaults in Eirene's
-plugin data directory. `PONYTAIL_DEFAULT_MODE` is also supported.
-
-Ponytail state lives under `~/.local/eirene/plugin-data/ponytail/` (or
-`EIRENE_HOME/plugin-data/ponytail/`). It does not write Claude's statusline settings.
-Native `SubagentStart` injection is not emulated; the main agent receives the rules.
-
-## Bundles to try
-
-Use `/plugins browse` for installation suggestions:
-
-- [Ponytail](https://github.com/DietrichGebert/ponytail): minimal implementations,
-  reuse, and over-engineering reviews. Install `DietrichGebert/ponytail`.
-- [Superpowers](https://github.com/obra/superpowers): planning, systematic debugging,
-  and testing workflows. Install `obra/superpowers`; trust its startup hook to
-  activate its workflow guidance automatically. Delegation instructions remain
-  dependent on the host's available tools.
-- [Anthropic Skills](https://github.com/anthropics/skills): frontend design,
-  document workflows, and skill authoring. Install `anthropics/skills` and enable
-  the skills you need. This imports the repository's skill collection as one
-  bundle, rather than its marketplace's separate products. Document skills may
-  need external libraries or executables; review each skill's prerequisites and
-  license.
-
-Additional catalog shortcuts install individual bundles from
-[Anthropic's official plugins](https://github.com/anthropics/claude-plugins-official)
-and [Vercel's agent skills](https://github.com/vercel-labs/agent-skills):
-
-| Shortcut (`/plugins install <shortcut>`) | Portable functionality / prerequisites |
-| --- | --- |
-| `frontend-design` | Frontend design skill |
-| `code-review` | PR review command; requires GitHub CLI for GitHub operations |
-| `commit-commands` | Commit, cleanup, and PR commands; requires Git/GitHub CLI |
-| `pr-review-toolkit` | PR review command and specialist agent instruction commands |
-| `feature-dev` | Feature development command and specialist agent instruction commands |
-| `playwright` | Microsoft Playwright stdio MCP; requires Node.js/npx, browser dependencies, and trust |
-| `serena` | Serena stdio MCP for code navigation; requires uv/uvx and trust |
-| `react-best-practices` | Vercel React/Next.js performance guidance |
-| `react-native-skills` | Vercel React Native guidance |
-| `web-design-guidelines` | Vercel web design/accessibility review guidance |
-
-Review and feature workflows include Claude-specific delegation instructions.
-Eirene imports their prompts and agents as commands; it does not reproduce native
-parallel subagent execution or model routing. MCP dependencies are not installed
-by the plugin importer. Inspect the bundle and install its dependencies before
-trusting it. Vercel skills are installed individually to avoid unrelated files
-and symlinks in the repository root.
-
-Format references: [Claude plugin reference](https://code.claude.com/docs/en/plugins-reference),
-[OpenAI plugin packaging](https://developers.openai.com/plugins/build/plugins),
-and [Codex app-server](https://learn.chatgpt.com/docs/app-server).
+For a plugin's full workflow and requirements, use its individual guide from the
+[catalog](plugin-catalog.md).

@@ -4,14 +4,15 @@ OFFICIAL = "anthropics/claude-plugins-official"
 
 # name, source, purpose/prerequisites; keep suggestions usable by the importer.
 BUNDLES = (
+    ("omniroute", "builtin:omniroute", "optional management MCP for an existing OmniRoute gateway; needs OmniRoute on PATH and trust"),
     ("ponytail", "DietrichGebert/ponytail", "minimal implementations; hooks need Node.js and trust"),
     ("superpowers", "obra/superpowers", "planning, debugging, testing; startup hook needs trust"),
     ("anthropic-skills", "anthropics/skills", "frontend design, documents, skill authoring"),
     ("frontend-design", f"{OFFICIAL}/plugins/frontend-design", "frontend design guidance"),
-    ("code-review", f"{OFFICIAL}/plugins/code-review", "code review instructions; native delegation is not emulated"),
+    ("code-review", f"{OFFICIAL}/plugins/code-review", "multi-pass PR review; isolated reviewers on the selected provider/model; GitHub CLI"),
     ("commit-commands", f"{OFFICIAL}/plugins/commit-commands", "commit and pull request workflows; Git/GitHub CLI"),
-    ("pr-review-toolkit", f"{OFFICIAL}/plugins/pr-review-toolkit", "review prompts and specialist instructions; native delegation is not emulated"),
-    ("feature-dev", f"{OFFICIAL}/plugins/feature-dev", "feature planning and implementation; native delegation is not emulated"),
+    ("pr-review-toolkit", f"{OFFICIAL}/plugins/pr-review-toolkit", "PR review workflow and six specialist agent profiles"),
+    ("feature-dev", f"{OFFICIAL}/plugins/feature-dev", "feature development with exploration, architecture, and review agents"),
     ("playwright", f"{OFFICIAL}/external_plugins/playwright", "browser MCP tools; Node.js/npx, browser dependencies, and trust"),
     ("serena", f"{OFFICIAL}/external_plugins/serena", "code navigation MCP tools; uv/uvx and trust"),
     ("react-best-practices", "vercel-labs/agent-skills/skills/react-best-practices", "Vercel React and Next.js performance guidance"),
@@ -21,4 +22,6 @@ BUNDLES = (
 
 
 def source_for(name: str) -> str:
+    if name.casefold() == "omniroute":
+        return "builtin:omniroute"
     return next((source for slug, source, _ in BUNDLES if slug == name), name)

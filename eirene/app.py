@@ -179,7 +179,7 @@ class Eirene(App):
         self.theme = THEMES.get(selected, THEMES["default"]).name
         self.call_after_refresh(self._show_intro)
         self.agent.mode = Mode(self.config.mode)
-        skills_mod.seed()
+        skills_mod.remove_seeded_examples()
         self.agent.reload_skills()
         self._restore_provider()
         self.refresh_mode_line()
@@ -554,6 +554,8 @@ class Eirene(App):
             if not native_change:
                 await self.push(DiffBlock(f"{name} {label}", preview))
         title = f"run {label}" if name == "run_command" else f"{name} {label}"
+        if name == "request_full_access":
+            title = "allow full host access for this response"
         try:
             return await self.permission.ask(title, reason)
         finally:
@@ -574,6 +576,8 @@ class Eirene(App):
         try:
             async for event in self.agent.run(text, record_text=record_text):
                 if isinstance(event, agent_mod.Answer):
+                    if event.text:
+                        self.status.mark_activity()
                     reply_text += event.text
                     if answer is None:
                         answer = await self.push(AnswerBlock(), live=True)
@@ -606,6 +610,7 @@ class Eirene(App):
                         ChangeBlock(event.label, event.diff,
                                     self._change_action(event.label)), live=True)
                 elif isinstance(event, agent_mod.ToolStarted):
+                    self.status.start_tool(event.id)
                     self.clear_prompt_suggestion()
                     suggestion_started = False
                     answer = None
@@ -618,12 +623,15 @@ class Eirene(App):
                                      getattr(self.agent.provider, "profile", None) is not None))
                         cards[event.id] = await self.push(block, live=True)
                 elif isinstance(event, agent_mod.ToolOutput):
+                    if event.chunk:
+                        self.status.mark_activity()
                     card = cards.get(event.id)
                     if card:
                         card.feed(event.chunk)
                         if event.artifact_id:
                             card.artifact_id = event.artifact_id
                 elif isinstance(event, agent_mod.ToolFinished):
+                    self.status.finish_tool(event.id)
                     if event.reused:
                         continue
                     if event.name in {"plan_update", "plan_set_status", "plan_clear"}:
@@ -642,7 +650,10 @@ class Eirene(App):
                     card.flush()
                 elif isinstance(event, agent_mod.Notice):
                     if event.transient:
-                        self.status.set_phase(event.text if event.phase in {"reconnecting", "waiting for response"} else event.phase)
+                        if event.phase in {"reconnecting", "waiting for response"}:
+                            self.status.set_connection_wait()
+                        else:
+                            self.status.set_phase(event.phase)
                         continue
                     answer = None
                     await self.push(NoticeBlock(event.text))

@@ -12,7 +12,7 @@ import tempfile
 
 from . import paths
 from .plugin_manifest import inside, normalize
-from .plugin_catalog import source_for
+from .plugin_catalog import BUNDLES, source_for
 
 
 def github_source(source: str) -> tuple[str, str, str, str | None]:
@@ -47,6 +47,12 @@ def install(source: str) -> tuple[str, int]:
         if local.is_dir():
             root = local.resolve()
             name = root.name
+        elif source_for(source) == "builtin:omniroute":
+            from .omniroute_mcp import manifest
+            name = "omniroute"
+            root = Path(temporary) / name
+            root.mkdir()
+            (root / "plugin.json").write_text(json.dumps(manifest(), indent=2) + "\n", encoding="utf-8")
         else:
             owner, name, subdirectory, ref = github_source(source_for(source))
             root = Path(temporary) / "repo"
@@ -84,6 +90,9 @@ def install(source: str) -> tuple[str, int]:
             if any((Path(directory) / entry).is_symlink() for entry in dirs + files):
                 raise ValueError("repositories containing symlinks are not supported")
         manifest = normalize(root, name)
+        shortcut = next((slug for slug, _, _ in BUNDLES if slug.casefold() == source.casefold()), "")
+        if shortcut:
+            manifest["catalog_shortcut"] = shortcut
         name = manifest["name"]
         destination = paths.plugins_dir() / name
         if destination.exists() or destination.is_symlink():

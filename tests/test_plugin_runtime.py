@@ -43,6 +43,8 @@ def test_import_commands_hooks_mcp_and_report_limits(tmp_path, config):
     assert any('SubagentStart' in w for w in plugin.warnings)
     assert plugins.merged_mcp_servers(config) == {}
     config.set('plugin_trust', {'demo': True})
+    assert plugins.merged_mcp_servers(config) == {}
+    config.set('mcp_enabled', {'demo__docs': True})
     server = plugins.merged_mcp_servers(config)['demo__docs']
     assert server['command'] == ['node', str(plugin.path / 'server.js')]
     assert server['read_paths'] == [str(plugin.path)]
@@ -369,4 +371,6 @@ def test_portable_manifest_and_root_mcp_file(tmp_path, config, manifest):
     assert plugin.mcp_servers['browser']['command'] == ['npx', '@playwright/mcp@latest']
     assert plugins.merged_mcp_servers(config) == {}
     config.set('plugin_trust', {'portable': True})
+    assert plugins.merged_mcp_servers(config) == {}
+    config.set('mcp_enabled', {'portable__browser': True})
     assert 'portable__browser' in plugins.merged_mcp_servers(config)

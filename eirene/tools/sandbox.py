@@ -16,6 +16,7 @@ class Sandbox:
 
     def __init__(self, root: Path):
         self.root = Path(root).expanduser().resolve()
+        self.full_access = False
         self._grants: ContextVar[frozenset[Path]] = ContextVar("sandbox_grants", default=frozenset())
 
     def __str__(self) -> str:
@@ -44,7 +45,7 @@ class Sandbox:
 
     def permitted(self, resolved: Path) -> bool:
         """True while the user has approved this path for the running tool."""
-        return any(resolved == allowed or allowed in resolved.parents
+        return self.full_access or any(resolved == allowed or allowed in resolved.parents
                    for allowed in self._grants.get())
 
     @contextmanager

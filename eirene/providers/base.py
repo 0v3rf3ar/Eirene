@@ -104,7 +104,7 @@ class Provider:
         limits = httpx.Limits(max_connections=8, max_keepalive_connections=4)
         return httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, connect=20.0),
                                  limits=limits, follow_redirects=True,
-                                 transport=_TRANSPORT)
+                                 transport=_TRANSPORT, trust_env=getattr(self, "trust_env", True))
 
     async def stream(self, messages: list[dict], model: str, *, system: str = "",
                      tools: list[dict] | None = None,

@@ -406,6 +406,13 @@ async def stop_all():
     await asyncio.gather(*(stop(p.id) for p in list(_processes.values()) if p.running))
 
 
+async def stop_owned(owner: str, *, since: float) -> None:
+    """Revoke services and commands launched during a temporary access grant."""
+    await asyncio.gather(*(stop(p.id) for p in list(_processes.values())
+                           if p.owner == owner and p.started >= since and p.running),
+                         return_exceptions=True)
+
+
 def running() -> list[tuple[str, str]]:
     reap()
     return [

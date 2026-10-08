@@ -13,6 +13,31 @@ from eirene.core.mcp import MCPManager
 SERVER = Path(__file__).parent / "fixtures" / "mcp_server.py"
 
 
+async def test_paginated_tools_server_ping_and_instructions(workdir):
+    manager = MCPManager({"serena": {"command": [sys.executable, str(SERVER)],
+        "env": {"EIRENE_TEST_PAGED_MCP": "1"}}}, workdir)
+    try:
+        await manager.ensure()
+        assert not manager.errors
+        assert len(manager.specs()) == 2
+        assert "Activate the current project" in manager.instruction_block()
+        assert await manager.call("mcp__serena__last-page", {"value": "page2"}) == "echo:page2"
+    finally:
+        await manager.close()
+
+
+async def test_large_gateway_catalogue_is_not_truncated(workdir):
+    manager = MCPManager({"gateway": {"command": [sys.executable, str(SERVER)],
+                          "env": {"EIRENE_TEST_LARGE_MCP": "1"}}}, workdir)
+    await manager.ensure()
+    try:
+        assert manager.errors == []
+        assert len(manager.specs()) == 110
+        assert await manager.call("mcp__gateway__tool-109", {"value": "last"}) == "echo:last"
+    finally:
+        await manager.close()
+
+
 async def test_mcp_discovers_namespaced_tools_and_calls_them(workdir):
     manager = MCPManager({"demo server": {"command": [sys.executable, str(SERVER)]}},
                          workdir)

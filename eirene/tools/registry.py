@@ -35,6 +35,34 @@ class Tool:
 
 
 TOOLS: list[Tool] = [
+    Tool("load_plugin_resource", READ,
+         "Read a supporting file from an enabled installed plugin, with bounded line ranges. "
+         "Use for skill rule files, agent profiles, templates and bundled scripts; does not execute files.", {
+             "type": "object", "properties": {
+                 "plugin": {"type": "string"}, "path": {"type": "string", "description": "File path relative to the installed plugin directory."},
+                 "offset": {"type": "integer"}, "limit": {"type": "integer"},
+             }, "required": ["plugin", "path"],
+         }),
+    Tool("delegate_tasks", EXEC,
+         "Run isolated specialist tasks on the current provider/model and return their reports. "
+         "Up to 4 read-only tasks run in parallel; any write task makes the batch sequential. "
+         "Fresh contexts receive only the task you provide plus enabled host/plugin guidance. "
+         "Profiles use plugin:agent-name; omit agent for general tasks. Child agents cannot delegate.", {
+             "type": "object", "properties": {
+                 "tasks": {"type": "array", "items": {"type": "object", "properties": {
+                     "prompt": {"type": "string"}, "agent": {"type": "string"},
+                     "read_only": {"type": "boolean", "description": "Default true. Set false only for authorized implementation."},
+                 }, "required": ["prompt"]}},
+             }, "required": ["tasks"],
+         }),
+    Tool("request_full_access", EXEC,
+         "Request user approval for full host filesystem, network and command access "
+         "until this response finishes. Sandbox restrictions then return automatically. "
+         "Use for authorized system installation or other host actions; OS privileges still apply.", {
+             "type": "object", "properties": {"reason": {"type": "string",
+                 "description": "Concrete host action and why sandboxed access is insufficient."}},
+             "required": ["reason"],
+         }),
     Tool("read_file", READ, "Check file size and read bounded text with line numbers; use pattern/context, tail, or offset/limit to focus. Oversized lines support byte_offset continuation.", {
         "type": "object",
         "properties": {
@@ -367,6 +395,8 @@ def describe(name: str, args: dict[str, Any], box: Sandbox) -> str:
     """One-line human summary of a call."""
     if name == "run_command":
         return str(args.get("command", "")).strip() or "(empty)"
+    if name == "request_full_access":
+        return str(args.get("reason", "")).strip() or "temporary full access"
     if name == "web_search":
         return str(args.get("query", "")).strip() or "(empty search)"
     if name in {"web_fetch", "browser_inspect", "browser_interact"}:
@@ -396,7 +426,7 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
                   on_output: Callable[[str], None] | None = None,
                   isolation: str = "none", isolate_network: bool = False,
                   plan_scope: str | None = None, read_only: bool = False,
-                  search_service=None, call_id="") -> str:
+                  search_service=None, call_id="", config=None) -> str:
     """Run a tool call and return its text result."""
     if name not in BY_NAME:
         raise ToolError(f"unknown tool '{name}'")
@@ -405,6 +435,11 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
 
     if name == "ask_user":
         return str(args.get("question", "")).strip() or "a question"
+    if name == "request_full_access":
+        _text(args, "reason")
+        if not box.full_access:
+            raise ToolError("full access has not been approved")
+        return "Full host access approved until this response finishes. Continue the authorized task; OS privileges still apply."
     if name == "read_output":
         from ..core import artifacts
         try:
@@ -533,6 +568,12 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
             _text(args, "method"), _text(args, "url"), headers=raw_headers,
             body=str(args.get("body") or ""),
             timeout=float(_number(args.get("timeout"), 30) or 30))
+    if name == "load_plugin_resource":
+        from ..core.config import Config
+        from ..core.plugin_resources import read_resource
+        return await read_resource(_text(args, "plugin"), _text(args, "path"), config or Config.load(),
+            offset=max(0, int(args.get("offset", 0))), limit=max(1, min(int(args.get("limit", 100)), 500)),
+            max_chars=min(max_bytes, 24000))
     if name == "load_skill":
         wanted = _text(args, "name")
         skill = next((item for item in skill_ops.discover() if item.name == wanted), None)
@@ -653,6 +694,10 @@ def preview(name: str, args: dict[str, Any], box: Sandbox) -> str:
 
 def sandbox_escape(name: str, args: dict[str, Any], box: Sandbox) -> str:
     """Reason a call leaves the sandbox, or empty."""
+    if name == "load_plugin_resource":
+        # This reader validates against the enabled bundle root, not the
+        # workspace root. It cannot widen general file access.
+        return ""
     if name in ("run_command", "start_process"):
         for key in ("read_paths", "write_paths"):
             if not isinstance(args.get(key, []), list) or any(not isinstance(p, str) for p in args.get(key, [])):
