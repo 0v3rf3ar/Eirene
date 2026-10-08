@@ -17,8 +17,14 @@ async def test_managed_process_can_be_started_polled_and_stopped(workdir, python
         python_command("import time\nwhile True:\n print('tick', flush=True); time.sleep(.1)"),
         workdir)
     process_id = note.split()[1]
-    await asyncio.sleep(0.25)
-    first = await processes.poll(process_id)
+    async def first_output():
+        while True:
+            note = await processes.poll(process_id, all_output=True)
+            if "tick" in note:
+                return note
+            await asyncio.sleep(.05)
+
+    first = await asyncio.wait_for(first_output(), 5)
     assert "running" in first
     assert "tick" in first
     second = await processes.poll(process_id)
@@ -43,8 +49,7 @@ async def test_managed_process_can_stop_automatically(workdir, python_command):
     note = await processes.start(python_command("import time; time.sleep(10)"), workdir,
                                  auto_stop=0.05)
     process_id = note.split()[1]
-    await asyncio.sleep(0.15)
-    assert "exited" in await processes.poll(process_id)
+    assert "exited" in await processes.poll(process_id, wait=True)
     assert not any(value == process_id for _, value in processes.running())
 
 
