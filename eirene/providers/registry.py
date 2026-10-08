@@ -65,6 +65,11 @@ SPECS: dict[str, Spec] = {
         key_hint="Google AI Studio key",
         models=["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
                 "gemini-2.0-flash"]),
+    "groq": Spec(
+        "groq", "Groq", "openai", "https://api.groq.com/openai/v1",
+        key_hint="from console.groq.com/keys",
+        models=["openai/gpt-oss-120b", "openai/gpt-oss-20b",
+                "llama-3.3-70b-versatile", "llama-3.1-8b-instant"]),
     "deepseek": Spec(
         "deepseek", "DeepSeek", "openai", "https://api.deepseek.com/v1",
         key_hint="starts with 'sk-'",

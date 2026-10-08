@@ -15,7 +15,7 @@ from .base import (Done, Provider, TextDelta, ThinkingDelta, ToolCall, Usage,
 
 
 class OpenAICompatible(Provider):
-    """Works for OpenAI, DeepSeek, Kimi, Perplexity and clones."""
+    """Works for OpenAI, Groq, DeepSeek, Kimi, Perplexity and clones."""
 
     protocol = "openai"
 
@@ -45,6 +45,9 @@ class OpenAICompatible(Provider):
             "stream": True,
             "max_tokens": max_tokens,
         }
+        if self.name == "groq":
+            payload["max_completion_tokens"] = payload.pop("max_tokens")
+            payload["stream_options"] = {"include_usage": True}
         if tools and self.supports_tools:
             payload["tools"] = [{"type": "function", "function": spec} for spec in tools]
             payload["tool_choice"] = "auto"

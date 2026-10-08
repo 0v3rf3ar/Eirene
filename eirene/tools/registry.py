@@ -9,8 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..core.errors import SandboxError, ToolError
-from . import browser, files, language, lsp, shell, processes, patches
-from ..core import git as git_ops
+from . import browser, files, language, shell, processes, patches
 from ..core import project as project_ops
 from ..core import skills as skill_ops
 from ..core import plans as plan_ops
@@ -117,49 +116,6 @@ TOOLS: list[Tool] = [
              },
              "required": ["question", "options"],
     }, ""),
-    Tool("git_status", READ, "Show repository branch and working-tree state.", {
-        "type": "object", "properties": {},
-    }),
-    Tool("git_diff", READ, "Show staged and unstaged Git changes.", {
-        "type": "object", "properties": {
-            "path": {"type": "string", "description": "Optional repository-relative path."},
-        },
-    }),
-    Tool("git_diff_base", READ, "Show all changes against a Git base revision.", {
-        "type": "object", "properties": {"base": {"type": "string"}},
-        "required": ["base"],
-    }),
-    Tool("git_checkpoint", WRITE,
-         "Create a recoverable snapshot of all current Git working-tree changes.", {
-             "type": "object", "properties": {
-                 "label": {"type": "string", "description": "Short reason for the checkpoint."},
-             },
-         }),
-    Tool("git_checkpoints", READ, "List recoverable checkpoints for this repository.", {
-        "type": "object", "properties": {},
-    }),
-    Tool("git_rollback", WRITE, "Restore a prior Eirene Git checkpoint.", {
-        "type": "object", "properties": {
-            "checkpoint_id": {"type": "string"},
-        }, "required": ["checkpoint_id"],
-    }),
-    Tool("git_commit", WRITE,
-         "Commit only explicitly named paths; never stages unrelated changes.", {
-             "type": "object", "properties": {
-                 "message": {"type": "string"},
-                 "paths": {"type": "array", "items": {"type": "string"}},
-             }, "required": ["message", "paths"],
-         }),
-    Tool("git_worktree_create", WRITE,
-         "Create an isolated Git worktree inside the repository.", {
-             "type": "object", "properties": {
-                 "path": {"type": "string"}, "branch": {"type": "string"},
-             }, "required": ["path"],
-         }),
-    Tool("git_worktree_remove", WRITE, "Remove a registered Git worktree.", {
-        "type": "object", "properties": {"path": {"type": "string"}},
-        "required": ["path"],
-    }),
     Tool("start_process", EXEC,
          "Start a long-running process and return a managed process id.", {
              "type": "object", "properties": {
@@ -210,16 +166,6 @@ TOOLS: list[Tool] = [
                  "path": {"type": "string", "description": "File or directory; default '.'."},
                  "limit": {"type": "integer", "description": "Maximum matches, up to 500."},
              }, "required": ["symbol"],
-         }),
-    Tool("code_navigation", READ,
-         "Query an installed language server for definitions, semantic references, hover, or diagnostics. Use source positions; missing servers use explicitly labeled lexical/compiler fallbacks.", {
-             "type": "object", "properties": {
-                 "path": {"type": "string", "description": "Source file, at most 1 MB."},
-                 "action": {"type": "string", "description": "definition, references, hover, or diagnostics"},
-                 "line": {"type": "integer", "description": "1-based source line."},
-                 "column": {"type": "integer", "description": "1-based Unicode character column."},
-                 "limit": {"type": "integer"}, "timeout": {"type": "integer"},
-             }, "required": ["path", "action"],
          }),
     Tool("language_diagnostics", READ,
          "Run the installed parser/compiler's fast syntax diagnostics for one source file.", {
@@ -426,20 +372,7 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
                   on_output: Callable[[str], None] | None = None,
                   isolation: str = "none", isolate_network: bool = False,
                   plan_scope: str | None = None, read_only: bool = False,
-                  search_service=None, language_servers=None) -> str:
-    with git_ops.execution_policy(backend=isolation, network=not isolate_network,
-                                  read_only=read_only):
-        return await _execute(name, args, box, timeout=timeout, max_bytes=max_bytes,
-                              on_output=on_output, isolation=isolation,
-                              isolate_network=isolate_network, plan_scope=plan_scope,
-                              read_only=read_only, search_service=search_service,
-                              language_servers=language_servers)
-
-
-async def _execute(name: str, args: dict[str, Any], box: Sandbox, *,
-                  timeout=None, max_bytes=200_000, on_output=None, isolation="none",
-                  isolate_network=False, plan_scope=None, read_only=False,
-                  search_service=None, language_servers=None) -> str:
+                  search_service=None) -> str:
     """Run a tool call and return its text result."""
     if name not in BY_NAME:
         raise ToolError(f"unknown tool '{name}'")
@@ -505,12 +438,6 @@ async def _execute(name: str, args: dict[str, Any], box: Sandbox, *,
         return language.references(box, _text(args, "symbol"),
                                    str(args.get("path") or "."),
                                    int(_number(args.get("limit"), 100) or 100))
-    if name == "code_navigation":
-        return await lsp.query(box, _text(args, "path"), _text(args, "action"),
-                               line=int(args.get("line", 1)), column=int(args.get("column", 1)),
-                               limit=int(args.get("limit", 100)), timeout=float(args.get("timeout", 30)),
-                               definitions=language_servers, isolation=isolation,
-                               isolate_network=isolate_network, read_only=read_only)
     if name == "language_diagnostics":
         return await language.diagnostics(
             box, _text(args, "path"),
@@ -585,35 +512,6 @@ async def _execute(name: str, args: dict[str, Any], box: Sandbox, *,
         return plan_ops.clear(box.root, plan_scope)
     if name == "apply_patch":
         return patches.apply(box, _text(args, "patch"))
-
-    if name.startswith("git_"):
-        repo = git_ops.repository(box.root)
-        if repo and repo != box.root:
-            raise ToolError("Git repository extends outside workspace; use an approved shell mount of the repository root")
-    if name == "git_status":
-        return git_ops.status(box.root)
-    if name == "git_diff":
-        return git_ops.diff(box.root, str(args.get("path") or ""))
-    if name == "git_diff_base":
-        return git_ops.diff_against(box.root, _text(args, "base"))
-    if name == "git_checkpoint":
-        checkpoint_id = git_ops.checkpoint(box.root, str(args.get("label") or ""))
-        return f"created checkpoint {checkpoint_id}"
-    if name == "git_checkpoints":
-        return git_ops.list_checkpoints(box.root)
-    if name == "git_rollback":
-        return git_ops.rollback(box.root, _text(args, "checkpoint_id"))
-    if name == "git_commit":
-        raw_paths = args.get("paths")
-        if not isinstance(raw_paths, list):
-            raise ToolError("paths must be an array")
-        return git_ops.commit(box.root, _text(args, "message"),
-                              [str(path) for path in raw_paths])
-    if name == "git_worktree_create":
-        return git_ops.create_worktree(box.root, _text(args, "path"),
-                                       str(args.get("branch") or ""))
-    if name == "git_worktree_remove":
-        return git_ops.remove_worktree(box.root, _text(args, "path"))
 
     return _run_file_tool(name, args, box, max_chars=min(24000, max_bytes))
 

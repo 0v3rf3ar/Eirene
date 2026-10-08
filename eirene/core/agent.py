@@ -21,7 +21,6 @@ from .errors import Cancelled, EireneError, ProviderError, SandboxError, ToolErr
 from .modes import ALLOW, ASK, BLOCK, Mode, decide
 from .session import Message, Session
 from .usage import Usage, estimate_messages
-from . import git as git_ops
 from . import project as project_mod
 from . import hooks as hook_mod
 from .mcp import MCPManager
@@ -163,7 +162,6 @@ class Agent:
         self.approve: ApprovalFn | None = None
         self.choose: ChoiceFn | None = None
         self.always: set[str] = set()
-        self.turn_checkpoint = ""
         self.project = project_mod.discover(self.sandbox.root)
         definitions = {name: {**definition, "_isolation": config.get("execution_isolation", "auto"),
                               "_isolate_network": config.get("isolate_network", True)}
@@ -353,7 +351,6 @@ class Agent:
         outcomes: list[str] = []
         redirected = False
         truncated_recoveries = 0
-        self.turn_checkpoint = ""
         status = "completed"
 
         try:
@@ -539,11 +536,6 @@ class Agent:
             yield Failed(f"unexpected failure: {exc}")
             self.logger.exception("turn.crashed", extra={"session_id": self.session.id})
 
-        if self.turn_checkpoint:
-            try:
-                git_ops.seal(self.sandbox.root, self.turn_checkpoint)
-            except (OSError, EireneError):
-                yield Notice("could not seal the rollback checkpoint; inspect changes before restoring")
         seconds = time.monotonic() - started
         self.usage.record(turn_usage.input_tokens, turn_usage.output_tokens,
                           seconds, self.model)
@@ -815,7 +807,7 @@ class Agent:
             escape = escape or "this tool requires network access outside command isolation"
         native_windows = (platform.system() == "Windows" and
                           self.config.get("execution_isolation", "auto") == "auto" and
-                          (call.name in {"run_command", "start_process", "language_diagnostics", "code_navigation"} or call.name.startswith("git_")))
+                          call.name in {"run_command", "start_process", "language_diagnostics"})
         if native_windows:
             escape = "Windows native execution has no kernel filesystem or network isolation; approve this command with your user account's access"
         verdict, reason = decide(self.mode, kind, escape)
@@ -867,14 +859,6 @@ class Agent:
         started = time.monotonic()
         try:
             hooks_enabled = self.mode is not Mode.PLAN
-            has_hooks = hooks_enabled and any(merged_hooks(self.config).values())
-            if ((kind in (tools.WRITE, tools.EXEC) or has_hooks)
-                    and call.name not in ("git_checkpoint", "git_rollback")
-                    and call.name != "browser_screenshot"
-                    and not self.turn_checkpoint
-                    and git_ops.repository(self.sandbox.root) in (self.sandbox.root, True)):
-                self.turn_checkpoint = git_ops.checkpoint(
-                    self.sandbox.root, f"before session {self.session.id[:8]} mutation")
             before_hooks = (await hook_mod.run("before_tool", call.name, self.sandbox,
                                                self.config) if hooks_enabled else [])
             if before_hooks:
@@ -1002,8 +986,6 @@ class Agent:
 
         if name in {"web_search", "web_fetch"}:
             kwargs["search_service"] = self.search_service
-        if name == "code_navigation":
-            kwargs["language_servers"] = self.config.get("language_servers", {})
         task = asyncio.create_task(tools.execute(name, arguments, sandbox, on_output=feed, **kwargs))
         try:
             while not task.done() or not queue.empty():

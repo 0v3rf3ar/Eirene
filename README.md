@@ -9,8 +9,8 @@ A terminal coding agent.
 
 Eirene reads files, edits code, and runs commands in your project. It works with
 Ollama and API providers, or through an installed Codex or Claude Code CLI.
-Conversations can be resumed, changes have recovery checkpoints, and tasks can
-run from the terminal interface or in headless mode.
+Conversations can be resumed, and tasks can run from the terminal interface or
+in headless mode.
 
 ## Install
 
@@ -64,6 +64,11 @@ Use `/connect` to choose a provider and configure the connection. Ollama needs a
 running local server and a downloaded model. API providers need their credentials.
 Codex and Claude Code need their own CLI installed and signed in.
 
+Groq is available through `/connect groq`; enter a key from
+[Groq Console](https://console.groq.com/keys), or set `EIRENE_GROQ_API_KEY`.
+It uses Groq's [OpenAI-compatible API](https://console.groq.com/docs/openai)
+with streaming responses and tool calling.
+
 Start with a small task, for example:
 
 ```text
@@ -96,16 +101,10 @@ startup checks. Offline startup continues normally.
 
 ## Code navigation
 
-The agent can query installed language servers for definitions, semantic
-references, hover information, and diagnostics using `code_navigation`. Supported
-automatic discovery includes Pyright/pylsp, typescript-language-server,
-rust-analyzer, gopls, clangd, bash-language-server, the VS Code HTML/CSS/JSON
-servers, yaml-language-server, and lua-language-server. No server is installed automatically. Without a
-server, definitions/references fall back to explicitly labeled text matching and
-diagnostics fall back to installed parsers or compilers.
-
-See [language-server configuration](docs/code-navigation.md) for custom commands,
-source positions, sandbox access, and limitations.
+The agent can locate definitions and callers with `find_symbol` and
+`find_references`, inspect focused source ranges, and run installed parsers or
+compilers with `language_diagnostics`. See [code navigation](docs/code-navigation.md)
+for usage and limitations.
 
 ## Platforms and execution
 
@@ -119,10 +118,8 @@ Linux and macOS fail closed when the required isolation backend is unavailable.
 Windows plan mode blocks native commands. Codex and Claude Code use their own
 execution environments and permission controls.
 
-Changes apply to your real workspace. Recovery checkpoints cover repository files
-and the Git index, with limits; they cannot undo database changes or network side
-effects. Read [execution and recovery](docs/harness.md) and the
-[security policy](SECURITY.md) for the details.
+Changes apply to your real workspace. Read [execution boundaries](docs/harness.md)
+and the [security policy](SECURITY.md) for the details.
 
 ## Web search
 

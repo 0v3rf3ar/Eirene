@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import re
 
-from ..core import git as git_ops
 from ..core.modes import Mode
 from ..ui.chat import UserBlock
 from . import register
@@ -17,7 +16,8 @@ async def run(app, args: str) -> None:
     if app.turn and not app.turn.done():
         app.say("finish or stop the current turn before reviewing", "warn")
         return
-    if git_ops.repository(app.sandbox.root) is None:
+    if not any((root / ".git").exists() for root in
+               (app.sandbox.root, *app.sandbox.root.parents)):
         app.say("code review requires a Git repository", "warn")
         return
     base = args.strip()
@@ -27,7 +27,8 @@ async def run(app, args: str) -> None:
     scope = f"against {base}" if base else "in staged and unstaged changes"
     request = f"Review changes {scope}"
     instruction = f"""Perform a strict read-only code review {scope}.
-Use git_status and {'git_diff_base with base ' + base if base else 'git_diff'} first.
+Use run_command to inspect git status --short and
+{'git diff ' + base if base else 'git diff and git diff --cached'} first.
 Inspect enough surrounding code and use find_references and language_diagnostics
 where they can confirm an issue. Focus only on actionable bugs, regressions,
 security problems, race conditions, data loss, and missing validation or tests.

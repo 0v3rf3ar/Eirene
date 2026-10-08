@@ -47,7 +47,6 @@ DEFAULTS: dict[str, Any] = {
     "credential_store": "file",
     "search_api": {},
     "check_updates": True,
-    "language_servers": {},
 }
 
 VALID_MODES = {"auto", "manual", "plan"}
@@ -244,7 +243,7 @@ def _merge_defaults(data: dict[str, Any]) -> dict[str, Any]:
         merged["providers"] = {}
     if not isinstance(merged.get("skills"), dict):
         merged["skills"] = {}
-    for key in ("plugins", "hooks", "mcp_servers", "model_context_limits", "model_costs", "search_api", "language_servers"):
+    for key in ("plugins", "hooks", "mcp_servers", "model_context_limits", "model_costs", "search_api"):
         if not isinstance(merged.get(key), dict):
             merged[key] = {}
     merged["auto_compact"] = bool(merged.get("auto_compact", False))

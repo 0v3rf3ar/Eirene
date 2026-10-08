@@ -15,8 +15,8 @@ COMPACT_TOOLS = {
     "read_output", "start_process", "poll_process", "stop_process", "list_processes",
 }
 BALANCED_TOOLS = COMPACT_TOOLS | {
-    "read_image", "git_status", "git_diff", "project_info",
-    "language_diagnostics", "code_navigation", "find_symbol", "find_references",
+    "read_image", "project_info",
+    "language_diagnostics", "find_symbol", "find_references",
 }
 
 

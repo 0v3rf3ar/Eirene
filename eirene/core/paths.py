@@ -40,10 +40,6 @@ def runtime_log() -> Path:
     return logs_dir() / "eirene.jsonl"
 
 
-def checkpoints_dir() -> Path:
-    return home() / "checkpoints"
-
-
 def projects_dir() -> Path:
     return home() / "projects"
 
@@ -66,7 +62,7 @@ def task_locks_dir() -> Path:
 
 def ensure_tree() -> None:
     """Create data dirs if missing."""
-    for path in (home(), sessions_dir(), skills_dir(), logs_dir(), checkpoints_dir(),
+    for path in (home(), sessions_dir(), skills_dir(), logs_dir(),
                  projects_dir(), plugins_dir(), plans_dir(), task_runs_dir(),
                  task_locks_dir()):
         path.mkdir(parents=True, exist_ok=True)

@@ -15,7 +15,7 @@ from eirene.providers import base, registry
 from eirene.providers.base import Done, TextDelta
 from eirene.ui.chat import Block, NoticeBlock
 
-EXPECTED = {"help", "connect", "model", "schedule", "tasks", "exit", "usage", "git", "plan", "plugins", "sessions",
+EXPECTED = {"help", "connect", "model", "schedule", "tasks", "exit", "usage", "plan", "plugins", "sessions",
             "skills", "compact", "agents", "btw", "clear", "notification", "theme",
             "review", "sandbox", "prompt-suggest", "keybindings", "search-api", "update"}
 

@@ -105,22 +105,6 @@ async def test_file_change_preview_is_saved_with_the_tool_call(workdir):
     assert "+print('new')" in call["preview"]
 
 
-async def test_automatic_checkpoint_is_silent_in_chat(workdir, monkeypatch):
-    provider = Script(
-        [ToolCall("c1", "write_file", {"path": "quiet.txt", "content": "ok"}),
-         Done("tool_use")],
-        [TextDelta("done"), Done("stop")])
-    runner = build(workdir, provider)
-    monkeypatch.setattr(agent_mod.git_ops, "repository", lambda path: True)
-    monkeypatch.setattr(agent_mod.git_ops, "checkpoint", lambda path, label: "safe1234")
-
-    events = await drive(runner)
-    assert runner.turn_checkpoint == "safe1234"
-    assert not any(isinstance(event, Notice) and "checkpoint" in event.text.lower()
-                   for event in events)
-    assert provider.calls == 2
-
-
 async def test_tool_result_lands_in_history(workdir):
     provider = Script([ToolCall("c1", "list_dir", {"path": "."}), Done("tool_use")],
                       [TextDelta("ok"), Done("stop")])

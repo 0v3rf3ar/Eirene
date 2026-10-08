@@ -582,3 +582,49 @@ async def test_ollama_does_not_execute_calls_from_an_incomplete_stream():
         async for event in provider.stream(HISTORY, "test-model", tools=TOOLS):
             events.append(event)
     assert not any(isinstance(event, base.ToolCall) for event in events)
+
+
+async def test_groq_stream_and_tool_round_trip(workdir):
+    recorder = install(Recorder(OPENAI_STREAM))
+    config = Config.load()
+    config.set_provider("groq", api_key="gsk-test-token")
+    provider = registry.build("groq", config)
+    events = await collect(provider, system="be terse", tools=TOOLS, max_tokens=2048)
+    assert recorder.request.url == "https://api.groq.com/openai/v1/chat/completions"
+    assert recorder.request.headers["authorization"] == "Bearer gsk-test-token"
+    assert recorder.payload["max_completion_tokens"] == 2048
+    assert "max_tokens" not in recorder.payload
+    assert recorder.payload["stream_options"] == {"include_usage": True}
+    assert recorder.payload["tools"][0]["function"]["name"] == "run_command"
+    messages = recorder.payload["messages"]
+    assert messages[2]["tool_calls"][0]["id"] == messages[3]["tool_call_id"]
+    assert all("name" not in message for message in messages)
+    assert "".join(e.text for e in events if isinstance(e, base.TextDelta)) == "Hello"
+    call = next(e for e in events if isinstance(e, base.ToolCall))
+    assert call.arguments == {"command": "ls"}
+    usage = next(e for e in events if isinstance(e, base.Usage))
+    assert (usage.input_tokens, usage.output_tokens) == (12, 5)
+    assert events[-1].reason == "tool_use"
+
+
+async def test_groq_discovers_models_and_falls_back(workdir):
+    config = Config.load()
+    config.set_provider("groq", api_key="gsk-test-token")
+    provider = registry.build("groq", config)
+    recorder = install(Recorder(json.dumps({"data": [{"id": "openai/gpt-oss-120b"}]}),
+                                stream=False))
+    assert await provider.models() == ["openai/gpt-oss-120b"]
+    assert recorder.request.url == "https://api.groq.com/openai/v1/models"
+    install(Recorder("unavailable", status=503, stream=False))
+    assert await provider.models() == registry.spec("groq").models
+    assert registry.resolve_alias("Groq") == "groq"
+    assert registry.default_model("groq") == "openai/gpt-oss-120b"
+
+
+def test_groq_requires_key_and_accepts_environment_key(workdir, monkeypatch):
+    monkeypatch.delenv("EIRENE_GROQ_API_KEY", raising=False)
+    config = Config.load()
+    with pytest.raises(ProviderError, match="Groq has no API key"):
+        registry.build("groq", config)
+    monkeypatch.setenv("EIRENE_GROQ_API_KEY", "gsk-env-token")
+    assert registry.build("groq", config).api_key == "gsk-env-token"

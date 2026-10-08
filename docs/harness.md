@@ -181,14 +181,6 @@ history is reused; unknown writes are never automatically replayed. Iteration an
 repetition guards produce an incomplete outcome and a failing headless exit code.
 Persistent session write failures are surfaced rather than silently discarded.
 
-Checkpoints preserve tracked and dirty files, symlinks, modes, and the Git index.
-Rollback refuses changed HEAD and, for sealed agent checkpoints, later filesystem
-edits. Checkpoints have a 100 MB content limit. This does not recover database,
-network, ignored-file, external-mount, or other non-repository side effects.
-Review checkpoint scope before restoring; concurrent writers during an agent turn
-cannot always be distinguished from agent edits. Legacy checkpoints retain their
-older format and do not gain staged/index fidelity retroactively.
-
 Context is budgeted before every native model call, including headless runs.
 Instructions, tool schemas, and response reserve count against configured model
 limits. Counts are estimates; configure `model_context_limits` for your model.

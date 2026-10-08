@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from eirene.core import artifacts, compact, git
+from eirene.core import artifacts, compact
 from eirene.core.agent import ToolFinished, ToolOutput, TurnDone
 from eirene.core.errors import ToolError
 from eirene.core.modes import Mode
@@ -17,46 +17,6 @@ from eirene.headless import _emit
 from eirene.providers.base import Done, TextDelta, ToolCall
 from eirene.tools import files, isolation, shell
 from test_agent import Script, build, drive
-from test_git import repo, run
-
-
-def test_rollback_restores_clean_tracked_file(repo):
-    checkpoint = git.checkpoint(repo)
-    (repo / "tracked.txt").write_text("agent change\n")
-    git.rollback(repo, checkpoint)
-    assert (repo / "tracked.txt").read_text() == "original\n"
-
-
-def test_rollback_preserves_index_and_unstaged_content(repo):
-    target = repo / "tracked.txt"
-    target.write_text("staged\n")
-    run(repo, "git", "add", "tracked.txt")
-    target.write_text("unstaged\n")
-    checkpoint = git.checkpoint(repo)
-    target.write_text("agent\n")
-    run(repo, "git", "add", "tracked.txt")
-    git.rollback(repo, checkpoint)
-    assert target.read_text() == "unstaged\n"
-    assert run(repo, "git", "show", ":tracked.txt") == "staged"
-
-
-def test_rollback_rejects_later_user_edits(repo):
-    checkpoint = git.checkpoint(repo)
-    (repo / "tracked.txt").write_text("agent\n")
-    git.seal(repo, checkpoint)
-    (repo / "tracked.txt").write_text("new user work\n")
-    with pytest.raises(ToolError, match="newer work"):
-        git.rollback(repo, checkpoint)
-    assert (repo / "tracked.txt").read_text() == "new user work\n"
-
-
-def test_rollback_rejects_later_staging(repo):
-    checkpoint = git.checkpoint(repo)
-    (repo / "tracked.txt").write_text("agent\n")
-    git.seal(repo, checkpoint)
-    run(repo, "git", "add", "tracked.txt")
-    with pytest.raises(ToolError, match="newer work"):
-        git.rollback(repo, checkpoint)
 
 
 @pytest.mark.parametrize("command", ["git branch -D main", "git config core.hooksPath hooks",

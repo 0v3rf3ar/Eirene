@@ -34,4 +34,4 @@ Eirene forwards approvals and requests their native sandbox controls.
 
 User configuration cannot select an unisolated runtime or a container backend.
 Legacy backend settings are normalized to automatic platform isolation.
-See [execution and recovery](docs/harness.md) for the full trust model.
+See [execution boundaries](docs/harness.md) for the full trust model.
