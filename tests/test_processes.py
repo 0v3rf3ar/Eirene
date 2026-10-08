@@ -73,7 +73,7 @@ async def test_foreground_handoff_runs_once_and_keeps_late_output(workdir, pytho
         "p=Path('runs'); p.write_text(p.read_text()+'x' if p.exists() else 'x'); "
         "print('before', flush=True); time.sleep(.3); print('after', flush=True)")
     result = await shell.run(command, workdir, timeout=3, yield_after=.1, stall=0)
-    assert result.ok and result.process_id
+    assert not result.ok and result.process_id
     assert result.duration < .3
     await asyncio.sleep(.35)
     note = await processes.poll(result.process_id)

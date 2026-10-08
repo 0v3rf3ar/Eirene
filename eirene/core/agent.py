@@ -169,6 +169,7 @@ class Agent:
         self.mcp = MCPManager(definitions, self.sandbox.root)
         self.logger = get_logger()
         self.pending_input: list[str] = []
+        self._input_arrived = asyncio.Event()
         from .plugin_runtime import PluginRuntime
         self.plugin_runtime = PluginRuntime(session.id)
         self._turn_instructions = ""
@@ -179,9 +180,11 @@ class Agent:
 
     def steer(self, text: str) -> None:
         self.pending_input.append(text)
+        self._input_arrived.set()
 
     def _consume_input(self) -> bool:
         pending, self.pending_input = self.pending_input, []
+        self._input_arrived.clear()
         if pending:
             self._tool_cache.clear()
             self._work_revision += 1
@@ -362,6 +365,8 @@ class Agent:
                 local_context = await prepare(self.model)
                 limit = self.iteration_limit
             while True:
+                async for event in self._background_completions():
+                    yield event
                 self._consume_input()
                 if limit and iteration >= limit and local_context:
                     if len(outcomes) >= 2 and outcomes[-1] != outcomes[-2]:
@@ -468,6 +473,25 @@ class Agent:
                         break
 
                 if not calls:
+                    from ..tools import processes
+                    pending = processes.pending(self.sandbox.root, self.session.id)
+                    if pending:
+                        yield Phase(RUNNING)
+                        yield Notice("waiting for background commands", transient=True, phase="running")
+                        waits = [asyncio.create_task(p.done.wait()) for p in pending]
+                        changed = asyncio.create_task(self._input_arrived.wait())
+                        try:
+                            all_done = asyncio.gather(*waits)
+                            await asyncio.wait({all_done, changed}, return_when=asyncio.FIRST_COMPLETED)
+                            if self.pending_input:
+                                continue
+                        finally:
+                            changed.cancel()
+                            all_done.cancel()
+                            for wait in waits:
+                                wait.cancel()
+                            await asyncio.gather(all_done, changed, *waits, return_exceptions=True)
+                        continue
                     if self.pending_input:
                         continue
                     if finish in TRUNCATED or finish in {"cancelled", "interrupted", "failed", "incomplete"}:
@@ -516,6 +540,10 @@ class Agent:
                     break
 
         except asyncio.CancelledError:
+            from ..tools import processes
+            await asyncio.gather(*(processes.stop(p.id)
+                                   for p in processes.pending(self.sandbox.root, self.session.id)
+                                   if p.running))
             self.session.repair_pending()
             self._consume_input()
             self.session.add_note("cancelled")
@@ -580,14 +608,14 @@ class Agent:
             raise ProviderError("context still exceeds budget after compaction; reduce tool output or response allowance")
 
     async def _dispatch(self, calls):
-        parallel_names = {"read_file", "list_dir", "glob", "search_text", "find_symbol", "read_output"}
+        parallel_names = {"read_file", "list_dir", "glob", "search_text", "find_symbol", "find_references", "read_output"}
         unique = len({fingerprint(c.name, c.arguments) for c in calls}) == len(calls)
         parallel = len(calls) > 1 and unique and not any(merged_hooks(self.config).values()) and all(
             c.name in parallel_names and not tools.sandbox_escape(c.name, c.arguments, self.sandbox)
             for c in calls)
         if parallel and not self.pending_input:
             queue = asyncio.Queue(maxsize=64)
-            semaphore = asyncio.Semaphore(4)
+            semaphore = asyncio.Semaphore(max(1, min(4, self.host.cpu_threads)))
             async def worker(call):
                 async with semaphore:
                     async for event in self._handle(call, output_share=len(calls)):
@@ -751,7 +779,7 @@ class Agent:
             async for event in self._ask_user(call):
                 yield event
             return
-        result_limit = await self._tool_output_limit(output_share)
+        result_limit = min(await self._tool_output_limit(output_share), max(512, 12000 // output_share))
         is_mcp = self.mcp.owns(call.name)
         self.session.add_note("tool_state", call_id=call.id, tool=call.name, state="requested")
         kind = tools.EXEC if is_mcp else tools.kind_of(call.name)
@@ -767,13 +795,6 @@ class Agent:
             "write_file", "edit_file", "apply_patch", "run_command", "start_process",
         }
         from ..tools import processes
-        active_id = (processes.matching(str(call.arguments.get("command", "")).strip(), self.sandbox.root)
-                     if call.name in {"run_command", "start_process"} else None)
-        if active_id:
-            result = f"Already running as managed process {active_id}; not started again. Use poll_process to check the outcome."
-            self.session.add_tool_result(call.id, call.name, result)
-            yield ToolFinished(call.id, call.name, label, result, False, 0.0, reused=True)
-            return
         if (cacheable and cached and cached[3] == self._work_revision
                 and not processes.running() and not any(merged_hooks(self.config).values())):
             result, is_error, artifact_id, _ = cached
@@ -974,6 +995,30 @@ class Agent:
         available = max(0, budget - overhead - self.context_size() - 64 * share)
         return min(ceiling, available * 4 // max(1, share))
 
+    async def _background_completions(self):
+        from ..tools import processes
+        completed = [item for item in processes.pending(self.sandbox.root, self.session.id)
+                     if not item.running]
+        if not completed:
+            return
+        remaining = await self._tool_output_limit()
+        for item in completed:
+            result = await processes.poll(item.id, all_output=True)
+            call_id = "background_" + item.id
+            self.session.add_assistant("", [{"id": call_id, "name": "poll_process", "arguments": {"process_id": item.id}}])
+            limit = min(remaining, await self._tool_output_limit())
+            result = compact_output(result, limit, item.artifact.id,
+                                    source_required=True)
+            remaining -= len(result)
+            self.session.add_tool_result(call_id, "poll_process", result, item.state != "succeeded",
+                                         artifact_id=item.artifact.id)
+            item.notified = True
+            self._tool_cache.clear()
+            self._work_revision += 1
+            yield ToolFinished(item.call_id or call_id, "run_command", item.command,
+                result, item.state != "succeeded", time.monotonic() - item.started,
+                item.artifact.id)
+
     async def _execute_live(self, call, name, arguments, sandbox, *, output, **kwargs):
         queue: asyncio.Queue = asyncio.Queue(maxsize=32)
 
@@ -986,7 +1031,7 @@ class Agent:
 
         if name in {"web_search", "web_fetch"}:
             kwargs["search_service"] = self.search_service
-        task = asyncio.create_task(tools.execute(name, arguments, sandbox, on_output=feed, **kwargs))
+        task = asyncio.create_task(tools.execute(name, arguments, sandbox, on_output=feed, call_id=call.id, **kwargs))
         try:
             while not task.done() or not queue.empty():
                 try:

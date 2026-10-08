@@ -42,6 +42,22 @@ jobs:
           name: coverage-python-${{ matrix.python }}
           path: coverage.xml
 
+  native-commands:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Test native reads, process ownership, and OS command selection
+        run: python -m pytest -q tests/test_native_commands.py tests/test_processes.py tests/test_files.py tests/test_host_awareness.py tests/test_portable_runtime.py
+
   build:
     strategy:
       fail-fast: false

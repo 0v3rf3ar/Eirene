@@ -122,7 +122,6 @@ class Eirene(App):
     # layout
 
     def compose(self) -> ComposeResult:
-        yield ProcessBar()
         yield Transcript()
         yield PromptNavigator()
         yield BackToBottom()
@@ -866,6 +865,9 @@ class Eirene(App):
         return " · ".join(parts)
 
     # actions
+
+    def action_manage_processes(self) -> None:
+        self.process_bar.action_manage()
 
     def action_interrupt(self) -> None:
         """Close an output viewer before interrupting work underneath it."""

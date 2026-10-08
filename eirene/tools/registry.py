@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..core.errors import SandboxError, ToolError
-from . import browser, files, language, shell, processes, patches
+from . import browser, files, language, shell, processes, patches, native
 from ..core import project as project_ops
 from ..core import skills as skill_ops
 from ..core import plans as plan_ops
@@ -78,7 +78,7 @@ TOOLS: list[Tool] = [
         "type": "object",
         "properties": {"path": {"type": "string", "description": "Defaults to the sandbox root."}},
     }, ""),
-    Tool("glob", READ, "Find files by glob pattern, newest first.", {
+    Tool("glob", READ, "Find files with native OS commands; stable paths, optional relevance ranking.", {
         "type": "object",
         "properties": {
             "pattern": {"type": "string", "description": "e.g. '**/*.py'"},
@@ -92,7 +92,7 @@ TOOLS: list[Tool] = [
              "properties": {
                  "command": {"type": "string", "description": "Quote paths, set timeout, and narrow output using the detected host command profile. Prefer read_file for ranges."},
                  "timeout": {"type": "integer",
-                             "description": "Total time limit in seconds, including background work. Defaults adapt to the command; maximum 3600."},
+                             "description": "Total time limit in seconds, including background work. Defaults adapt to the command; maximum 86400."},
                  "stdin": {"type": "string", "description": "Optional exact input text; stdin closes after sending it."},
                  "powershell": {"type": "boolean",
                                 "description": "Use PowerShell instead of cmd on Windows."},
@@ -122,7 +122,7 @@ TOOLS: list[Tool] = [
                  "command": {"type": "string"},
                  "pty": {"type": "boolean", "description": "Use terminal emulation."},
                  "auto_stop": {"type": "integer",
-                               "description": "Seconds before automatic termination; defaults to 3600."},
+                               "description": "Seconds before automatic termination; default: app lifetime."},
              }, "required": ["command"],
          }),
     Tool("poll_process", READ, "Read output and state from a managed process.", {
@@ -290,6 +290,30 @@ BY_NAME["start_process"].schema["properties"]["powershell"] = {
     "type": "boolean", "description": "Use PowerShell instead of cmd on Windows."}
 
 
+for _name in ("run_command", "start_process"):
+    BY_NAME[_name].schema["properties"].update({
+        "cwd": {"type": "string", "description": "Working directory inside permitted paths; defaults to workspace."},
+        "shell": {"type": "string", "enum": ["auto", "bash", "sh", "powershell", "cmd"], "description": "Host shell; auto selects the detected default."},
+    })
+BY_NAME["run_command"].schema["properties"]["execution"] = {"type": "string", "enum": ["auto", "background"]}
+BY_NAME["poll_process"].schema["properties"]["wait"] = {"type": "boolean", "description": "Wait asynchronously for completion when no independent work remains; interruptible."}
+BY_NAME["search_text"].schema["properties"].update({
+    "literal": {"type": "boolean", "description": "Search exact text instead of a regex; preferred first."},
+    "case_sensitive": {"type": "boolean", "description": "Defaults to true."},
+    "whole_word": {"type": "boolean"},
+    "patterns": {"type": "array", "items": {"type": "string"}},
+    "output": {"type": "string", "enum": ["content", "files", "count"]},
+    "context": {"type": "integer", "description": "Surrounding lines, up to 20."},
+    "exclude": {"type": "array", "items": {"type": "string"}},
+})
+for _name in ("glob", "search_text"):
+    BY_NAME[_name].schema["properties"].update({
+        "hidden": {"type": "boolean", "description": "Include hidden paths; default false."},
+        "ignored": {"type": "boolean", "description": "Include generated/ignored files; default false."},
+    })
+BY_NAME["glob"].schema["properties"]["query"] = {"type": "string", "description": "Rank paths by exact path, basename, component, then substring."}
+
+
 def specs(include_exec: bool = True) -> list[dict[str, Any]]:
     """Schemas in provider-neutral form."""
     return [{"name": t.name, "description": t.description, "parameters": t.schema}
@@ -372,7 +396,7 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
                   on_output: Callable[[str], None] | None = None,
                   isolation: str = "none", isolate_network: bool = False,
                   plan_scope: str | None = None, read_only: bool = False,
-                  search_service=None) -> str:
+                  search_service=None, call_id="") -> str:
     """Run a tool call and return its text result."""
     if name not in BY_NAME:
         raise ToolError(f"unknown tool '{name}'")
@@ -389,55 +413,75 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
         except (ValueError, OSError) as exc:
             raise ToolError(f"cannot read output: {exc}") from exc
 
-    if name == "run_command":
-        command = str(args.get("command", "")).strip()
-        if not command:
-            raise ToolError("command is empty")
-        result = await shell.run(command, box.root,
-                                 timeout=_number(args.get("timeout"), shell.command_timeout(command, timeout)),
-                                 max_bytes=max_bytes, on_output=on_output,
-                                 input_text=args.get("stdin"), yield_after=10,
-                                 stall=0,
-                                 powershell=bool(args.get("powershell")),
-                                 pty=bool(args.get("pty")), isolation=isolation,
-                                 isolate_network=isolate_network and not args.get("network_access", False),
-                                 read_paths=args.get("read_paths", []), write_paths=args.get("write_paths", []),
-                                 read_only=read_only)
-        if result.refused:
-            raise ToolError(result.refused)
-        if not result.ok:
+    if name in {"run_command", "start_process"}:
+        command = _text(args, "command").strip()
+        cwd = box.resolve(str(args.get("cwd") or "."))
+        if not cwd.is_dir():
+            raise ToolError("cwd must be an existing directory")
+        options = dict(owner=plan_scope or "", call_id=call_id, sandbox_root=box.root, powershell=bool(args.get("powershell")),
+            shell_name=str(args.get("shell") or "auto"), pty=bool(args.get("pty")),
+            isolation=isolation, isolate_network=isolate_network and not args.get("network_access", False),
+            read_paths=args.get("read_paths", []), write_paths=args.get("write_paths", []))
+        if name == "start_process":
+            return await processes.start(command, cwd,
+                auto_stop=float(_number(args.get("auto_stop"), 0) or 0), **options)
+        execution = str(args.get("execution") or "auto")
+        if execution not in {"auto", "background"}:
+            raise ToolError("execution must be auto or background")
+        result = await shell.run(command, cwd,
+            timeout=_number(args.get("timeout"), None), max_bytes=max_bytes,
+            on_output=on_output, input_text=args.get("stdin"), yield_after=1,
+            execution=execution, read_only=read_only, default_timeout=timeout, **options)
+        if result.refused or (not result.ok and not result.process_id):
             raise ToolError(result.summary())
         return result.summary()
-
-    if name == "start_process":
-        return await processes.start(_text(args, "command"), box.root,
-                                     powershell=bool(args.get("powershell")),
-                                     pty=bool(args.get("pty")), isolation=isolation,
-                                     isolate_network=isolate_network and not args.get("network_access", False),
-                                     read_paths=args.get("read_paths", []), write_paths=args.get("write_paths", []),
-                                     auto_stop=float(_number(args.get("auto_stop"), 0) or 0))
     if name == "poll_process":
         return await processes.poll(_text(args, "process_id"),
-                                    all_output=bool(args.get("all_output")))
+                                    all_output=bool(args.get("all_output")), wait=bool(args.get("wait")))
     if name == "list_processes":
         return processes.listing()
     if name == "stop_process":
         return await processes.stop(_text(args, "process_id"))
     if name == "project_info":
-        return project_ops.describe(box.root, refresh=bool(args.get("refresh")))
-    if name == "search_text":
-        return files.search_text(box, _text(args, "pattern"),
-                                 str(args.get("path") or "."),
-                                 str(args.get("glob") or ""),
-                                 int(_number(args.get("limit"), 100) or 100))
-    if name == "find_symbol":
-        return files.find_symbol(box, _text(args, "name"),
-                                 str(args.get("path") or "."),
-                                 int(_number(args.get("limit"), 100) or 100))
-    if name == "find_references":
-        return language.references(box, _text(args, "symbol"),
-                                   str(args.get("path") or "."),
-                                   int(_number(args.get("limit"), 100) or 100))
+        profile = project_ops.discover(box.root, refresh=bool(args.get("refresh")))
+        token = native.POLICY.set(dict(isolation=isolation, isolate_network=True, read_only=isolation != "none"))
+        try:
+            paths, partial, note = await native.inventory(box)
+        finally:
+            native.POLICY.reset(token)
+        from collections import Counter
+        counts = Counter(project_ops.EXTENSIONS[p.suffix.lower()] for p in paths if p.suffix.lower() in project_ops.EXTENSIONS)
+        profile.languages = [lang for lang, _ in counts.most_common(6)]
+        profile.file_count = len(paths)
+        return profile.prompt_block() + ("\nPartial inventory; narrow discovery." if partial else "") + ("\n"+note if note else "")
+    if name in {"read_file", "list_dir", "glob", "search_text", "find_symbol", "find_references"}:
+        token = native.POLICY.set(dict(isolation=isolation, isolate_network=True, read_only=isolation != "none"))
+        try:
+            if name == "read_file":
+                path = _text(args, "path")
+                scoped = project_ops.scoped_instructions(box.root, box.resolve(path))
+                body = await native.read_file(box, path,
+                    int(_number(args.get("offset"), 0) or 0), int(_number(args.get("limit"), 0) or 0),
+                    max_chars=max(0, min(24000, max_bytes) - len(scoped) - 2),
+                    tail=bool(args.get("tail")), pattern=str(args.get("pattern") or ""),
+                    context=int(_number(args.get("context"), 2)), byte_offset=args.get("byte_offset"))
+                return body + ("\n\n" + scoped if scoped else "")
+            if name == "list_dir":
+                return await native.list_dir(box, str(args.get("path") or "."))
+            if name == "glob":
+                return await native.glob_files(box, _text(args, "pattern"), str(args.get("path") or "."),
+                    hidden=bool(args.get("hidden")), ignored=bool(args.get("ignored")), query=str(args.get("query") or ""))
+            path = str(args.get("path") or ".")
+            limit = int(_number(args.get("limit"), 100) or 100)
+            if name == "find_references":
+                return await native.references(box, _text(args,"symbol"), path, limit=limit)
+            if name == "find_symbol":
+                return await native.find_symbol(box, _text(args, "name"), path, limit)
+            options = {key: args[key] for key in ("literal", "case_sensitive", "whole_word", "patterns", "output", "context", "hidden", "ignored", "exclude") if key in args}
+            return await native.search_text(box, _text(args, "pattern"), path,
+                str(args.get("glob") or ""), limit, **options)
+        finally:
+            native.POLICY.reset(token)
     if name == "language_diagnostics":
         return await language.diagnostics(
             box, _text(args, "path"),
@@ -626,7 +670,7 @@ def sandbox_escape(name: str, args: dict[str, Any], box: Sandbox) -> str:
         outside = [p for p in escape_paths(name, args) if not box.contains(p)]
         if outside:
             return "patch outside workspace: " + ", ".join(outside)
-    for key in ("path",):
+    for key in ("path", "cwd"):
         value = args.get(key)
         if value and not box.contains(str(value)):
             return f"{value} is outside {box.root}"

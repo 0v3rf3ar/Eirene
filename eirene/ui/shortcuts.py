@@ -3,6 +3,7 @@
 SHORTCUTS = (
     ("f1", "help_menu", "F1", "Open the command menu"),
     ("ctrl+k", "keybindings", "Ctrl + K", "Show keybindings"),
+    ("ctrl+b", "manage_processes", "Ctrl + B", "View or stop running commands"),
     ("f2", "pick_model", "F2", "Choose a model"),
     ("f3", "pick_session", "F3", "Switch sessions"),
     ("ctrl+t", "pick_theme", "Ctrl + T", "Choose a theme"),

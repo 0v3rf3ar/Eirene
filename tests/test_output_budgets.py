@@ -107,7 +107,7 @@ async def test_artifact_pages_preserve_unicode_and_exact_offsets(box):
 
 
 async def test_direct_shell_call_uses_workload_deadline(workdir, python_command, monkeypatch):
-    monkeypatch.setattr(shell, "command_timeout", lambda command: 0.05)
+    monkeypatch.setattr(shell, "command_timeout", lambda command, fallback=None: 0.05)
     result = await shell.run(python_command("import time; time.sleep(10)"), workdir, stall=0)
     assert result.timed_out
     assert result.duration < 5
@@ -210,12 +210,49 @@ async def test_cloud_output_allowance_tracks_configured_context(workdir):
     assert tight < roomy
 
 
+@pytest.mark.parametrize("local", [True, False], ids=["local", "cloud"])
+async def test_background_completions_share_budget_and_keep_artifacts(workdir, monkeypatch, local):
+    from types import SimpleNamespace
+    from eirene.tools import processes
+    import time
+
+    provider = Script([TextDelta("done")])
+    if local:
+        provider.profile = LocalProfile("compact", 3, 16, 8, 0)
+    runner = build(workdir, provider)
+    evidence = "FIRST diagnostic\n" + "x" * 100000 + "\nFINAL diagnostic"
+    items = []
+    for index in range(3):
+        writer = artifacts.Writer()
+        writer.feed(evidence)
+        writer.close()
+        items.append(SimpleNamespace(id=str(index), running=False, state="failed",
+                     artifact=writer, call_id=str(index), command="test command",
+                     started=time.monotonic(), notified=False))
+
+    async def poll(*args, **kwargs):
+        return evidence
+
+    monkeypatch.setattr(processes, "pending", lambda *args: items)
+    monkeypatch.setattr(processes, "poll", poll)
+    allowance = await runner._tool_output_limit()
+    events = [event async for event in runner._background_completions()]
+    assert sum(len(event.result) for event in events) <= allowance
+    assert all(event.is_error for event in events)
+    results = [message for message in runner.session.messages if message.get("role") == "tool"]
+    assert len(results) == 3
+    for result, item in zip(results, items):
+        assert result["artifact_id"] == item.artifact.id
+        assert artifacts.read(item.artifact.id, limit=200000) == evidence
+        assert item.notified
+    assert "read_output" in results[0]["content"]
+
+
 def test_clipped_search_does_not_claim_complete_absence(box, workdir, monkeypatch):
-    monkeypatch.setattr(files, "MAX_READ_BYTES", 32)
-    (workdir / "long.txt").write_text("x" * 200 + "NEEDLE\n")
+    (workdir / "long.txt").write_text("x" * 400_000 + "NEEDLE\n")
     result = files.search_text(box, "NEEDLE")
-    assert "search is partial" in result
-    assert "no matches in inspected text" in result
+    assert "incomplete" in result
+    assert "no matches in returned preview" in result
 
 
 async def test_cli_owner_is_never_offered_native_tools(workdir):
@@ -252,6 +289,9 @@ async def test_command_stream_preserves_unicode_across_chunk_boundaries():
     process = SimpleNamespace(stdout=SimpleNamespace(read=read), wait=wait)
     received = []
     capture = shell._Capture(1024)
-    await shell._pump(process, capture, received.append)
+    from eirene.tools import processes
+    item = SimpleNamespace(process=process, capture=capture, output=bytearray(), cursor=0,
+        artifact=SimpleNamespace(feed=lambda text: None), on_output=received.append, background=False)
+    await processes._drain(item)
     assert "".join(received) == original
     assert capture.text() == original

@@ -7,6 +7,7 @@ import math
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import uuid
@@ -19,9 +20,9 @@ from . import activity
 
 IS_WINDOWS = os.name == "nt"
 DEFAULT_TIMEOUT = 120
-MAX_TIMEOUT = 3600
+MAX_TIMEOUT = 86_400
 DEFAULT_MAX_BYTES = 200_000
-DEFAULT_STALL = 60
+DEFAULT_STALL = 0
 
 # Commands that never exit on their own.
 BLOCKED: dict[str, str] = {
@@ -190,10 +191,12 @@ class ShellResult:
     refused: str = ""
     stalled: bool = False
     process_id: str = ""
+    artifact_id: str = ""
+    state: str = ""
 
     @property
     def ok(self) -> bool:
-        return bool(self.process_id) or (self.exit_code == 0 and not self.timed_out and not self.refused)
+        return self.exit_code == 0 and not self.process_id and not self.timed_out and not self.refused and self.state not in {"cancelled", "failed"}
 
     def summary(self) -> str:
         if self.process_id:
@@ -310,7 +313,7 @@ def _child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
 
 def _spawn_kwargs() -> dict:
     if IS_WINDOWS:
-        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000004}
     return {"start_new_session": True}
 
 
@@ -319,36 +322,28 @@ async def _kill_tree(process: asyncio.subprocess.Process) -> None:
 
 async def _terminate_tree(process: asyncio.subprocess.Process) -> None:
     """Kill the process and its children."""
-    if process.returncode is not None and IS_WINDOWS:
-        return
     if IS_WINDOWS:
-        try:
-            killer = await asyncio.create_subprocess_exec(
-                "taskkill", "/F", "/T", "/PID", str(process.pid),
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            await asyncio.wait_for(killer.wait(), timeout=10)
-        except (OSError, asyncio.TimeoutError):
-            pass
+        job = getattr(process, "_eirene_job", None)
+        if job is not None:
+            job.terminate()
+        elif process.returncode is None:
+            process.kill()
     else:
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            try:
-                # The session/group id stays valid if the shell exits before a
-                # child that still holds stdout open.
-                os.killpg(process.pid, sig)
-            except (ProcessLookupError, PermissionError, OSError):
-                try:
-                    process.kill()
-                except ProcessLookupError:
-                    pass
-                return
-            try:
-                await asyncio.wait_for(process.wait(), timeout=3)
-                if sig == signal.SIGKILL:
-                    return
-            except asyncio.TimeoutError:
-                continue
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        # Always escalate the group, even if its shell exited before its children.
+        try:
+            await asyncio.wait_for(process.wait(), timeout=1)
+        except asyncio.TimeoutError:
+            pass
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
     try:
-        await asyncio.wait_for(process.wait(), timeout=5)
+        await asyncio.wait_for(process.wait(), timeout=2)
     except asyncio.TimeoutError:
         pass
 
@@ -364,7 +359,7 @@ def command_timeout(command: str, fallback: float | None = None) -> float:
     words = _tokenize(command)
     names = {Path(word).name for word in words}
     if names & {"pytest", "cargo", "make", "cmake", "ninja", "npm", "pnpm", "yarn", "pip", "pip3", "go"}:
-        return max(_clamp_timeout(fallback), 600 if names & {"make", "cmake", "ninja"} else 300)
+        return max(_clamp_timeout(fallback), 600 if names & {"make", "cmake", "ninja", "build"} else 300)
     if is_safe(command):
         return min(_clamp_timeout(fallback), 30)
     return _clamp_timeout(fallback)
@@ -416,95 +411,62 @@ class _Capture:
 async def run(command: str, cwd: Path, *, timeout: float | None = None,
               max_bytes: int = DEFAULT_MAX_BYTES,
               on_output: Callable[[str], None] | None = None,
-              env: dict[str, str] | None = None,
-              powershell: bool = False,
-              allow_blocked: bool = False,
-              stall: float = DEFAULT_STALL, pty: bool = False,
-              isolation: str = "none", isolate_network: bool = False,
+              env: dict[str, str] | None = None, powershell: bool = False,
+              allow_blocked: bool = False, stall: float = DEFAULT_STALL,
+              pty: bool = False, isolation: str = "none", isolate_network: bool = False,
               read_paths=(), write_paths=(), read_only: bool = False,
-              input_text: str | None = None, yield_after: float | None = None) -> ShellResult:
-    """Run a command, guaranteed to return."""
-    loop = asyncio.get_running_loop()
-    started = loop.time()
+              input_text: str | None = None, yield_after: float | None = None,
+              shell_name: str = "auto", execution: str = "auto", argv=None, owner="", call_id="", sandbox_root=None, default_timeout=None) -> ShellResult:
+    """Run once; presentation handoff never changes process or output ownership."""
+    from . import processes
     if not allow_blocked:
         reason = screen(command)
         if reason:
-            return ShellResult(command, None, "", 0.0, refused=reason)
-
+            return ShellResult(command, None, "", 0, refused=reason, state="refused")
+    limit = _clamp_timeout(timeout) if timeout is not None else command_timeout(command, default_timeout)
+    sample = processes.estimate(command, cwd, shell_name)
+    if timeout is None and sample is not None:
+        limit = min(MAX_TIMEOUT, max(limit, sample * 3))
+    immediate = execution == "background" or (yield_after is not None and
+                (sample > yield_after if sample is not None else not is_safe(command)))
     command_id = uuid.uuid4().hex[:10]
-    item = ActiveCommand(command_id, command, cwd, asyncio.current_task())
-    _active[command_id] = item
+    active_item = ActiveCommand(command_id, command, cwd, asyncio.current_task())
+    _active[command_id] = active_item
     activity.changed()
+    item = None
     try:
-        limit = _clamp_timeout(timeout) if timeout is not None else command_timeout(command)
-        try:
-            actual = command
-            if pty:
-                if IS_WINDOWS:
-                    raise ToolError("PTY mode is not available on Windows")
-                from .processes import _pty_command
-                actual = _pty_command(command)
-            process = await _start(actual, cwd, env, powershell,
-                                   stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
-                                   isolation=isolation,
-                                   isolate_network=isolate_network, read_paths=read_paths,
-                                   write_paths=write_paths, read_only=read_only)
-            item.process = process
-        except (OSError, ValueError) as exc:
-            raise ToolError(f"cannot start command: {exc}") from exc
-
-        capture = _Capture(max_bytes)
-        timed_out = False
-        stalled = False
-        quiet = _clamp_stall(stall, limit)
-        handed_off = False
-        async def communicate():
-            async def send_input():
-                if process.stdin is not None:
-                    try:
-                        process.stdin.write((input_text or "").encode())
-                        await process.stdin.drain()
-                    except (BrokenPipeError, ConnectionResetError):
-                        pass
-                    finally:
-                        process.stdin.close()
-            await asyncio.gather(send_input(), _pump(process, capture, on_output, quiet))
-
-        pump = asyncio.create_task(communicate())
-        try:
-            if yield_after is not None and 0 < yield_after < limit and input_text is None:
-                done, _ = await asyncio.wait({pump}, timeout=yield_after)
-                if not done:
-                    from . import processes
-                    if processes.has_capacity():
-                        pump.cancel()
-                        await asyncio.gather(pump, return_exceptions=True)
-                        process_id = processes.adopt(process, command, cwd,
-                            initial_output=capture.text(), auto_stop=max(0.1, limit - (loop.time() - started)))
-                        handed_off = True
-                        return ShellResult(command, None, capture.text(), loop.time() - started,
-                                           truncated=capture.truncated, process_id=process_id)
-            await asyncio.wait_for(pump, timeout=max(0.1, limit - (loop.time() - started)))
-            await asyncio.wait_for(process.wait(), timeout=10)
-        except asyncio.TimeoutError:
-            timed_out = True
-            stalled = quiet > 0 and loop.time() - started < limit
-            await _kill_tree(process)
-        except asyncio.CancelledError:
-            await _kill_tree(process)
-            raise
-        finally:
-            if not pump.done():
-                pump.cancel()
-                await asyncio.gather(pump, return_exceptions=True)
-            if process.returncode is None and not handed_off:
-                await _kill_tree(process)
-
-        duration = loop.time() - started
-        return ShellResult(command=command, exit_code=process.returncode,
-                           output=capture.text(), duration=duration,
-                           timed_out=timed_out, truncated=capture.truncated,
-                           stalled=stalled)
+        item = await processes.launch(command, cwd, timeout=limit,
+            background=immediate, max_bytes=max_bytes, on_output=on_output,
+            input_text=input_text, pty=pty, powershell=powershell,
+            shell_name=shell_name, isolation=isolation, isolate_network=isolate_network,
+            read_paths=read_paths, write_paths=write_paths, read_only=read_only,
+            env=env, stall=stall, argv=argv, owner=owner, call_id=call_id, sandbox_root=sandbox_root)
+        active_item.process = item.process
+        if not immediate:
+            if yield_after is None:
+                await item.done.wait()
+            else:
+                try:
+                    await asyncio.wait_for(item.done.wait(), min(yield_after, limit))
+                except asyncio.TimeoutError:
+                    processes.background(item)
+        if item.running:
+            processes.background(item)
+        elapsed = asyncio.get_running_loop().time() - item.started
+        return ShellResult(command, item.exit_code, item.capture.text(), elapsed,
+            timed_out=item.state == "timed_out", truncated=item.capture.truncated,
+            stalled=bool(stall and item.state == "timed_out" and elapsed < limit),
+            process_id=item.id if item.running else "", artifact_id=item.artifact.id,
+            state=item.state)
+    except asyncio.CancelledError:
+        if item:
+            await processes.stop(item.id)
+        raise
+    except asyncio.TimeoutError:
+        return ShellResult(command, None, "process startup exceeded its deadline", limit,
+                           timed_out=True, state="timed_out")
+    except (OSError, ValueError) as exc:
+        raise ToolError(f"cannot start command: {exc}") from exc
     finally:
         _active.pop(command_id, None)
         activity.changed()
@@ -514,41 +476,73 @@ async def _start(command: str, cwd: Path, env: dict[str, str] | None,
                  powershell: bool, *, stdin=subprocess.DEVNULL,
                  isolation: str = "none",
                  isolate_network: bool = False, read_paths=(), write_paths=(),
-                 read_only: bool = False) -> asyncio.subprocess.Process:
+                 read_only: bool = False, shell_name: str = "auto", argv=None, sandbox_root=None) -> asyncio.subprocess.Process:
+    selected = select_shell(shell_name, powershell=powershell)
     kwargs = dict(cwd=str(cwd), env=_child_env(env), stdin=stdin,
                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **_spawn_kwargs())
-    if isolation != "none" or read_only:
-        from . import isolation as environments
-        argv = environments.command(command, cwd, backend=isolation,
-                                    network=not isolate_network, read_paths=read_paths,
-                                    write_paths=write_paths, read_only=read_only)
-        kwargs["env"] = environments.environment({**NONINTERACTIVE_ENV, **(env or {})})
-        process = await asyncio.create_subprocess_exec(*argv, **kwargs)
-        return process
-    if powershell and IS_WINDOWS:
-        from shutil import which
-        exe = which("pwsh") or which("powershell")
-        if not exe:
-            raise ToolError("PowerShell is not installed; use cmd or install PowerShell")
-        # EncodedCommand avoids cmd quoting and preserves Unicode under Windows 5.1.
+    if argv is not None:
+        launch_argv = argv
+    elif selected in {"powershell", "pwsh"}:
         import base64
+        executable = shutil.which("pwsh") or shutil.which("powershell")
         script = ("$ErrorActionPreference='Stop'; "
                   "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); "
                   "$global:LASTEXITCODE=0; & {\n" + command +
                   "\n}; if (-not $?) { exit 1 }; exit $LASTEXITCODE")
         encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-        return await asyncio.create_subprocess_exec(
-            exe, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded, **kwargs)
+        launch_argv = [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
+    elif selected == "cmd":
+        launch_argv = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c",
+                       "chcp 65001 >nul & " + command]
+    else:
+        launch_argv = posix_argv(command, selected)
+    if isolation != "none" or read_only:
+        from . import isolation as environments
+        launch_argv = environments.command(command, sandbox_root or cwd, backend=isolation,
+            network=not isolate_network, read_paths=read_paths, write_paths=write_paths,
+            read_only=read_only, launch_argv=launch_argv, workdir=cwd)
+        kwargs["env"] = environments.environment({**NONINTERACTIVE_ENV, **(env or {})})
+    process = await asyncio.create_subprocess_exec(*launch_argv, **kwargs)
     if IS_WINDOWS:
-        return await asyncio.create_subprocess_exec(
-            os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c",
-            "chcp 65001 >nul & " + command, **kwargs)
-    return await asyncio.create_subprocess_exec(*posix_argv(command), **kwargs)
+        try:
+            own_windows(process)
+        except BaseException:
+            process.kill()
+            await process.wait()
+            raise
+    return process
 
 
-def posix_argv(command: str) -> list[str]:
+def own_windows(process):
+    from .windows_jobs import own
+    process._eirene_job = own(process.pid)
+
+
+def select_shell(name="auto", *, powershell=False):
+    if powershell:
+        name = "powershell"
+    if name == "auto":
+        return ("powershell" if shutil.which("pwsh") or shutil.which("powershell") else "cmd") if IS_WINDOWS else ("bash" if Path("/bin/bash").is_file() else "sh")
+    allowed = {"powershell", "cmd"} if IS_WINDOWS else {"bash", "sh"}
+    if name not in allowed:
+        raise ToolError(f"shell {name!r} is unavailable on this OS")
+    if name == "powershell" and not (shutil.which("pwsh") or shutil.which("powershell")):
+        raise ToolError("PowerShell is not installed")
+    if name in {"bash", "sh"} and not shutil.which(name):
+        raise ToolError(f"{name} is not installed")
+    return name
+
+
+def release_process(process):
+    job = getattr(process, "_eirene_job", None)
+    if job is not None:
+        job.close()
+        process._eirene_job = None
+
+
+def posix_argv(command: str, selected: str = "auto") -> list[str]:
     """Preserve failed pipeline stages where the installed shell supports it."""
-    if Path("/bin/bash").is_file():
+    if selected != "sh" and Path("/bin/bash").is_file():
         return ["/bin/bash", "--noprofile", "--norc", "-o", "pipefail", "-c", command]
     return ["/bin/sh", "-c", command]
 
@@ -556,38 +550,3 @@ def posix_argv(command: str) -> list[str]:
 def _has(name: str) -> bool:
     from shutil import which
     return which(name) is not None
-
-
-async def _pump(process: asyncio.subprocess.Process, capture: _Capture,
-                on_output: Callable[[str], None] | None,
-                stall: float = 0.0) -> None:
-    """Drain stdout until the process ends."""
-    import codecs
-    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-    stream = process.stdout
-    if stream is None:
-        await process.wait()
-        return
-    while True:
-        if stall <= 0:
-            chunk = await stream.read(8192)
-        else:
-            chunk = await asyncio.wait_for(stream.read(8192), timeout=stall)
-        if not chunk:
-            if on_output:
-                final = decoder.decode(b"", final=True)
-                if final:
-                    try:
-                        on_output(final)
-                    except Exception:
-                        pass
-            break
-        capture.feed(chunk)
-        if on_output:
-            text = decoder.decode(chunk)
-            if text:
-                try:
-                    on_output(text)
-                except Exception:
-                    pass
-    await process.wait()

@@ -38,6 +38,21 @@ CASES = [
      "allowed": ["calc.py"],
      "prompt": "Run python3 verify.py, diagnose the failure, fix calc.py, and rerun verification. Do not edit verify.py.",
      "check": "from calc import divide; assert divide(9,3)==3; assert divide(5,2)==2.5"},
+    {"id": "ambiguous_location", "files": {
+        "server/auth.py": "def error_message():\n    return 'Login failed'\n",
+        "client/auth.py": "def error_message():\n    return 'Login failed'\n",
+        "client/screen.py": "from client.auth import error_message\ndef render():\n    return error_message()\n"},
+     "allowed": ["client/auth.py"],
+     "prompt": "The login screen's failure message should say 'Try signing in again'. Find the code that controls the displayed message and change it. Keep the server response unchanged. Verify it.",
+     "check": "from client.screen import render; from server.auth import error_message; assert render()=='Try signing in again'; assert error_message()=='Login failed'"},
+    {"id": "ignored_decoy", "files": {
+        ".gitignore": "dist/\n",
+        "src/formatting.py": "def title(s):\n    return s.lower()\n",
+        "dist/formatting.py": "def title(s):\n    return s.lower()\n"},
+     "allowed": ["src/formatting.py"],
+     "prompt": "Our title formatter lowercases names. Locate its source and make it title-case them. Leave generated output untouched. Verify the change.",
+     "check": "from src.formatting import title; assert title('ALICE smith')=='Alice Smith'"},
+
 ]
 
 
@@ -53,6 +68,7 @@ async def evaluate(args):
         # Keep work and logs available for inspection; never delete results automatically.
         root = Path(tempfile.mkdtemp(prefix=f"eirene-eval-{case['id']}-"))
         for name, content in case["files"].items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
             (root / name).write_text(content)
         session = Session.create(root)
         agent = Agent(session, config, Sandbox(root))
@@ -76,6 +92,8 @@ async def evaluate(args):
         except TimeoutError:
             status = "timeout"
         finally:
+            from .tools import processes
+            await processes.stop_all()
             await agent.close()
             session.close()
         check = await shell.run("python3 -c " + shlex.quote(case["check"]), root,

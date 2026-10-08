@@ -1,98 +1,146 @@
-"""A conditional top bar for managed background commands."""
+"""Background commands directly below the model line; idle costs no timer."""
 
 from __future__ import annotations
 
+import time
 from rich.text import Text
 from textual import events
 from textual.widgets import Static
-
 from ..tools import activity, processes, shell
-from . import art
-
-REFRESH_INTERVAL = 0.2
+from .format import strip_escapes
 
 
 class ProcessBar(Static):
-    """Show live commands and open a stop menu when clicked."""
-
     DEFAULT_CSS = """
-    ProcessBar {
-        width: 1fr;
-        height: 1;
-        dock: top;
-        padding: 0 1;
-        background: $panel;
-        display: none;
-    }
-    ProcessBar.running {
-        display: block;
-    }
-    ProcessBar:hover {
-        text-style: bold;
-    }
+    ProcessBar { width: 1fr; height: 1; padding: 0 1; background: transparent; display: none; }
+    ProcessBar:focus { text-style: bold; }
     """
+    can_focus = True
+    BINDINGS = [("enter", "manage", "View/stop commands")]
 
-    def __init__(self) -> None:
+    def __init__(self):
         super().__init__(Text(""))
-        self._ids: tuple[str, ...] = ()
+        self._timer = None
 
-    def on_mount(self) -> None:
+    def on_mount(self):
         activity.subscribe(self.refresh_state)
         self.refresh_state()
-        self.set_interval(REFRESH_INTERVAL, self.refresh_state)
 
-    def on_unmount(self) -> None:
+    def on_unmount(self):
         activity.unsubscribe(self.refresh_state)
+        if self._timer:
+            self._timer.stop()
 
     @staticmethod
-    def _rows() -> list[tuple[str, str]]:
-        foreground = [(label, f"command:{value}") for label, value in shell.active()]
-        background = [(label, f"process:{value}")
-                      for label, value in processes.running()]
-        provider = [(label, f"provider:{value}")
-                    for label, value in activity.provider_commands()]
-        return foreground + background + provider
+    def _rows():
+        return processes.running()
 
-    def refresh_state(self) -> None:
-        """Match visibility and text to the currently running commands."""
+    def refresh_state(self):
         rows = self._rows()
-        ids = tuple(value for _, value in rows)
+        self.display = bool(rows)
         if not rows:
-            self._ids = ()
-            self.remove_class("running")
-            self.display = False
+            if self._timer:
+                self._timer.stop()
+                self._timer = None
             self.update(Text(""))
             return
+        if self._timer is None and self.is_mounted:
+            self._timer = self.set_interval(1, self.refresh_state)
+        labels = []
+        for _, process_id in rows[:2]:
+            item = processes._get(process_id)
+            elapsed = time.monotonic() - item.started
+            command = " ".join(strip_escapes(item.command).split())[:48]
+            deadline = (
+                f" / {item.deadline - item.started:.0f}s" if item.deadline else ""
+            )
+            labels.append(f"{command} {elapsed:.0f}s{deadline}")
+        extra = f" · +{len(rows) - 2} more" if len(rows) > 2 else ""
+        self.update(
+            Text(
+                f"● {len(rows)} background · "
+                + " · ".join(labels)
+                + extra
+                + " · view/stop",
+                overflow="ellipsis",
+                no_wrap=True,
+            )
+        )
 
-        self._ids = ids
-        self.add_class("running")
-        self.display = True
-        count = len(rows)
-        body = Text()
-        body.append(f"{art.icon('bullet')} ", style="bold")
-        body.append(f"{count} running command{'' if count == 1 else 's'}", style="bold")
-        body.append("  ·  click to view or stop", style="dim")
-        self.update(body)
-
-    def on_click(self, event: events.Click) -> None:
+    def on_click(self, event: events.Click):
         event.stop()
+        self.action_manage()
+
+    def action_manage(self):
         self.run_worker(self._show_commands(), group="process-bar", exclusive=True)
 
-    async def _show_commands(self) -> None:
-        """Open the live-command picker without blocking the message loop."""
+    async def _show_commands(self):
         rows = self._rows()
-        if not rows:
-            self.refresh_state()
+        options = []
+        for label, value in rows:
+            options += [
+                (f"view:{value}", label, "View output"),
+                (f"stop:{value}", label, "Stop command"),
+            ]
+        options += [
+            (f"provider:{value}", label, "Stop provider command")
+            for label, value in activity.provider_commands()
+        ]
+        options += [
+            (f"foreground:{value}", label, "Stop foreground command")
+            for label, value in shell.active()
+        ]
+        if not options:
+            self.app.say("no running commands")
             return
-        options = [(value, label, "") for label, value in rows]
-        command_id = await self.app.ask_choice(
-            "running commands — select one to stop", options)
-        if command_id:
-            kind, _, value = command_id.partition(":")
-            if kind == "command":
-                self.app.say(await shell.stop_active(value))
-            elif kind == "provider":
+        choice = await self.app.ask_choice(
+            "background commands — view output or stop", options
+        )
+        if choice:
+            action, _, value = choice.partition(":")
+            if action == "provider":
                 self.app.say(await activity.stop_provider_command(value))
-            else:
+            elif action == "foreground":
+                self.app.say(await shell.stop_active(value))
+            elif action == "stop":
                 self.app.say(await processes.stop(value))
+            else:
+                from .output import OutputScreen
+
+                self.app.push_screen(OutputScreen(ProcessOutput(processes._get(value))))
         self.refresh_state()
+
+
+class ProcessOutput:
+    """Live adapter for the existing output viewer."""
+
+    def __init__(self, item):
+        self.item = item
+
+    @property
+    def label(self):
+        return self.item.command
+
+    @property
+    def artifact_id(self):
+        return self.item.artifact.id if self.item.artifact else ""
+
+    @property
+    def finished(self):
+        return not self.item.running
+
+    @property
+    def is_error(self):
+        return self.item.state not in {"running", "starting", "succeeded"}
+
+    @property
+    def seconds(self):
+        return time.monotonic() - self.item.started
+
+    @property
+    def output(self):
+        return self.item.capture.text()
+
+    @property
+    def result(self):
+        return self.output

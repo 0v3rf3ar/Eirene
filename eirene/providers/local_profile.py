@@ -99,13 +99,13 @@ OS: {host}
 Mode: {mode}
 {facts}Stay in sandbox. manual: approve writes/commands; plan: reads only.
 Use focused file/search tools; don't repeat calls.
-read_file: pattern/context, tail, offset/limit, byte_offset.
-Commands: quote paths; keep stderr and exit status; stdin for data.
+Reads: pattern/context, tail, offset/limit, byte_offset.
+Quote paths; retain errors and exit status.
 Set timeout: 30 reads, 300 tests, 600 builds; no interactive commands.
 {commands}
-Partial output is incomplete. read_output limit=1024: pass
-next_offset as offset. Read needed pages only; compact if full.
-Poll managed processes to completion; don't restart them.
+Partial output is incomplete. read_output limit=1024; next_offset as offset.
+Search literal text or filenames; batch reads.
+poll_process wait=true when idle; never restart a running command.
 Research: web_search; use passages; cite URLs.
 """
         if self.tier == "balanced":

@@ -6,9 +6,9 @@ Eirene gives local/API models host-specific command guidance and passes native h
 | --- | --- | --- |
 | Linux | Bash with pipefail, sh fallback | Bubblewrap |
 | macOS | System Bash/sh, BSD utility guidance, BSD PTY launcher | sandbox-exec (required; no silent fallback) |
-| Windows | CMD by default; powershell=true on run_command/start_process | Each native command needs explicit approval; no kernel isolation backend |
+| Windows | PowerShell when installed; shell=cmd for CMD; powershell=true remains supported | Each native command needs explicit approval; no kernel isolation backend |
 
-PowerShell is launched without profiles, noninteractively, with UTF-8 output and error/exit-code propagation. Install pwsh or Windows PowerShell to use it. Windows plan mode uses portable file/search tools; native command execution cannot guarantee read-only behavior. Headless Windows commands requiring approval fail closed. Codex and Claude Code continue to own their native tools and permission policies. Native Windows Claude Code requires approval for each turn without kernel isolation; plan mode disables command and edit tools. Use WSL2 for Claude sandboxing.
+PowerShell is launched without profiles, noninteractively, with UTF-8 output and error/exit-code propagation. Install pwsh or Windows PowerShell to use it. Windows plan mode permits fixed native read/search templates; native command execution cannot guarantee read-only behavior. Headless Windows commands requiring approval fail closed. Codex and Claude Code continue to own their native tools and permission policies. Native Windows Claude Code requires approval for each turn without kernel isolation; plan mode disables command and edit tools. Use WSL2 for Claude sandboxing.
 
 ## Installer behavior
 

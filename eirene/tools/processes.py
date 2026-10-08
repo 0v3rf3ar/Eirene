@@ -1,16 +1,17 @@
-"""Explicit lifecycle management for long-running development processes."""
+"""One owner, output pump, deadline and artifact for each native command."""
 
 from __future__ import annotations
 
 import asyncio
+import codecs
 import os
 import sys
 import shlex
 import shutil
-import signal
 import subprocess
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -20,7 +21,8 @@ from . import activity, shell
 
 MAX_PROCESSES = 8
 MAX_CAPTURE = 400_000
-DEFAULT_LIFETIME = 3600
+DEFAULT_LIFETIME = 0  # Explicit services belong to the application lifetime.
+_history: OrderedDict[tuple, list[float]] = OrderedDict()
 
 
 @dataclass
@@ -28,48 +30,41 @@ class ManagedProcess:
     id: str
     command: str
     cwd: Path
-    process: asyncio.subprocess.Process
-    started: float = field(default_factory=time.time)
+    process: asyncio.subprocess.Process | None = None
+    started: float = field(default_factory=time.monotonic)
     output: bytearray = field(default_factory=bytearray)
     cursor: int = 0
+    startup: asyncio.Task | None = None
     pump: asyncio.Task | None = None
-    stop_timer: asyncio.Task | None = None
     artifact: artifacts.Writer | None = None
     stop_reason: str = ""
     last_poll: float = 0.0
+    background: bool = False
+    service: bool = False
+    state: str = "starting"
+    deadline: float | None = None
+    shell_name: str = "auto"
+    context: tuple = ()
+    capture: shell._Capture | None = None
+    done: asyncio.Event = field(default_factory=asyncio.Event)
+    ready: asyncio.Event = field(default_factory=asyncio.Event)
+    on_output: object = None
+    sandbox_root: Path | None = None
+    owner: str = ""
+    call_id: str = ""
+    notified: bool = False
+    stopping: bool = False
 
     @property
     def running(self) -> bool:
-        return self.process.returncode is None or (self.pump is not None and not self.pump.done())
+        return not self.done.is_set()
+
+    @property
+    def exit_code(self):
+        return self.process.returncode if self.process else None
 
 
 _processes: dict[str, ManagedProcess] = {}
-
-
-async def start(command: str, cwd: Path, *, pty: bool = False, powershell: bool = False,
-                isolation: str = "none", isolate_network: bool = False,
-                auto_stop: float = 0, read_paths=(), write_paths=()) -> str:
-    reap()
-    if len([item for item in _processes.values() if item.running]) >= MAX_PROCESSES:
-        raise ToolError(f"at most {MAX_PROCESSES} managed processes may run")
-    reason = shell.screen(command, persistent=True)
-    if reason:
-        raise ToolError(reason)
-    actual = _pty_command(command) if pty else command
-    try:
-        process = await shell._start(actual, cwd, None, powershell, stdin=subprocess.DEVNULL,
-                                     isolation=isolation,
-                                     isolate_network=isolate_network, read_paths=read_paths,
-                                     write_paths=write_paths)
-    except (OSError, ValueError) as exc:
-        raise ToolError(f"cannot start process: {exc}") from exc
-    try:
-        process_id = adopt(process, command, cwd, auto_stop=auto_stop)
-    except BaseException:
-        await shell._kill_tree(process)
-        raise
-    await asyncio.sleep(0)
-    return f"started {process_id} (pid {process.pid})"
 
 
 def has_capacity() -> bool:
@@ -77,149 +72,362 @@ def has_capacity() -> bool:
     return sum(item.running for item in _processes.values()) < MAX_PROCESSES
 
 
-def matching(command: str, cwd: Path) -> str | None:
-    """Find an already-running command so the agent does not launch it twice."""
-    return next((item.id for item in _processes.values()
-                 if item.running and item.cwd == cwd and item.command == command), None)
+def matching(command: str, cwd: Path, context: tuple | None = None) -> str | None:
+    return next(
+        (
+            p.id
+            for p in _processes.values()
+            if p.running
+            and p.command == command
+            and p.cwd == cwd
+            and (context is None or p.context == context)
+        ),
+        None,
+    )
 
 
-def adopt(process, command: str, cwd: Path, *, initial_output="", auto_stop=0) -> str:
-    """Take ownership of a running command without executing it a second time."""
+def estimate(command: str, cwd: Path, shell_name: str) -> float | None:
+    samples = _history.get((str(cwd), shell_name, command), [])
+    if len(samples) < 3:
+        return None
+    return max(samples[-5:])
+
+
+async def launch(
+    command: str,
+    cwd: Path,
+    *,
+    timeout: float | None,
+    background=False,
+    service=False,
+    max_bytes=200_000,
+    on_output=None,
+    input_text=None,
+    pty=False,
+    powershell=False,
+    shell_name="auto",
+    isolation="none",
+    isolate_network=False,
+    read_paths=(),
+    write_paths=(),
+    read_only=False,
+    env=None,
+    stall=0,
+    argv=None,
+    owner="",
+    call_id="",
+    sandbox_root=None,
+) -> ManagedProcess:
+    context = (
+        str(sandbox_root or cwd),
+        owner,
+        shell_name,
+        powershell,
+        isolation,
+        isolate_network,
+        read_only,
+        tuple(read_paths),
+        tuple(write_paths),
+        input_text,
+        pty,
+        tuple(sorted((env or {}).items())),
+    )
+    existing = matching(command, cwd, context)
+    if existing:
+        previous = _processes[existing]
+        await previous.ready.wait()
+        if previous.process is None:
+            raise ToolError("previous command failed during startup")
+        return previous
     if not has_capacity():
-        raise ToolError(f"at most {MAX_PROCESSES} managed processes may run")
-    process_id = uuid.uuid4().hex[:10]
-    item = ManagedProcess(process_id, command, cwd, process)
-    item.artifact = artifacts.Writer()
-    item.artifact.feed(initial_output)
-    item.output.extend(initial_output.encode()[-MAX_CAPTURE:])
-    item.cursor = len(item.output)
-    _processes[process_id] = item
-    lifetime = shell._clamp_timeout(auto_stop or DEFAULT_LIFETIME)
-    item.pump = asyncio.create_task(_pump(item))
-    item.stop_timer = asyncio.create_task(_stop_later(item, lifetime))
+        raise ToolError(
+            f"at most {MAX_PROCESSES} commands may run; stop or await an existing command"
+        )
+    item = ManagedProcess(
+        uuid.uuid4().hex[:10],
+        command,
+        cwd,
+        background=background,
+        service=service,
+        shell_name=shell_name,
+        context=context,
+        capture=shell._Capture(max_bytes),
+        on_output=on_output,
+        owner=owner,
+        call_id=call_id,
+        sandbox_root=sandbox_root,
+        startup=asyncio.current_task(),
+    )
+    if timeout is not None:
+        item.deadline = item.started + shell._clamp_timeout(timeout)
+    _processes[item.id] = item  # Reserve capacity before the first await.
     activity.changed()
-    return process_id
+    try:
+        item.artifact = artifacts.Writer()
+        actual = _pty_command(command) if pty else command
+        spawn_limit = (
+            min(10.0, max(0.01, item.deadline - time.monotonic()))
+            if item.deadline
+            else 10.0
+        )
+        item.process = await asyncio.wait_for(
+            shell._start(
+                actual,
+                cwd,
+                env,
+                powershell,
+                stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+                isolation=isolation,
+                isolate_network=isolate_network,
+                read_paths=read_paths,
+                write_paths=write_paths,
+                read_only=read_only,
+                shell_name=shell_name,
+                argv=argv,
+                sandbox_root=sandbox_root,
+            ),
+            spawn_limit,
+        )
+        item.state = "running"
+        item.startup = None
+        item.ready.set()
+        item.pump = asyncio.create_task(_supervise(item, input_text, stall))
+        activity.changed()
+        return item
+    except BaseException:
+        await _cleanup(item)
+        item.state = "failed"
+        item.done.set()
+        item.ready.set()
+        _processes.pop(item.id, None)
+        activity.changed()
+        raise
 
 
-async def poll(process_id: str, *, all_output: bool = False) -> str:
+async def _supervise(item: ManagedProcess, input_text, stall):
+    async def send_input():
+        if item.process.stdin is not None:
+            try:
+                item.process.stdin.write((input_text or "").encode())
+                await item.process.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                item.process.stdin.close()
+
+    async def communicate():
+        await asyncio.gather(send_input(), _drain(item, stall))
+
+    try:
+        remaining = (
+            max(0.001, item.deadline - time.monotonic()) if item.deadline else None
+        )
+        await asyncio.wait_for(communicate(), remaining)
+        if not item.stop_reason:
+            item.state = "succeeded" if item.exit_code == 0 else "failed"
+    except asyncio.TimeoutError:
+        item.stop_reason = "time limit reached"
+        item.state = "timed_out"
+    except asyncio.CancelledError:
+        item.stop_reason = item.stop_reason or "cancelled"
+        item.state = "cancelled" if item.state != "timed_out" else item.state
+    except Exception as exc:
+        item.stop_reason = f"output failed: {exc}"
+        item.state = "failed"
+    finally:
+        await _cleanup(item)
+        if item.state == "succeeded":
+            key = (str(item.cwd), item.shell_name, item.command)
+            samples = _history.setdefault(key, [])
+            samples.append(time.monotonic() - item.started)
+            del samples[:-5]
+            _history.move_to_end(key)
+            while len(_history) > 128:
+                _history.popitem(last=False)
+        item.done.set()
+        activity.changed()
+
+
+async def _cleanup(item):
+    try:
+        if item.process:
+            await asyncio.wait_for(shell._kill_tree(item.process), 4)
+            if item.process.returncode is None:
+                raise OSError("OS process could not be reaped")
+    except (OSError, asyncio.TimeoutError, asyncio.CancelledError) as exc:
+        item.stop_reason += f"; cleanup incomplete: {exc or 'deadline exceeded'}"
+        if item.state == "succeeded":
+            item.state = "failed"
+    finally:
+        if item.process:
+            shell.release_process(item.process)
+        if item.artifact:
+            try:
+                item.artifact.close()
+            except OSError as exc:
+                item.stop_reason += f"; output close failed: {exc}"
+                item.state = "failed"
+
+
+async def _drain(item: ManagedProcess, stall=0):
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    while True:
+        read = item.process.stdout.read(8192)
+        chunk = await asyncio.wait_for(read, stall) if stall else await read
+        if not chunk:
+            break
+        item.capture.feed(chunk)
+        item.output.extend(chunk)
+        if len(item.output) > MAX_CAPTURE:
+            removed = len(item.output) - MAX_CAPTURE
+            del item.output[:removed]
+            item.cursor = max(0, item.cursor - removed)
+        text = decoder.decode(chunk)
+        item.artifact.feed(text)
+        if item.on_output and not item.background:
+            item.on_output(text)
+    final = decoder.decode(b"", final=True)
+    if final:
+        item.artifact.feed(final)
+    await item.process.wait()
+
+
+def background(item: ManagedProcess) -> None:
+    item.background = True
+    item.cursor = len(item.output)
+    item.on_output = None
+    activity.changed()
+
+
+async def start(
+    command: str,
+    cwd: Path,
+    *,
+    pty=False,
+    powershell=False,
+    isolation="none",
+    isolate_network=False,
+    auto_stop=0,
+    read_paths=(),
+    write_paths=(),
+    shell_name="auto",
+    owner="",
+    call_id="",
+    sandbox_root=None,
+) -> str:
+    reason = shell.screen(command, persistent=True)
+    if reason:
+        raise ToolError(reason)
+    item = await launch(
+        command,
+        cwd,
+        timeout=auto_stop or None,
+        background=True,
+        service=True,
+        pty=pty,
+        powershell=powershell,
+        shell_name=shell_name,
+        isolation=isolation,
+        isolate_network=isolate_network,
+        read_paths=read_paths,
+        write_paths=write_paths,
+        owner=owner,
+        call_id=call_id,
+        sandbox_root=sandbox_root,
+    )
+    return (
+        f"started {item.id} (pid {item.process.pid}); service owned until app exit"
+        + (f"; deadline {auto_stop:g}s" if auto_stop else "")
+    )
+
+
+async def poll(process_id: str, *, all_output=False, wait=False) -> str:
     item = _get(process_id)
-    # Fast empty polls should not turn into a hot model/tool loop.
-    delay = min(1.0, max(0.0, item.last_poll + 1.0 - time.monotonic()))
-    if delay and item.running and item.cursor == len(item.output):
-        await asyncio.sleep(delay)
-    item.last_poll = time.monotonic()
-    await asyncio.sleep(0)
+    if wait and item.running:
+        await item.done.wait()
     begin = 0 if all_output else item.cursor
     data = bytes(item.output[begin:]).decode("utf-8", "replace")
     item.cursor = len(item.output)
-    state = "running" if item.running else f"exited {item.process.returncode}"
-    elapsed = max(time.time() - item.started, 0)
-    header = f"{item.id}: {state} for {elapsed:.1f}s (pid {item.process.pid})"
+    state = "running" if item.running else f"exited {item.exit_code}; {item.state}"
+    header = f"{item.id}: {state} for {time.monotonic() - item.started:.1f}s"
     if item.stop_reason:
         header += f"; {item.stop_reason}"
     if len(data) > 6000:
         from ..core.tool_memory import compact_output
+
         data = compact_output(data, 6000, item.artifact.id)
-    note = "\n(no new output; continue independent work before polling again)" if item.running else "\n(no new output)"
-    return header + (("\n" + data.rstrip()) if data else note)
+    if item.artifact:
+        header += f"; output artifact {item.artifact.id}"
+    return header + ("\n" + data.rstrip() if data else "\n(no new output)")
 
 
 async def stop(process_id: str) -> str:
     item = _get(process_id)
-    if item.running:
-        await shell._kill_tree(item.process)
-    if item.pump:
-        try:
-            await asyncio.wait_for(item.pump, timeout=2)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+    if item.running and not item.stopping:
+        item.stopping = True
+        item.stop_reason = "cancelled"
+        if item.pump:
+            await asyncio.sleep(0)  # Let the supervisor enter its cleanup boundary.
             item.pump.cancel()
-    current = asyncio.current_task()
-    if item.stop_timer and item.stop_timer is not current and not item.stop_timer.done():
-        item.stop_timer.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(item.pump), 5)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                item.stop_reason = "cleanup did not finish within 5s"
+        elif item.startup and item.startup is not asyncio.current_task():
+            item.startup.cancel()
+            try:
+                await asyncio.wait_for(item.done.wait(), 5)
+            except asyncio.TimeoutError:
+                item.stop_reason = "startup cleanup did not finish within 5s"
+        elif item.process:
+            await shell._kill_tree(item.process)
     activity.changed()
-    return f"stopped {item.id} (exit {item.process.returncode})"
+    return f"stopped {item.id} (exit {item.exit_code}); {item.stop_reason}"
 
 
 def listing() -> str:
     reap()
-    if not _processes:
-        return "no managed processes"
-    rows = []
-    for item in _processes.values():
-        state = "running" if item.running else f"exit {item.process.returncode}"
-        rows.append(f"{item.id}  {state}  pid {item.process.pid}  {item.command}")
-    return "\n".join(rows)
+    return (
+        "\n".join(f"{p.id}  {p.state}  {p.command}" for p in _processes.values())
+        or "no managed processes"
+    )
 
 
-def reap() -> None:
-    # Keep exited entries available for inspection during this app process, but
-    # discard the oldest once the registry grows beyond a useful history.
-    if len(_processes) <= MAX_PROCESSES * 2:
-        return
-    exited = sorted((p for p in _processes.values() if not p.running),
-                    key=lambda p: p.started)
-    for item in exited[:len(_processes) - MAX_PROCESSES * 2]:
-        _processes.pop(item.id, None)
+def reap():
+    if len(_processes) > MAX_PROCESSES * 2:
+        exited = sorted(
+            (p for p in _processes.values() if not p.running), key=lambda p: p.started
+        )
+        for item in exited[: len(_processes) - MAX_PROCESSES * 2]:
+            _processes.pop(item.id, None)
 
 
-async def stop_all() -> None:
-    for process_id in list(_processes):
-        item = _processes[process_id]
-        if item.running:
-            await stop(process_id)
-        elif item.stop_timer and not item.stop_timer.done():
-            item.stop_timer.cancel()
+async def stop_all():
+    await asyncio.gather(*(stop(p.id) for p in list(_processes.values()) if p.running))
 
 
 def running() -> list[tuple[str, str]]:
-    """Return stable picker labels and IDs for live processes."""
     reap()
-    return [(f"{item.id}  pid {item.process.pid}  {item.command}", item.id)
-            for item in _processes.values() if item.running]
+    return [
+        (f"{p.id}  {p.command}", p.id)
+        for p in _processes.values()
+        if p.running and p.background
+    ]
 
 
-async def _pump(item: ManagedProcess) -> None:
-    try:
-        await _drain(item)
-    except asyncio.CancelledError:
-        await shell._kill_tree(item.process)
-        raise
-    finally:
-        if item.artifact:
-            item.artifact.close()
-        if item.stop_timer and not item.stop_reason and item.stop_timer is not asyncio.current_task():
-            item.stop_timer.cancel()
+def pending(cwd: Path, owner: str = "") -> list[ManagedProcess]:
+    return [
+        p
+        for p in _processes.values()
+        if (owner or p.cwd == cwd or cwd in p.cwd.parents)
+        and p.owner == owner
+        and p.background
+        and not p.service
+        and not p.notified
+    ]
 
 
-async def _drain(item: ManagedProcess) -> None:
-    stream = item.process.stdout
-    if stream is None:
-        await item.process.wait()
-        activity.changed()
-        return
-    while True:
-        chunk = await stream.read(8192)
-        if not chunk:
-            break
-        item.output.extend(chunk)
-        if item.artifact:
-            item.artifact.feed(chunk.decode("utf-8", "replace"))
-        if len(item.output) > MAX_CAPTURE:
-            removed = len(item.output) - MAX_CAPTURE
-            del item.output[:removed]
-            item.cursor = max(item.cursor - removed, 0)
-    await item.process.wait()
-    activity.changed()
-
-
-async def _stop_later(item: ManagedProcess, seconds: float) -> None:
-    await asyncio.sleep(seconds)
-    if item.running:
-        item.stop_reason = "time limit reached"
-        await stop(item.id)
-
-
-def _get(process_id: str) -> ManagedProcess:
+def _get(process_id):
     item = _processes.get(process_id.strip())
     if item is None:
         raise ToolError(f"no managed process '{process_id}'")
@@ -234,4 +442,4 @@ def _pty_command(command: str) -> str:
         raise ToolError("PTY mode needs the 'script' command")
     if sys.platform == "darwin":
         return shlex.join([executable, "-q", "/dev/null", *shell.posix_argv(command)])
-    return f"{shlex.quote(executable)} -qefc {shlex.quote(command)} /dev/null"
+    return f"{shlex.quote(executable)} -q -c {shlex.quote(command)} /dev/null"

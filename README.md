@@ -104,7 +104,8 @@ startup checks. Offline startup continues normally.
 The agent can locate definitions and callers with `find_symbol` and
 `find_references`, inspect focused source ranges, and run installed parsers or
 compilers with `language_diagnostics`. See [code navigation](docs/code-navigation.md)
-for usage and limitations.
+for usage and limitations. Long commands run in the background, shown beneath the
+model name; Ctrl+B opens command output and stop controls.
 
 ## Platforms and execution
 
@@ -115,7 +116,7 @@ for usage and limitations.
 | Windows | Explicit approval for each command; no native kernel isolation |
 
 Linux and macOS fail closed when the required isolation backend is unavailable.
-Windows plan mode blocks native commands. Codex and Claude Code use their own
+Windows plan mode allows fixed native read/search templates and blocks arbitrary shell commands. Codex and Claude Code use their own
 execution environments and permission controls.
 
 Changes apply to your real workspace. Read [execution boundaries](docs/harness.md)
@@ -166,7 +167,7 @@ python -m pytest -q
 Run `python -m ruff check .` and `python -m mypy` for static checks, and
 `python -m pytest -q --cov --cov-report=term:skip-covered --cov-report=xml` for
 branch coverage. CI runs these checks and uploads a coverage report. Type
-checking covers paths, subprocess helpers, updates, and language servers; the older application
+checking covers paths, subprocess helpers, and updates; the older application
 modules can be added incrementally. Linting checks syntax and undefined names
 across the repository without imposing a new formatting style.
 

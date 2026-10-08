@@ -66,32 +66,8 @@ async def diagnostics(box: Sandbox, path: str, timeout: float = 30, *,
 
 
 def references(box: Sandbox, symbol: str, path: str = ".", limit: int = 100) -> str:
-    """Find identifier references while excluding common generated trees."""
-    name = str(symbol or "").strip()
-    if not re.fullmatch(r"[A-Za-z_$][\w$]*", name):
-        raise ToolError("symbol must be one identifier")
-    root = box.resolve(path)
-    if not root.exists():
-        raise ToolError(f"path does not exist: {path}")
-    cap = max(1, min(int(limit), 500))
-    rg = shutil.which("rg")
-    if not rg:
-        raise ToolError("find_references requires ripgrep (`rg`)")
-    command = [rg, "--line-number", "--column", "--no-heading", "--color", "never",
-               "--glob", "!.git/**", "--glob", "!node_modules/**",
-               "--glob", "!build/**", "--glob", "!dist/**", "--glob", "!target/**",
-               rf"\b{re.escape(name)}\b", str(root)]
-    try:
-        result = subprocess.run(command, cwd=box.root, capture_output=True, text=True,
-                                timeout=20, check=False)
-    except subprocess.TimeoutExpired as exc:
-        raise ToolError("reference search timed out") from exc
-    rows = result.stdout.splitlines()
-    if not rows:
-        return f"no references to {name}"
-    shown = rows[:cap]
-    suffix = f"\n… {len(rows) - cap} more" if len(rows) > cap else ""
-    return "\n".join(shown) + suffix
+    from . import native
+    return native.sync(native.references(box, symbol, path, limit=limit))
 
 
 def _diagnostic_command(path: Path, suffix: str) -> list[str] | None:

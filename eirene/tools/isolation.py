@@ -13,15 +13,16 @@ from ..core.errors import ToolError
 
 def command(command: str, root: Path, *, backend: str = "auto",
             network: bool = False, read_paths=(), write_paths=(),
-            read_only: bool = False) -> list[str]:
+            read_only: bool = False, launch_argv: list[str] | None = None, workdir: Path | None = None) -> list[str]:
     from .shell import posix_argv
+    launch_argv = launch_argv or posix_argv(command)
     root = root.resolve()
     if backend == "auto":
         backend = "seatbelt" if sys.platform == "darwin" else "bubblewrap"
     if backend == "none":
         if read_only:
             raise ToolError("read-only execution requires an isolation backend")
-        return posix_argv(command)
+        return launch_argv
     reads = [(root / Path(p).expanduser()).resolve() for p in read_paths]
     writes = [(root / Path(p).expanduser()).resolve() for p in write_paths]
     if read_only and writes:
@@ -56,7 +57,7 @@ def command(command: str, root: Path, *, backend: str = "auto",
                 profile.append(f"(allow file-write* ({rule} {quoted}))")
         if network:
             profile.append("(allow network*)")
-        return [exe, "-p", "\n".join(profile), *posix_argv(command)]
+        return [exe, "-p", "\n".join(profile), *launch_argv]
     if backend == "bubblewrap":
         exe = shutil.which("bwrap")
         if sys.platform != "linux" or not exe:
@@ -76,8 +77,8 @@ def command(command: str, root: Path, *, backend: str = "auto",
         for path, writable in mounts:
             argv += ["--bind" if writable else "--ro-bind", str(path), str(path)]
         argv += ["--setenv", "HOME", "/tmp/eirene-home",
-                 "--setenv", "TMPDIR", "/tmp", "--chdir", str(root)]
-        return argv + posix_argv(command)
+                 "--setenv", "TMPDIR", "/tmp", "--chdir", str(workdir or root)]
+        return argv + launch_argv
     raise ToolError(f"unknown isolation backend: {backend}")
 
 

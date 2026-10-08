@@ -25,9 +25,10 @@ TMPDIR. Homebrew's `/opt/homebrew` directory is readable when present. Seatbelt
 restricts access to host paths rather than creating Linux-style mount namespaces.
 Both backends share the host kernel, not a virtual machine.
 
-Windows commands run with the user's account permissions after approval. Portable
-file/search/edit tools retain their application-level path checks. Native commands
-cannot enforce read-only plan mode and are blocked there. Headless Windows runs
+Arbitrary Windows commands run with the user's account permissions after approval
+and are blocked in plan mode. Fixed native read/search templates accept validated
+paths and data, never arbitrary script text, and are available in plan mode.
+File edits retain application-level path checks. Headless Windows runs
 fail closed when a command needs approval. See [platform support](platforms.md)
 for external CLI behavior and WSL2 guidance.
 
@@ -45,8 +46,8 @@ file, grant its narrowest existing parent. `/` cannot be granted. Paths retain
 their host absolute names inside the sandbox, so tool arguments need no remapping.
 
 File tools and unified patches also support approved external paths, including
-`~` paths. Those tools enforce resolved-path checks inside Eirene; they are not
-executed inside the native command sandbox. Do not use them against a hostile process actively
+`~` paths. Edits and patches enforce resolved-path checks inside Eirene. Native read/search
+tools additionally use read-only command isolation on Linux/macOS. Do not use them against a hostile process actively
 racing symlink changes. Review edits to sensitive configuration even when the
 target path was approved.
 
@@ -78,7 +79,7 @@ invoke a model or launch probe commands. The snapshot is reused for model turns.
 Hardware figures are estimates, and undetected GPU memory is reported as unknown.
 
 Provider and local-model prompts receive only their host's command profile.
-Windows uses CMD and, when detected, PowerShell; macOS uses its BSD/POSIX profile;
+Windows prefers detected PowerShell and supports explicit CMD; macOS uses its BSD/POSIX profile;
 Linux uses its own profile. Bounded read examples are chosen from installed
 utilities. Command schemas omit PowerShell on other systems and omit PTY on
 Windows. Small local prompts retain the same concise hardware/tool facts.
@@ -197,16 +198,24 @@ within a turn reuse previous results; mutations invalidate cached observations.
 Active processes and hooks bypass caching. Malformed and truncated tool requests
 are returned to the model for correction without executing them.
 
-Foreground commands get workload-based deadlines (30 seconds for simple reads,
-120 by default, 300 for tests/package work, 600 for builds), capped at one hour.
-Explicit timeouts override these defaults. After 10 seconds, commands without
-explicit stdin hand off to the process manager without restarting; their original
-deadline remains in force. A handed-off command is still pending, not successful.
-Managed processes default to a one-hour lifetime and stop when Eirene exits.
-On systems with `/bin/bash`, pipelines enable `pipefail`. Commands can receive
-literal text through the `stdin` argument, which closes after writing; stderr
-remains captured alongside stdout. Output previews keep the beginning and end,
-with bounded full artifacts accessible through `read_output`.
+Short commands have a one-second foreground allowance. Unknown/long commands
+start in the background. Default deadlines are 30 seconds for simple reads,
+120 seconds for unknown work, 300 seconds for tests/package operations, and
+600 seconds for builds. Explicit timeouts override defaults, up to 24 hours.
+A foreground handoff preserves the process, output pump, artifact, and deadline,
+including when stdin was supplied. Pending execution is not success.
+
+Explicit services started with `start_process` remain until stopped or app exit;
+`auto_stop` sets an optional deadline. Quiet work is not automatically killed.
+All startup, cancellation, pipe draining, and cleanup waits are bounded. POSIX
+process groups and Windows Job Objects own descendants. Output is captured from
+startup, with bounded memory and artifacts. Literal stdin closes after writing.
+
+Background commands appear on one conditional line beneath the model name.
+Select it to view output or stop work; Ctrl+B also exposes foreground/provider
+command controls. Finite background completion is delivered to the agent, which
+can wait asynchronously instead of spending model calls polling. See
+[native command details](code-navigation.md) for tool options and OS fallbacks.
 
 Nested AGENTS.md/EIRENE.md/CLAUDE.md files are supplied before file-tool edits;
 arbitrary shell scripts must still obey the agent's instruction-loading policy.

@@ -109,8 +109,9 @@ async def test_process_bar_only_appears_for_running_commands(workdir, python_com
         await pilot.pause()
 
         assert app.process_bar.display
-        assert "1 running command" in content(app.process_bar)
+        assert "1 background" in content(app.process_bar)
 
+        assert app.process_bar.region.y == app.mode_line.region.bottom
         bar = app.process_bar.region
         await pilot.click(offset=(bar.x + 2, bar.y))
         await pilot.pause()
@@ -118,7 +119,7 @@ async def test_process_bar_only_appears_for_running_commands(workdir, python_com
         assert process_id in content(app.picker)
         assert command in content(app.picker)
 
-        await pilot.press("enter")
+        await pilot.press("down", "enter")
         await asyncio.sleep(0.25)
         await pilot.pause()
         assert not app.process_bar.display
@@ -126,29 +127,17 @@ async def test_process_bar_only_appears_for_running_commands(workdir, python_com
         await context.__aexit__(None, None, None)
 
 
-async def test_process_bar_immediately_tracks_normal_shell_commands(workdir, python_command):
+async def test_process_bar_stays_hidden_for_foreground_commands(workdir, python_command):
     from eirene.tools import shell
-
     app, pilot, context = await start(workdir)
     try:
-        command_text = python_command("import time; time.sleep(10)")
-        command = asyncio.create_task(
-            shell.run(command_text, workdir, timeout=20, allow_blocked=True))
-        await asyncio.sleep(0)
-        await pilot.pause()
-
-        assert app.process_bar.display
-        assert command_text in shell.active()[0][0]
-        assert "1 running command" in content(app.process_bar)
-
-        bar = app.process_bar.region
-        await pilot.click(offset=(bar.x + 2, bar.y))
-        await pilot.pause()
-        assert command_text in content(app.picker)
-        await pilot.press("enter")
-        await command
+        task = asyncio.create_task(shell.run(python_command("import time;time.sleep(10)"), workdir, timeout=20))
+        await asyncio.sleep(.05)
         await pilot.pause()
         assert not app.process_bar.display
+        assert app.process_bar._timer is None
+        await shell.stop_active(shell.active()[0][1])
+        await task
     finally:
         await context.__aexit__(None, None, None)
 
@@ -165,9 +154,8 @@ async def test_process_bar_can_stop_subscription_provider_commands(workdir):
     command_id = activity.start_provider_command("Codex: npm test", stop)
     try:
         await pilot.pause()
-        assert app.process_bar.display
-        bar = app.process_bar.region
-        await pilot.click(offset=(bar.x + 2, bar.y))
+        assert not app.process_bar.display
+        await pilot.press("ctrl+b")
         await pilot.pause()
         assert command_id in content(app.picker)
         assert "Codex: npm test" in content(app.picker)
@@ -293,7 +281,7 @@ async def test_bottom_dock_is_in_the_right_order(workdir):
         composer = app.query_one("Composer")
         names = [type(child).__name__ for child in composer.children]
         assert names == ["Picker", "PermissionBar", "SlashMenu", "StatusLine",
-                         "TaskList", "Rule", "PromptRow", "Rule", "ModeLine"]
+                         "TaskList", "Rule", "PromptRow", "Rule", "ModeLine", "ProcessBar"]
         row = [type(child).__name__ for child in app.query_one("PromptRow").children]
         assert row == ["Marker", "Prompt"]
         assert content(app.query_one("Marker")) == "❯"

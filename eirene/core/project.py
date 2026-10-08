@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -98,8 +97,11 @@ def _scan(root: Path) -> ProjectProfile:
     if (root / "package.json").is_file():
         try:
             scripts = json.loads((root / "package.json").read_text()).get("scripts", {})
+            if not isinstance(scripts, dict):
+                scripts = {}
             commands = [c for c in commands if c not in MANIFESTS["package.json"][1]]
-            commands.extend(f"npm run {name}" for name in ("test", "lint", "typecheck", "build") if name in scripts)
+            manager = "pnpm" if (root / "pnpm-lock.yaml").exists() else "yarn" if (root / "yarn.lock").exists() else "bun" if any((root / n).exists() for n in ("bun.lock", "bun.lockb")) else "npm"
+            commands.extend(f"{manager} run {name}" for name in ("test", "lint", "typecheck", "build") if name in scripts)
         except (OSError, ValueError, AttributeError):
             pass
     instructions = [name for name in INSTRUCTION_FILES if (root / name).is_file()]
@@ -115,19 +117,9 @@ def _scan(root: Path) -> ProjectProfile:
         remaining -= len(chunk)
         if remaining <= 0:
             break
-    counts: Counter[str] = Counter()
-    file_count = 0
-    for current, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in SKIP]
-        for filename in files:
-            file_count += 1
-            language = EXTENSIONS.get(Path(filename).suffix.lower())
-            if language:
-                counts[language] += 1
-            if file_count >= MAX_FILES:
-                dirs[:] = []
-                break
-    languages = [name for name, _ in counts.most_common(6)]
+    language_names = {"Python": "Python", "Node.js": "JavaScript", "Rust": "Rust", "Go": "Go", "Java/Maven": "Java", "Java/Gradle": "Java", "Kotlin/Gradle": "Kotlin", "Ruby": "Ruby", "PHP": "PHP"}
+    languages = list(dict.fromkeys(language_names[f] for f in frameworks if f in language_names))
+    file_count = 0  # Native inventory is loaded on demand by project_info.
     return ProjectProfile(str(root), root.name or str(root),
                           list(dict.fromkeys(frameworks)), languages, manifests,
                           instructions, list(dict.fromkeys(commands)), file_count,
@@ -135,8 +127,8 @@ def _scan(root: Path) -> ProjectProfile:
 
 
 def _signature(root: Path) -> str:
-    facts = []
-    for name in (*MANIFESTS, *INSTRUCTION_FILES):
+    facts = [("profile_version", "native-commands-v1")]
+    for name in (*MANIFESTS, *INSTRUCTION_FILES, "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"):
         path = root / name
         try:
             facts.append((name, path.stat().st_mtime_ns, path.stat().st_size))

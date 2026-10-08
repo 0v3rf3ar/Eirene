@@ -423,6 +423,8 @@ class Composer(Container):
             yield Prompt()
         yield Rule()
         yield ModeLine()
+        from .processes import ProcessBar
+        yield ProcessBar()
 
     @property
     def prompt(self) -> Prompt:

@@ -9,27 +9,27 @@ import shutil
 
 def shell_name() -> str:
     if os.name == "nt":
-        return "cmd (PowerShell available through powershell=true)"
+        return "PowerShell (powershell=true; shell=cmd for batch syntax)"
     return "bash" if Path("/bin/bash").is_file() else "sh"
 
 
 def guidance(*, native: bool = False, system: str | None = None, host=None) -> str:
     system = system or platform.system()
-    common = "Use the host's command syntax; never assume GNU utilities, Bash, or Unix paths exist. Prefer portable file/search tools for reading and editing. Use the detected tool inventory; check availability only for additional optional programs."
+    common = "Use the host's command syntax; never assume GNU utilities, Bash, or Unix paths exist. Use native-backed file/search tools for precise bounded reads; use edit tools for changes. Use the detected tool inventory; check availability only for additional optional programs."
     if system == "Windows":
         selector = ("Select the appropriate shell with your native command tool." if native else
-                    "run_command and start_process default to cmd; set powershell=true for PowerShell.")
+                    "run_command and start_process prefer PowerShell; use shell=cmd for CMD syntax (powershell=true remains supported).")
         detail = fr"""Windows command profile. {selector}
 CMD: dir /b, type "file", where program, set "NAME=value", %NAME%, and && for success chaining. Single quotes do not quote CMD arguments. Quote paths with double quotes.
 PowerShell: Get-ChildItem -LiteralPath '.', Get-Content -LiteralPath 'file' -TotalCount 80, Select-String, Get-Command, $env:NAME='value'. Use & 'C:\Program Files\tool.exe' for quoted executable paths. Windows PowerShell 5.1 has no &&; check $LASTEXITCODE for native programs. Use -LiteralPath for filenames containing brackets.
 Use python or py -3 when installed, not an assumed python3 alias. Use ping -n 4; no /dev/null, sudo, chmod, sed, or Unix environment assignments. PTY mode is unavailable in Eirene on Windows.
-Native commands require individual approval because Eirene has no Windows kernel isolation backend. In plan mode use portable read/search tools instead."""
+Native commands require individual approval because Eirene has no Windows kernel isolation backend. In plan mode use the fixed native read/search tools."""
         if host is not None and not ({"pwsh", "powershell"} & set(host.available)):
             detail = ("Windows command profile: CMD only; PowerShell was not found on host PATH. "
                       "Use dir /b, where program, set \"NAME=value\", %NAME%, and && for success chaining. "
-                      "Quote paths with double quotes; use portable file/search tools for bounded reads. "
+                      "Quote paths with double quotes; use native read/search tools for bounded reads. "
                       "Use ping -n 4. PTY mode is unavailable. "
-                      "Native commands require individual approval; plan mode uses portable read tools.")
+                      "Native commands require individual approval; plan mode uses fixed native read tools.")
     elif system == "Darwin":
         detail = """macOS command profile: Eirene uses /bin/bash (or /bin/sh), not the interactive login shell. Use POSIX syntax and BSD utilities. Built-in Bash may be 3.2: avoid associative arrays/mapfile. sed -i requires a backup suffix (sed -i '' ...); prefer edit_file. stat uses -f, date uses -v; GNU readlink -f, timeout, and grep -P may be absent. Use command -v, printf, head/tail, and python3 if installed. Both Intel and Apple Silicon paths must be discovered, not hardcoded."""
     else:
@@ -61,9 +61,9 @@ class Host:
         system = platform.system()
         candidates = ("git", "rg", "node", "npm", "pytest", "cargo", "go")
         candidates += (("pwsh", "powershell", "python", "py") if system == "Windows"
-                       else ("python3", "grep", "sed", "head", "tail", "make"))
+                       else ("python3", "find", "awk", "grep", "sed", "head", "tail", "base64", "make"))
         installed = tuple(name for name in candidates if shutil.which(name))
-        selected_shell = ("cmd (PowerShell available through powershell=true)"
+        selected_shell = ("PowerShell (powershell=true; shell=cmd for batch syntax)"
                           if system == "Windows" and {"pwsh", "powershell"} & set(installed)
                           else "cmd" if system == "Windows" else shell_name())
         return cls(system, selected_shell, platform.machine() or "unknown",
@@ -81,7 +81,7 @@ class Host:
     def prompt_block(self) -> str:
         return (self.hardware_line() + "\n" + self.tools_line() +
                 "\nAbsent from host PATH: " + (", ".join(self.missing) or "none") +
-                "\nThis startup inventory is already checked. Use portable file/search tools "
+                "\nThis startup inventory is already checked. Use native read/search tools "
                 "when a utility is absent; project-installed tools may differ. "
                 "Host installation does not imply sandbox access.")
 
@@ -117,5 +117,11 @@ class Host:
                     properties.pop("powershell", None)
                 if self.system == "Windows":
                     properties.pop("pty", None)
+                    choices = ["auto", "cmd"]
+                    if {"pwsh", "powershell"} & set(self.available):
+                        choices.append("powershell")
+                else:
+                    choices = ["auto", "bash", "sh"]
+                properties["shell"]["enum"] = choices
             result.append(spec)
         return result

@@ -33,6 +33,7 @@ def test_platform_contract(system, expected):
 async def test_windows_powershell_preserves_unicode_and_reports_errors(workdir, monkeypatch):
     monkeypatch.setattr(shell, "IS_WINDOWS", True)
     monkeypatch.setattr(shell, "_spawn_kwargs", lambda: {})
+    monkeypatch.setattr(shell, "own_windows", lambda process: None)
     monkeypatch.setattr("shutil.which", lambda name: "pwsh.exe" if name == "pwsh" else None)
     spawn = AsyncMock()
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
@@ -47,10 +48,11 @@ async def test_windows_powershell_preserves_unicode_and_reports_errors(workdir, 
 async def test_windows_cmd_selects_system_processor(workdir, monkeypatch):
     monkeypatch.setattr(shell, "IS_WINDOWS", True)
     monkeypatch.setattr(shell, "_spawn_kwargs", lambda: {})
+    monkeypatch.setattr(shell, "own_windows", lambda process: None)
     monkeypatch.setenv("COMSPEC", "custom-cmd.exe")
     spawn = AsyncMock()
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
-    await shell._start('echo "a b"', workdir, None, False)
+    await shell._start('echo "a b"', workdir, None, False, shell_name='cmd')
     assert spawn.call_args.args[:4] == ("custom-cmd.exe", "/d", "/s", "/c")
     assert spawn.call_args.args[-1].endswith('echo "a b"')
 
@@ -58,6 +60,7 @@ async def test_windows_cmd_selects_system_processor(workdir, monkeypatch):
 async def test_missing_powershell_is_actionable(workdir, monkeypatch):
     monkeypatch.setattr(shell, "IS_WINDOWS", True)
     monkeypatch.setattr(shell, "_spawn_kwargs", lambda: {})
+    monkeypatch.setattr(shell, "own_windows", lambda process: None)
     monkeypatch.setattr("shutil.which", lambda name: None)
     with pytest.raises(ToolError, match="PowerShell is not installed"):
         await shell._start("echo hi", workdir, None, True)

@@ -1087,15 +1087,14 @@ async def test_duplicate_reads_in_one_batch_execute_once(workdir, monkeypatch):
     assert len(results) == 2 and results[-1].reused
 
 
-async def test_running_command_is_not_started_twice(workdir, monkeypatch):
-    from eirene.tools import processes
-    monkeypatch.setattr(processes, "matching", lambda command, cwd: "live-process")
-    provider = Script([ToolCall("duplicate", "run_command", {"command": "npm run dev"}), Done("tool_use")],
-                      [TextDelta("using the existing process"), Done("stop")])
-    events = await drive(build(workdir, provider))
-    result = next(e for e in events if isinstance(e, ToolFinished))
-    assert result.reused and "live-process" in result.result
-    assert "not started again" in result.result
+async def test_running_command_is_not_started_twice(workdir, python_command):
+    from eirene.tools import processes, shell
+    command = python_command("import time; time.sleep(.2)")
+    first = await shell.run(command, workdir, execution="background")
+    second = await shell.run(command, workdir, execution="background")
+    assert first.process_id == second.process_id
+    await processes.stop(first.process_id)
+
 
 
 async def test_local_search_output_fits_remaining_context(workdir, monkeypatch):
@@ -1148,3 +1147,45 @@ async def test_local_file_read_is_bounded_before_generic_compaction(workdir):
     assert "continue with offset=" in result
     assert "omitted" not in result and "truncated" not in result
     assert events[-1].status == "completed"
+
+
+async def test_background_failure_updates_original_tool_event(workdir,python_command):
+    command=python_command('import time;time.sleep(.1);raise SystemExit(7)')
+    provider=Script([ToolCall('bg','run_command',{'command':command}),Done('tool_use')],
+                    [TextDelta('waiting'),Done('stop')],
+                    [TextDelta('command failed'),Done('stop')])
+    runner=build(workdir,provider)
+    events=await drive(runner)
+    finished=[e for e in events if isinstance(e,ToolFinished) and e.id=='bg']
+    assert finished[-1].is_error
+    assert 'exit' in finished[-1].result
+    assert '7' in finished[-1].result
+
+
+async def test_cancelling_background_wait_stops_session_command(workdir, python_command):
+    from eirene.tools import processes, shell
+
+    runner = build(workdir, Script([TextDelta("waiting"), Done("stop")]))
+    result = await shell.run(
+        python_command("import time; time.sleep(30)"), workdir,
+        owner=runner.session.id, execution="background",
+    )
+    waiting = asyncio.Event()
+
+    async def consume():
+        async for event in runner.run("go"):
+            if isinstance(event, Notice) and event.text == "waiting for background commands":
+                waiting.set()
+
+    task = asyncio.create_task(consume())
+    try:
+        await asyncio.wait_for(waiting.wait(), 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        item = processes._get(result.process_id)
+        assert item.done.is_set() and not item.running
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await processes.stop(result.process_id)

@@ -22,12 +22,15 @@ Linux commands receive a private temporary directory and home. macOS commands us
 a private scratch directory and an allowlist of runtime paths. Both backends use
 the host kernel; neither provides virtual-machine isolation.
 
-Windows has no native kernel isolation backend. Each native command requires
+Windows has no native kernel isolation backend. Each arbitrary shell command requires
 explicit approval and runs with the user's account permissions. Plan mode blocks
-native commands, and headless commands that require approval fail closed.
+arbitrary shell commands, and headless commands that require approval fail closed.
 
-Built-in file tools enforce resolved-path containment in the application, not an
-OS sandbox. Browser/HTTP tools run in the application and request network approval.
+Fixed native read/search templates validate paths and pass patterns as data.
+On Linux/macOS they run in the read-only command sandbox; Windows permits these
+fixed templates as application-validated read tools, including in plan mode.
+They never accept arbitrary model-supplied script text. File edits and patches
+enforce resolved-path containment in the application. Browser/HTTP tools run in the application and request network approval.
 Configured hooks and Eirene-managed MCP subprocesses use the command runtime.
 Codex and Claude Code subscription providers own their execution environments;
 Eirene forwards approvals and requests their native sandbox controls.
