@@ -7,6 +7,9 @@ consume model context. Long transcripts and large outputs can leave less room
 for the next request. Eirene uses bounded reads and summaries to keep ongoing
 work manageable.
 
+See [dynamic context shifting](context-shifting.md) for the request flow,
+adaptive local-model profiles, budget calculation, and execution handoff.
+
 ## Compact a conversation
 
 ```text

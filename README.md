@@ -3,16 +3,26 @@
 <h1>Eirene</h1>
 <img src="img/Eirene.png" alt="Eirene" width="180">
 
-A terminal coding agent.
+Fully autonomous AI agent for coding, automation, and deployment.
 
+[![0v3rf3ar / Eirene](https://img.shields.io/badge/0v3rf3ar-Eirene-7c3aed)](https://github.com/0v3rf3ar/Eirene)
 [![Release](https://img.shields.io/github/v/release/0v3rf3ar/Eirene?include_prereleases)](https://github.com/0v3rf3ar/Eirene/releases)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 </div>
 
-Eirene reads files, edits code, and runs commands in your project. Connect a local
-model, an API provider, or an installed Codex or Claude Code CLI, then describe
-what you want to do.
+Eirene works directly in your project to inspect code, implement changes, run
+tests, diagnose failures, and carry out automation and deployment workflows. It
+uses execution results to guide subsequent actions, correct errors, and verify
+changes, allowing you to delegate multi-step tasks while retaining control over
+permissions and execution.
+
+Connect local models, API providers, or installed Codex and Claude Code CLIs.
+For local Ollama models, [dynamic context shifting](docs/context-shifting.md)
+adapts context budgets and tool instructions to the model and available hardware,
+summarizing earlier work
+while preserving task decisions and execution evidence. This keeps longer tasks
+manageable within smaller context windows.
 
 ## Installation
 

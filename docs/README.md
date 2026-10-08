@@ -39,6 +39,7 @@ an action or the [plugin catalog](plugin-catalog.md) to choose a workflow.
 | [HTTP requests](http-requests.md) | Ask for an explicit endpoint request and inspect its response. |
 | [Sessions](sessions.md) | Resume, find, export, import, and clear conversations. |
 | [Context and usage](context-and-usage.md) | Compact long conversations and read token estimates. |
+| [Dynamic context shifting](context-shifting.md) | Understand adaptive local profiles, context budgets, execution memory, and continuation. |
 | [Side questions](side-questions.md) | Ask a question without adding it to the main conversation. |
 
 ## Customize and automate
