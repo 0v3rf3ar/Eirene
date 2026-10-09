@@ -45,13 +45,70 @@ eirene -p "Summarize the current changes" --mode plan > summary.txt 2> activity.
 ```
 
 Each prompt is a new run and saves a session. `--resume` is an interactive-session
-option, not a continuation mechanism for `-p`. A headless prompt is ordinary task
-text; `-p "/plugins install ..."` does not dispatch an interactive slash command.
-Install and configure plugins in the interface beforehand, then describe the
-workflow you want in the prompt.
+option, not a continuation mechanism for `-p`.
 
-`--json` applies to `--doctor` only. It does not wrap the agent's answer in a
-machine-readable result format.
+## Slash commands and provider discovery
+
+Prompts starting with `/` dispatch slash commands, including installed plugin
+commands. Commands such as `/review`, `/model NAME`, `/plugins install SOURCE`,
+and `/plugins inspect NAME` reuse the interactive command handlers.
+
+```sh
+eirene -p "/review" --json
+eirene --list-providers --json
+eirene --configured-providers --json
+eirene --list-models anthropic --json
+eirene -p "/models anthropic"
+eirene -p "/model MODEL_NAME"
+eirene -p "/connect anthropic"
+```
+
+`/providers` lists available providers; `/providers configured` lists saved
+connections without exposing credentials. `/connect` without a name lists
+providers. `/connect NAME` validates and switches an existing usable connection,
+using its saved/default model, or `--model` when `--provider` selects that connection.
+It does not start login or ask for credentials. `/model` without a name lists
+the active provider's models; `/models PROVIDER` queries a specific provider.
+Listing models does not select one or save settings.
+
+Commands that normally show pickers list their choices without selecting a
+default. Supply choice keys explicitly with `--choice KEY`, repeated in prompt
+order. For non-secret text fields use repeated `--command-input TEXT` arguments.
+Missing required text or confirmation choices fail instead of waiting for input.
+These arguments apply to slash-command handlers; they do not approve agent tools
+or answer questions from the model.
+
+```sh
+eirene -p "/agents" --choice plan
+eirene -p "/skills" --choice SKILL_NAME
+eirene -p "/mcp" --choice SERVER_KEY
+```
+
+Interface-only commands such as `/btw`, `/snow`, `/clear`, `/exit`,
+`/prompt-suggest`, and `/keybindings` report an error in headless mode.
+Session switching/resume and live steering are not exposed.
+
+## JSON results
+
+`--json` writes one final JSON object to stdout for a prompt, slash command,
+provider/model query, or scheduled task. Activity and errors remain on stderr.
+There are no streamed JSON fragments.
+
+```sh
+eirene -p "Explain this project" --json
+```
+
+```json
+{"input":"Explain this project","output":"This project…","provider":"anthropic","model":"MODEL_NAME","input_tokens":123,"output_tokens":45,"status":"completed","errors":[],"data":null,"exit_code":0}
+```
+
+Token counts come from the agent's usage accounting across the turn, including
+tool iterations and delegation. Commands without a model request report zero.
+`data` contains structured discovery results or listed choice rows. Failures and
+timeouts also produce a result, retaining any partial answer. Counts are zero
+when no completed turn supplies usage. Scheduled tasks report the final attempt
+and add `task_id` and `attempts`; disabled/skipped tasks use status `skipped`.
+`--doctor --json` retains its diagnostic schema.
 
 ## Exit codes
 

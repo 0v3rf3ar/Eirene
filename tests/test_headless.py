@@ -243,3 +243,195 @@ def test_choosing_nothing_just_leaves(workdir, monkeypatch):
     import eirene.ui.sessions as chooser
     monkeypatch.setattr(chooser, "choose_session", lambda rows, box: "")
     assert cli.pick_session(workdir) == 0
+
+
+def test_json_answer_reports_input_identity_and_usage(workdir, connected, answering, capsys):
+    assert main(["-p", "say done", "-C", str(workdir), "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["input"] == "say done"
+    assert result["output"] == "done"
+    assert result["provider"] == "chatgpt" and result["model"] == "gpt-4o"
+    assert result["input_tokens"] == 5 and result["output_tokens"] == 2
+    assert result["status"] == "completed" and result["exit_code"] == 0
+
+
+def test_json_configuration_failure_is_still_a_result(workdir, capsys):
+    assert main(["-p", "hi", "-C", str(workdir), "--json"]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["input"] == "hi" and result["output"] == ""
+    assert result["status"] == "failed" and result["output_tokens"] == 0
+    assert result["errors"]
+
+
+def test_provider_discovery_needs_no_connection(workdir, capsys):
+    assert main(["--list-providers", "-C", str(workdir), "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert any(row["provider"] == "chatgpt" for row in result["data"])
+    assert result["output_tokens"] == 0
+
+
+def test_configured_provider_discovery_does_not_expose_credentials(workdir, connected, capsys):
+    assert main(["--configured-providers", "-C", str(workdir), "--json"]) == 0
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert [row["provider"] for row in result["data"]] == ["chatgpt"]
+    assert result["data"][0]["active"] is True
+    assert "sk-test" not in captured.out + captured.err
+
+
+@pytest.mark.parametrize("arguments", [["--list-models", "openai"], ["-p", "/models openai"],
+                                       ["-p", "/model"]])
+def test_headless_model_discovery(workdir, connected, capsys, arguments):
+    base.set_transport(httpx.MockTransport(lambda request: httpx.Response(
+        200, json={"data": [{"id": "model-a"}, {"id": "model-b"}]})))
+    try:
+        assert main([*arguments, "-C", str(workdir), "--json"]) == 0
+        result = json.loads(capsys.readouterr().out)
+        assert result["provider"] == "chatgpt"
+        assert result["data"] == ["model-a", "model-b"]
+        assert Config.load().provider_config("chatgpt")["model"] == "gpt-4o"
+    finally:
+        base.set_transport(None)
+
+
+def test_headless_slash_help_without_provider(workdir, capsys):
+    assert main(["-p", "/help", "-C", str(workdir)]) == 0
+    assert "/review" in capsys.readouterr().out
+
+
+def test_headless_slash_model_sets_saved_model(workdir, connected, capsys):
+    assert main(["-p", "/model model-new", "-C", str(workdir), "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["model"] == "model-new" and result["output_tokens"] == 0
+    assert Config.load().provider_config("chatgpt")["model"] == "model-new"
+
+
+def test_headless_choices_are_explicit_and_never_default_to_approval(workdir, capsys):
+    assert main(["-p", "/permissions", "-C", str(workdir), "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert {row["key"] for row in result["data"]} == {"sandboxed", "full-access"}
+    assert Config.load().get("permissions") == "sandboxed"
+    assert main(["-p", "/plan clear", "-C", str(workdir), "--json"]) == 1
+    assert "--choice" in json.loads(capsys.readouterr().out)["errors"][0]
+
+
+def test_headless_choice_updates_setting(workdir, capsys):
+    assert main(["-p", "/agents", "--choice", "plan", "-C", str(workdir)]) == 0
+    capsys.readouterr()
+    assert Config.load().mode == "plan"
+
+
+def test_headless_unknown_slash_command_fails_without_model_request(workdir, capsys):
+    assert main(["-p", "/nonexistent", "-C", str(workdir), "--json"]) == 1
+    assert "unknown command" in json.loads(capsys.readouterr().out)["errors"][0]
+
+
+def test_headless_review_waits_for_answer_and_reports_usage(workdir, connected, answering, capsys):
+    (workdir / ".git").mkdir()
+    assert main(["-p", "/review", "-C", str(workdir), "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["input"] == "/review" and result["output"] == "done"
+    assert result["output_tokens"] == 2
+
+
+def test_json_timeout_retains_partial_answer(workdir, connected, monkeypatch, capsys):
+    import asyncio
+    from eirene.core.agent import Agent, Answer
+    from eirene.headless import run_prompt
+
+    async def slow(self, text, **kwargs):
+        yield Answer("partial")
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(Agent, "run", slow)
+    assert run_prompt("hi", workdir, json_output=True, task_timeout=0.01) == 124
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "timeout" and result["output"] == "partial"
+
+
+def test_headless_plugin_command_expands_and_awaits_turn(workdir, connected, capsys):
+    from eirene.core import paths
+
+    root = paths.plugins_dir() / "demo"
+    root.mkdir(parents=True)
+    (root / "plugin.json").write_text(json.dumps({"version": 1, "name": "demo",
+                                                 "commands": ["explain.md"]}))
+    (root / "explain.md").write_text("Explain $ARGUMENTS without using tools.")
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, content=ANSWER.encode(),
+                              headers={"content-type": "text/event-stream"})
+
+    base.set_transport(httpx.MockTransport(handler))
+    try:
+        assert main(["-p", "/demo:explain widgets", "-C", str(workdir), "--json"]) == 0
+        result = json.loads(capsys.readouterr().out)
+        assert result["input"] == "/demo:explain widgets" and result["output"] == "done"
+        assert result["output_tokens"] == 2
+        assert "Explain widgets" in str(seen["body"])
+    finally:
+        base.set_transport(None)
+
+
+def test_headless_rich_command_output_needs_no_ui(workdir, capsys):
+    assert main(["-p", "/plan", "-C", str(workdir), "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["output"] and result["output_tokens"] == 0
+
+
+def test_headless_connect_reuses_saved_connection(workdir, connected, capsys):
+    base.set_transport(httpx.MockTransport(lambda request: httpx.Response(
+        200, json={"data": [{"id": "gpt-4o"}]})))
+    try:
+        assert main(["-p", "/connect openai", "-C", str(workdir), "--json"]) == 0
+        result = json.loads(capsys.readouterr().out)
+        assert result["provider"] == "chatgpt" and result["model"] == "gpt-4o"
+        assert Config.load().provider == "chatgpt"
+    finally:
+        base.set_transport(None)
+
+
+def test_task_json_is_one_final_result(workdir, connected, answering, capsys):
+    from eirene.scheduling.base import Schedule, Task, save_tasks
+
+    save_tasks([Task(id="t1", name="nightly", prompt="build it", cwd=str(workdir),
+                     schedule=Schedule("hourly"), provider="chatgpt", model="gpt-4o")])
+    assert main(["--task", "t1", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["input"] == "build it" and result["output"] == "done"
+    assert result["output_tokens"] == 2 and result["attempts"] == 1
+
+
+def test_unknown_task_json_is_a_failure(capsys):
+    assert main(["--task", "unknown", "--json"]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "failed" and result["task_id"] == "unknown"
+
+
+def test_task_json_retries_emit_only_final_attempt(workdir, connected, monkeypatch, capsys):
+    from eirene import headless
+    from eirene.scheduling.base import Schedule, Task, save_tasks
+
+    monkeypatch.setattr(headless.time, "sleep", lambda seconds: None)
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(401, json={"error": {"message": "rejected"}})
+        return httpx.Response(200, content=ANSWER.encode(),
+                              headers={"content-type": "text/event-stream"})
+
+    save_tasks([Task(id="t1", name="retry", prompt="try it", cwd=str(workdir),
+                     schedule=Schedule("hourly"), provider="chatgpt", model="gpt-4o",
+                     retries=1, retry_delay=0)])
+    base.set_transport(httpx.MockTransport(handler))
+    try:
+        assert main(["--task", "t1", "--json"]) == 0
+        result = json.loads(capsys.readouterr().out)
+        assert result["output"] == "done" and result["attempts"] == 2
+        assert result["errors"] == [] and result["output_tokens"] == 2
+    finally:
+        base.set_transport(None)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from .core.text import safe_text
 
 import asyncio
+import json
 import os
 import sys
 import time
@@ -17,7 +18,6 @@ from .core import logging as runtime_logging
 from .core.errors import EireneError
 from .core.modes import Mode
 from .core.session import Session
-from .providers import registry as providers
 from .scheduling.base import find_task
 from .scheduling.history import lock_for, record
 from .tools.sandbox import Sandbox
@@ -25,49 +25,115 @@ from .tools.sandbox import Sandbox
 TASK_TIMEOUT = 3600
 
 
+class RunOutput:
+    """Collect one final JSON result while keeping activity on stderr."""
+
+    def __init__(self, text: str, json_output: bool, quiet: bool):
+        self.json_output, self.quiet = json_output, quiet
+        self.result = dict(input=text, output="", provider=None, model=None,
+                           input_tokens=0, output_tokens=0, status="completed",
+                           errors=[], data=None)
+        self.failed = False
+
+    def write(self, text: str) -> None:
+        self.result["output"] += text
+        if not self.json_output:
+            sys.stdout.write(safe_text(text))
+            sys.stdout.flush()
+
+    def error(self, text: str) -> None:
+        self.failed = True
+        self.result["errors"].append(text)
+        _err(text)
+
+    def event(self, event) -> None:
+        if isinstance(event, agent_mod.Answer):
+            self.write(event.text)
+        elif isinstance(event, agent_mod.TurnDone):
+            self.result["input_tokens"] += event.usage.input_tokens
+            self.result["output_tokens"] += event.usage.output_tokens
+            self.result["status"] = event.status
+            self.failed = event.status != "completed" or self.failed
+            if not self.json_output:
+                self.write("\n")
+        elif isinstance(event, agent_mod.Failed):
+            self.error(event.text)
+        else:
+            _emit(event, self.quiet)
+
+    def finish(self, code: int, *, emit: bool = True) -> None:
+        if code and self.result["status"] == "completed":
+            self.result["status"] = {124: "timeout", 130: "interrupted"}.get(code, "failed")
+        self.result["exit_code"] = code
+        if self.json_output and emit:
+            sys.stdout.write(json.dumps(self.result, ensure_ascii=True) + "\n")
+            sys.stdout.flush()
+
+
 def run_prompt(text: str, cwd: Path, *, provider: str = "", model: str = "",
                mode: str = "auto", quiet: bool = False,
-               task_timeout: int = TASK_TIMEOUT) -> int:
+               task_timeout: int = TASK_TIMEOUT, json_output: bool = False,
+               choices: list[str] | None = None,
+               inputs: list[str] | None = None,
+               _result_sink: dict | None = None) -> int:
     """Run one prompt and print the answer."""
+    output = RunOutput(text, json_output, quiet)
     try:
-        return asyncio.run(_drive(text, cwd, provider, model, mode, quiet,
-                                  task_timeout))
+        code = asyncio.run(_drive(text, cwd, provider, model, mode, quiet,
+                                 task_timeout, output, choices, inputs))
     except KeyboardInterrupt:
-        _err("interrupted")
-        return 130
+        output.error("interrupted")
+        code = 130
     except EireneError as exc:
-        _err(exc.user_message())
-        return 1
+        output.error(exc.user_message())
+        code = 1
+    except Exception as exc:  # noqa: BLE001
+        output.error(f"headless run failed: {exc}")
+        code = 1
+    output.finish(code, emit=_result_sink is None)
+    if _result_sink is not None:
+        _result_sink.update(output.result)
+    return code
 
 
-def run_task(task_id: str) -> int:
+def run_task(task_id: str, *, json_output: bool = False) -> int:
     """Run a scheduled task by id."""
     task = find_task(task_id)
+
+    def stopped(message: str, code: int) -> int:
+        output = RunOutput(task.prompt if task else "", json_output, True)
+        output.result["task_id"] = task_id
+        if code:
+            output.error(message)
+        else:
+            _err(message)
+            output.result["status"] = "skipped"
+        output.finish(code)
+        return code
+
     if not task:
-        _err(f"no task '{task_id}'")
-        return 1
+        return stopped(f"no task '{task_id}'", 1)
     if not task.enabled:
-        _err(f"task '{task.name}' is disabled")
-        return 0
+        return stopped(f"task '{task.name}' is disabled", 0)
     cwd = Path(task.cwd)
     if not cwd.is_dir():
-        _err(f"task working directory is gone: {task.cwd}")
-        return 1
+        return stopped(f"task working directory is gone: {task.cwd}", 1)
     text = f"{prompts.TASK_PROMPT}\n{task.prompt}"
     lock = lock_for(task.id)
     if not task.allow_overlap and not lock.acquire(task.timeout + 300):
         record(task.id, "skipped", reason="previous run still active")
-        _err(f"task '{task.name}' skipped: previous run still active")
-        return 0
+        return stopped(f"task '{task.name}' skipped: previous run still active", 0)
     previous = {key: os.environ.get(key) for key in task.env}
     os.environ.update(task.env)
     started = time.time()
     record(task.id, "started", name=task.name, cwd=task.cwd)
     code, attempt = 1, 0
+    result = {} if json_output else None
     try:
         for attempt in range(task.retries + 1):
             code = run_prompt(text, cwd, provider=task.provider, model=task.model,
-                              mode="auto", quiet=True, task_timeout=task.timeout)
+                              mode="auto", quiet=True, task_timeout=task.timeout,
+                              json_output=json_output, _result_sink=result)
             if code == 0:
                 break
             if attempt < task.retries:
@@ -81,6 +147,10 @@ def run_task(task_id: str) -> int:
                 from .core import notify
                 notify.send(f"Eirene task failed: {task.name}",
                             f"exit {code} after {attempt + 1} attempt(s)")
+        if result is not None:
+            result.update(input=task.prompt, task_id=task_id, attempts=attempt + 1)
+            sys.stdout.write(json.dumps(result, ensure_ascii=True) + "\n")
+            sys.stdout.flush()
         return code
     finally:
         for key, value in previous.items():
@@ -92,43 +162,37 @@ def run_task(task_id: str) -> int:
 
 
 async def _drive(text: str, cwd: Path, provider_key: str, model: str,
-                 mode: str, quiet: bool, task_timeout: int = TASK_TIMEOUT) -> int:
+                 mode: str, quiet: bool, task_timeout: int = TASK_TIMEOUT,
+                 output: RunOutput | None = None, choices: list[str] | None = None,
+                 inputs: list[str] | None = None) -> int:
     paths.ensure_tree()
     from .core.skills import remove_seeded_examples
     remove_seeded_examples()
     config = Config.load()
     runtime_logging.configure(config)
-    key = provider_key or config.provider or ""
-    if not key:
-        raise EireneError("no provider configured; run eirene and use /connect")
-    key = providers.resolve_alias(key)
-    chosen = model or config.provider_config(key).get("model") or config.model \
-        or providers.default_model(key)
-    if not chosen:
-        raise EireneError(f"no model set for {key}")
-
     box = Sandbox(cwd)
     session = Session.create(box.root)
-    session.add_note("headless", prompt=text[:400], provider=key, model=chosen)
     runner = agent_mod.Agent(session, config, box)
     runner.mode = Mode(mode) if mode in Mode._value2member_map_ else Mode.AUTO
     runner.reload_skills()
-    runner.use(providers.build(key, config), key, chosen)
-
-    failed = False
+    output = output or RunOutput(text, False, quiet)
+    from .headless_commands import HeadlessApp
     try:
+        app = HeadlessApp(runner, output, provider_key, model, choices, inputs)
         async with asyncio.timeout(task_timeout):
-            async for event in runner.run(text):
-                failed = _emit(event, quiet) or failed
+            if text.startswith("/"):
+                await app.dispatch(text)
+            else:
+                await app._run_turn(text)
     except TimeoutError:
-        _err(f"task exceeded {task_timeout}s and was stopped")
+        output.error(f"task exceeded {task_timeout}s and was stopped")
         return 124
     finally:
         from .tools import processes
         await processes.stop_all()
         await runner.close()
         session.close()
-    return 1 if failed else 0
+    return 1 if output.failed else 0
 
 
 def _emit(event, quiet: bool) -> bool:

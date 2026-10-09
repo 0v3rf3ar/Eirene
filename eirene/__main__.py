@@ -25,12 +25,23 @@ def build_parser() -> argparse.ArgumentParser:
                         help="continue a saved session; omit the id to list them")
     parser.add_argument("--provider", metavar="NAME", help="override the provider")
     parser.add_argument("--model", metavar="NAME", help="override the model")
+    discovery = parser.add_mutually_exclusive_group()
+    discovery.add_argument("--list-providers", action="store_true",
+                           help="list available providers without the interface")
+    discovery.add_argument("--configured-providers", action="store_true",
+                           help="list saved provider connections without credentials")
+    discovery.add_argument("--list-models", metavar="PROVIDER", nargs="?", const="",
+                           help="list models for a provider (default: active provider)")
+    parser.add_argument("--choice", action="append", default=[], metavar="KEY",
+                        help="supply a slash-command choice; repeat in prompt order")
+    parser.add_argument("--command-input", action="append", default=[], metavar="TEXT",
+                        help="supply slash-command text input; repeat in prompt order")
     parser.add_argument("--mode", choices=("auto", "manual", "plan"), default="auto",
                         help="permission mode for -p (default: auto)")
     parser.add_argument("--doctor", action="store_true",
                         help="print read-only installation diagnostics and exit")
     parser.add_argument("--json", action="store_true",
-                        help="use JSON output with --doctor")
+                        help="use JSON output for diagnostics or headless runs")
     parser.add_argument("--no-color", action="store_true",
                         help="disable terminal colour for this run")
     parser.add_argument("--reduce-motion", action="store_true",
@@ -108,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.task:
         from .headless import run_task
-        return run_task(args.task)
+        return run_task(args.task, json_output=args.json)
 
     try:
         sandbox = Path(args.directory).expanduser().resolve(strict=True)
@@ -122,10 +133,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.resume == "":
         return pick_session(sandbox)
 
-    if args.prompt:
+    text = args.prompt
+    if args.list_providers:
+        text = "/providers"
+    elif args.configured_providers:
+        text = "/providers configured"
+    elif args.list_models is not None:
+        text = "/models" + (f" {args.list_models}" if args.list_models else "")
+    if text is not None:
         from .headless import run_prompt
-        return run_prompt(args.prompt, sandbox, provider=args.provider or "",
-                          model=args.model or "", mode=args.mode)
+        return run_prompt(text, sandbox, provider=args.provider or "",
+                          model=args.model or "", mode=args.mode,
+                          json_output=args.json, choices=args.choice,
+                          inputs=args.command_input)
 
     if not sys.stdout.isatty():
         sys.stderr.write("eirene needs a terminal; use -p for one-shot runs\n")

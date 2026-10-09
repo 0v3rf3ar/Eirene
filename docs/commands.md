@@ -87,17 +87,23 @@ eirene [options]
 | `-p TEXT`, `--prompt TEXT` | Run a single headless task. |
 | `--provider NAME` | Override the provider for a headless prompt. |
 | `--model NAME` | Override the model for a headless prompt. |
+| `--list-providers` | List available providers without the interface. |
+| `--configured-providers` | List saved connections without credentials. |
+| `--list-models [PROVIDER]` | List models for the named or active provider. |
+| `--choice KEY` | Supply a slash-command choice; repeat in prompt order. |
+| `--command-input TEXT` | Supply non-secret slash-command text input; repeat in prompt order. |
 | `--mode auto\|manual\|plan` | Set the mode for a headless prompt; default `auto`. |
 | `--task ID` | Run a saved scheduled task with its recorded workspace and settings. |
 | `--doctor` | Print read-only installation and configuration diagnostics. |
-| `--json` | Format `--doctor` output as JSON. |
+| `--json` | Return a final headless JSON result, or JSON diagnostics with `--doctor`. |
 | `--no-color` | Disable colored output. |
 | `--reduce-motion` | Use reduced-motion interface behavior. |
 
 Provider, model, and mode overrides apply to `-p` runs. Interactive launches use
-saved settings and their slash commands. `--json` does not make headless agent
-answers JSON. Headless prompts are task text, not an interactive slash-command
-interface. See [headless runs](headless.md) for output, exit codes, and limitations.
+saved settings and their slash commands. Headless prompts starting with `/`
+dispatch commands without opening the interface. `--json` includes the input,
+output, provider, model, and token counts. See [headless runs](headless.md) for
+choice arguments, output, exit codes, and limitations.
 
 ## Argument parsing and saved settings
 
