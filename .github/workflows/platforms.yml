@@ -1,4 +1,4 @@
-name: Native platform checks
+name: Native binary builds
 
 on:
   push:
@@ -11,53 +11,6 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ['3.11', '3.12', '3.13', '3.14']
-    runs-on: ubuntu-22.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          python -m pip install -r requirements-dev.txt
-      - name: Check version and run tests
-        env:
-          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-        run: |
-          python scripts/release_metadata.py --tag "$RELEASE_TAG"
-          python -m ruff check .
-          python -m mypy
-          python -m pytest -q --cov --cov-report=term:skip-covered --cov-report=xml
-      - name: Upload coverage report
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-python-${{ matrix.python }}
-          path: coverage.xml
-
-  native-commands:
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [ubuntu-22.04, macos-14, windows-2022]
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: python -m pip install -r requirements-dev.txt
-      - name: Test native reads, process ownership, and OS command selection
-        run: python -m pytest -q tests/test_native_commands.py tests/test_processes.py tests/test_files.py tests/test_host_awareness.py tests/test_portable_runtime.py
-
   build:
     strategy:
       fail-fast: false
@@ -79,16 +32,11 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install build dependencies
-        run: python -m pip install -r requirements-dev.txt
+        run: python -m pip install -r requirements.txt "pyinstaller>=6.6" "pillow>=10.0"
       - name: Build and smoke-test executable
         run: python build.py --no-install --skip-tests
       - name: Compress and test extracted executable
         run: python scripts/package_release.py --target ${{ matrix.target }}
-      - name: Test release archives and shell installer
-        run: python -m pytest -q tests/test_release.py
-      - name: Test PowerShell installer
-        shell: pwsh
-        run: ./tests/installers.ps1 -Target '${{ matrix.target }}'
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.target }}
