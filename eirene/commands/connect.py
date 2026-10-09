@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import webbrowser
+
 from ..core.errors import CommandError, EireneError, ProviderError
 from ..providers import registry as providers
 from ..ui import art
@@ -14,6 +17,9 @@ async def run(app, args: str) -> None:
     if not key:
         return
     spec = providers.spec(key)
+    if key == "chatgpt-plan":
+        await _connect_chatgpt_plan(app, key, spec)
+        return
     if key == "chatgpt-subscription":
         await _connect_subscription(app, key, spec)
         return
@@ -180,6 +186,102 @@ async def _choose_model(app, provider, key: str) -> str:
                                 selected=str(saved or "")) or ""
 
 
+async def _open_sign_in(app, url: str) -> None:
+    """Open the host browser independently of provider/model execution."""
+    target = url.replace("(", "%28").replace(")", "%29")
+    app.say(f"[Sign in to ChatGPT]({target})", markdown=True)
+    try:
+        opened = await asyncio.to_thread(webbrowser.open, url, new=2)
+    except (webbrowser.Error, OSError):
+        opened = False
+    if not opened:
+        app.say("Could not open your browser automatically; click the sign-in link above.", "warn")
+
+
+async def _choose_reasoning(app, provider, key: str, model: str) -> bool:
+    picker = getattr(provider, "reasoning_options", None)
+    if picker is None:
+        return True
+    options = await picker(model)
+    saved = app.config.provider_config(key).get("reasoning_efforts", {}).get(model, "default")
+    if saved not in {option[0] for option in options}:
+        saved = "default"
+    effort = await app.ask_choice(f"reasoning level for {model}", options, selected=saved)
+    if effort is None:
+        app.say("cancelled - no reasoning level chosen")
+        return False
+    efforts = app.config.provider_config(key).setdefault("reasoning_efforts", {})
+    efforts[model] = effort
+    provider.reasoning_efforts[model] = effort
+    return True
+
+
+async def _connect_chatgpt_plan(app, key: str, spec) -> None:
+    provider = providers.build(key, app.config)
+    connected = False
+    try:
+        accounts = provider.auth.accounts()
+        choice = "new"
+        if accounts:
+            options = [("account:" + account_id, f"{email} ({account_id[-8:]})",
+                        "active" if active else "saved ChatGPT account")
+                       for account_id, email, active in accounts]
+            options += [("new", "sign in to another account", "use OpenAI's browser sign-in"),
+                        ("reauth", "sign in again to the active account", "renew plan permission"),
+                        ("logout", "sign out of the active account", "clear its saved tokens")]
+            selected = next(("account:" + account_id for account_id, _, active in accounts if active), "new")
+            choice = await app.ask_choice("ChatGPT account", options, selected=selected)
+            if not choice:
+                return
+        if choice == "logout":
+            confirmed = await provider.auth.logout()
+            if app.config.provider == key:
+                app.config.provider = None
+                app.config.model = None
+                app._save_config()
+                app.agent.use(None, "", "")
+                app.refresh_mode_line()
+            app.say("signed out of ChatGPT")
+            if not confirmed:
+                app.say("remote sign-out was not confirmed; disconnect Eirene in ChatGPT Settings", "warn")
+            return
+        if choice.startswith("account:"):
+            await provider.auth.select(choice[len("account:"):])
+            if not provider.auth.account().get("refresh_token"):
+                choice = "reauth"
+        if choice in {"new", "reauth"}:
+            account = provider.auth.account() if choice == "reauth" else {}
+            url = await provider.auth.login(account.get("client_id", ""))
+            app.say("Sign in to ChatGPT in your browser; you can choose Continue with Google.")
+            await _open_sign_in(app, url)
+            app.say("waiting for ChatGPT sign-in…")
+            await provider.auth.wait_for_login()
+        app.say("checking ChatGPT plan access…")
+        note = await provider.validate()
+        model = await _choose_model(app, provider, key)
+        if not model:
+            app.say("cancelled - no model chosen")
+            return
+        if not await _choose_reasoning(app, provider, key, model):
+            return
+        app.config.set_provider(key, model=model)
+        app.config.provider = key
+        app.config.model = model
+        app._save_config()
+        app.agent.use(provider, key, model)
+        connected = True
+        app.refresh_mode_line()
+        email = provider.auth.account().get("email", "")
+        identity = f" as {email}" if email else ""
+        app.say(f"{art.icon('ok')} connected to {spec.label}{identity} ({note}) using {model}")
+        app.say("Eirene runs your tools. Review plan usage and app limits at https://chatgpt.com/settings/usage")
+    except EireneError as exc:
+        app.say(f"ChatGPT connection failed: {exc.user_message()}", "fail")
+    finally:
+        if not connected:
+            await provider.close()
+
+
 async def _connect_subscription(app, key: str, spec) -> None:
     """Authenticate through Codex without handling ChatGPT credentials."""
     provider = providers.build(key, app.config)
@@ -200,12 +302,13 @@ async def _connect_subscription(app, key: str, spec) -> None:
             if method == "chatgptDeviceCode":
                 url = str(login.get("verificationUrl") or "")
                 code = str(login.get("userCode") or "")
-                app.say(f"open {url} and enter code {code}")
             else:
                 url = str(login.get("authUrl") or "")
-                app.say(f"open this URL to sign in: {url}")
             if not login_id or not url:
                 raise ProviderError("Codex did not return a sign-in URL")
+            await _open_sign_in(app, url)
+            if method == "chatgptDeviceCode":
+                app.say(f"enter code {code} in your browser")
             app.say("waiting for ChatGPT sign-in…")
             account = await provider.wait_for_login(login_id)
 

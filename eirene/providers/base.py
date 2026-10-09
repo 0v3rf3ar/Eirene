@@ -76,6 +76,7 @@ class ProviderTool:
 @dataclass
 class Done:
     reason: str = "stop"
+    response_items: list[dict] | None = None
 
 
 Event = (TextDelta | ThinkingDelta | ToolCall | Usage | PlanUpdate

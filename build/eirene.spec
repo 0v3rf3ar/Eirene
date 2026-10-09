@@ -48,8 +48,10 @@ hiddenimports += [
 hiddenimports += collect_submodules("eirene.commands")
 hiddenimports += collect_submodules("keyring.backends")
 
-excludes = ["tkinter", "unittest", "pydoc_data", "test", "distutils",
-            "setuptools", "pip", "PIL", "numpy", "pytest"]
+# Python 3.12+ gets distutils from setuptools. PyInstaller aliases those modules
+# while analyzing Windows dependencies, so neither package can be excluded.
+excludes = ["tkinter", "unittest", "pydoc_data", "test",
+            "pip", "PIL", "numpy", "pytest"]
 
 analysis = Analysis(
     [str(ROOT / "build" / "entry.py")],

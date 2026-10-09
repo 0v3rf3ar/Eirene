@@ -41,7 +41,7 @@ class HeadlessApp:
             raise CommandError(f"no model set for {key}; use --model NAME")
         self.agent.use(providers.build(key, self.config), key, model)
 
-    def say(self, text, level="info"):
+    def say(self, text, level="info", *, markdown=False):
         if level in {"warn", "fail"}:
             self.output.error(str(text))
         else:

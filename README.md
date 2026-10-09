@@ -18,6 +18,8 @@ changes, allowing you to delegate multi-step tasks while retaining control over
 permissions and execution.
 
 Connect local models, API providers, or installed Codex and Claude Code CLIs.
+Use `/connect chatgpt-plan` for direct ChatGPT subscription sign-in with Eirene's
+own agent loop; account eligibility and plan limits apply.
 For local Ollama models, [dynamic context shifting](docs/context-shifting.md)
 adapts context budgets and tool instructions to the model and available hardware,
 summarizing earlier work

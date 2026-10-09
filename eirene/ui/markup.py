@@ -66,7 +66,7 @@ CELL_SPLIT = re.compile(r"(?<!\\)\|")
 MAX_CELL = 44
 
 
-def inline(text: str) -> Text:
+def inline(text: str, *, show_link_urls: bool = True) -> Text:
     """One line of prose, with the markers applied."""
     body = Text()
     position = 0
@@ -79,10 +79,10 @@ def inline(text: str) -> Text:
             link = Style.parse(LINK_STYLE) + Style.from_meta(
                 {"@click": f"open_link({url!r})"})
             body.append(groups["label"] or url, style=link)
-            if groups["label"] is not None:
+            if groups["label"] is not None and show_link_urls:
                 body.append(f" ({url})", style=Style.parse("dim") + Style.from_meta(
                     {"@click": f"open_link({url!r})"}))
-            else:
+            elif groups["bare"] is not None:
                 body.append(groups["bare"][len(url):])
         else:
             for name, style in STYLES.items():

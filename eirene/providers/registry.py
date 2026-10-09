@@ -14,6 +14,7 @@ from .openai_compat import OpenAICompatible
 from .omniroute import OmniRoute
 from .codex_subscription import CodexSubscription
 from .claude_code import ClaudeCode
+from .chatgpt_plan import ChatGPTPlan
 
 
 @dataclass
@@ -34,6 +35,10 @@ class Spec:
 
 
 SPECS: dict[str, Spec] = {
+    "chatgpt-plan": Spec(
+        "chatgpt-plan", "ChatGPT subscription", "chatgpt-responses",
+        "https://api.openai.com/v1", needs_key=False,
+        note="uses your authorized ChatGPT plan; Eirene runs the workspace tools"),
     "claude-code": Spec(
         "claude-code", "Claude (headless)", "claude-code-cli",
         needs_key=False, supports_tools=False,
@@ -44,7 +49,7 @@ SPECS: dict[str, Spec] = {
         needs_key=False, supports_tools=False,
         note="uses Codex tools and your ChatGPT subscription limits"),
     "chatgpt": Spec(
-        "chatgpt", "ChatGPT", "openai", "https://api.openai.com/v1",
+        "chatgpt", "OpenAI API", "openai", "https://api.openai.com/v1",
         key_hint="starts with 'sk-'",
         models=["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4o",
                 "gpt-4o-mini", "o3", "o4-mini"]),
@@ -126,6 +131,7 @@ def resolve_alias(name: str) -> str:
     aliases = {"openai": "chatgpt", "gpt": "chatgpt", "claude": "anthropic",
                "claude-subscription": "claude-code", "claude-cli": "claude-code",
                "subscription": "chatgpt-subscription", "codex": "chatgpt-subscription",
+               "chatgpt-direct": "chatgpt-plan", "chatgpt-oauth": "chatgpt-plan",
                "moonshot": "kimi", "google": "gemini", "pplx": "perplexity",
                "custom": "custom-openai", "openai-compatible": "custom-openai",
                "anthropic-compatible": "custom-anthropic",
@@ -149,6 +155,9 @@ def build(key: str, config: Config, *, api_key: str | None = None,
     url = (base_url or config.base_url(key) or info.base_url).rstrip("/")
     timeout = float(config.get("request_timeout", 300) or 300)
 
+    if info.protocol == "chatgpt-responses":
+        return ChatGPTPlan(timeout=timeout,
+                           reasoning_efforts=config.provider_config(key).get("reasoning_efforts"))
     if info.protocol == "codex-app-server":
         return CodexSubscription(timeout=timeout)
     if info.protocol == "claude-code-cli":

@@ -511,6 +511,7 @@ class Agent:
                 reply, calls, seen_text, usage_in, usage_out = "", [], False, 0, 0
                 thinking = ""
                 finish = ""
+                response_items = None
 
                 async for event in self._budget_context():
                     yield event
@@ -562,6 +563,7 @@ class Agent:
                                               event.kind)
                     elif isinstance(event, Done):
                         finish = event.reason
+                        response_items = event.response_items
 
                 turn_usage.input_tokens += usage_in
                 turn_usage.output_tokens += usage_out
@@ -569,7 +571,8 @@ class Agent:
                     first_token = time.monotonic() - started
 
                 serialised = [self._serialise_call(c) for c in calls]
-                self.session.add_assistant(reply, serialised, thinking)
+                self.session.add_assistant(reply, serialised, thinking,
+                                           response_items=response_items)
 
                 if finish in TRUNCATED:
                     note = ("the model ran out of room and was cut off; "

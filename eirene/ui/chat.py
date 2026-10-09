@@ -158,11 +158,18 @@ class BackToBottom(Static):
 class NoticeBlock(Block):
     """A short system line."""
 
-    def __init__(self, text: str, kind: str = "info"):
+    def __init__(self, text: str, kind: str = "info", *, markdown: bool = False):
         body = Text()
         body.append(f"{art.icon(kind)} ", style="dim")
-        body.append(safe_notice(text), style="dim" if kind == "info" else "bold")
+        if markdown:
+            # Parse before clipping: long OAuth targets must stay intact in link metadata.
+            body.append_text(markup.inline(strip_escapes(text), show_link_urls=False)[:400])
+        else:
+            body.append(safe_notice(text), style="dim" if kind == "info" else "bold")
         super().__init__(body)
+
+    def action_open_link(self, url: str) -> None:
+        self.app.open_url(url)
 
 
 class ArtBlock(Block):

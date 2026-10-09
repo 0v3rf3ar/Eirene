@@ -37,6 +37,7 @@ account login.
 | Name for `/connect` | Connection | What you need |
 | --- | --- | --- |
 | `chatgpt` | OpenAI API | API key with access to the selected model. |
+| `chatgpt-plan` | Direct ChatGPT subscription | Browser sign-in and authorization to use an eligible ChatGPT plan. Eirene runs the tools. |
 | `anthropic` | Anthropic API | Anthropic API key. |
 | `gemini` | Google Gemini API | Google AI Studio API key. |
 | `groq` | Groq API | Groq API key. |
@@ -90,11 +91,55 @@ protocol; the service must actually implement the required requests and model
 behavior. If discovery fails, use `/model MODEL_NAME` with an identifier your
 service accepts after establishing the connection.
 
+## Direct ChatGPT subscription
+
+```text
+/connect chatgpt-plan
+```
+
+Eirene automatically opens OpenAI sign-in in your default browser and displays a
+clickable **Sign in to ChatGPT** link as a fallback. Use a browser on the same
+computer as Eirene. Choose **Continue with Google** if that is how you access the ChatGPT
+account attached to your subscription. Approve Eirene's requested ChatGPT plan
+access, return to the terminal, and select an available model. Eirene never asks
+for your Google or ChatGPT password. An email address alone does not grant model
+access; your account must support and authorize this preview integration.
+
+After selecting a model, choose its reasoning level. The choices come from your
+account's model catalog, so Eirene only offers the levels that model advertises.
+Choose **model default** to leave the effort parameter unset. Each model's choice
+is saved separately and reused after restarting. `/model` also asks for reasoning
+when you change models. These choices apply to Eirene's direct ChatGPT provider.
+
+This provider calls the public Responses API directly. Eirene manages its own
+instructions, conversation history, permissions, file edits, commands, and MCP
+tools. It does not require the Codex CLI. The existing `/connect codex` connection
+continues to use Codex's own agent loop.
+
+Run `/connect chatgpt-plan` again to choose a saved account, add an account,
+reauthorize, or sign out. Credentials are stored separately from project files
+and `config.json`, in `chatgpt/auth.json` under Eirene's data directory (or
+`EIRENE_HOME`). On Unix, the directory is private and the credential file has
+owner-only permissions. Access tokens renew automatically; refreshes are
+serialized across Eirene processes. Sign-out clears tokens and attempts remote
+revocation while retaining the account's registration for later sign-in.
+
+Subscription and app limits still apply. Review usage and manage Eirene's access
+in [ChatGPT Settings](https://chatgpt.com/settings/usage). There is no automatic
+fallback to API-key billing. Preview restrictions require streaming and locally
+managed history; hosted Responses tools are unavailable on this route. Eirene's
+`max_tokens` setting cannot cap the server's output because the route does not
+accept an output-token limit. Local iteration and execution limits still apply.
+
+See OpenAI's [ChatGPT plan usage documentation](https://developers.openai.com/siwc/token-sharing-open-source)
+and [preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
+
 ## Subscription CLI connections
 
 For Codex, `/connect codex` can use an existing ChatGPT login or present browser
-and device-code sign-in choices. Eirene displays the URL or code for you to open
-and waits for login completion.
+and device-code sign-in choices. Eirene automatically opens the sign-in page,
+displays a clickable fallback link and any required device code, and waits for
+login completion.
 
 For Claude Code, authenticate the `claude` CLI separately first, then use
 `/connect claude-code`. Eirene checks that CLI connection and offers its model

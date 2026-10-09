@@ -375,9 +375,9 @@ class Eirene(App):
     async def push(self, block, live: bool = False):
         return await self.transcript.push(block, live)
 
-    def say(self, text: str, kind: str = "info") -> None:
+    def say(self, text: str, kind: str = "info", *, markdown: bool = False) -> None:
         """Queue a one-line notice."""
-        self.call_later(self.push, NoticeBlock(text, kind))
+        self.call_later(self.push, NoticeBlock(text, kind, markdown=markdown))
 
     def refresh_mode_line(self) -> None:
         detail = ""

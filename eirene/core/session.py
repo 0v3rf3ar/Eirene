@@ -208,10 +208,13 @@ class Session:
         return msg
 
     def add_assistant(self, text: str, tool_calls: list[dict] | None = None,
-                      thinking: str = "") -> Message:
+                      thinking: str = "", *, response_items: list[dict] | None = None) -> Message:
         msg = Message.assistant(text, tool_calls)
         self.messages.append(msg)
         record: dict[str, Any] = {"t": "assistant", "content": text}
+        if response_items is not None:
+            msg["response_items"] = response_items
+            record["response_items"] = response_items
         if tool_calls:
             record["tool_calls"] = tool_calls
         if thinking:
@@ -290,6 +293,8 @@ def replay(records: list[dict[str, Any]], *, apply_compaction: bool = True) -> l
         elif kind == "assistant":
             messages.append(Message.assistant(record.get("content", ""),
                                               record.get("tool_calls")))
+            if record.get("response_items") is not None:
+                messages[-1]["response_items"] = record["response_items"]
         elif kind == "tool_result":
             messages.append(Message.tool(record.get("tool_call_id", ""),
                                          record.get("name", ""),
