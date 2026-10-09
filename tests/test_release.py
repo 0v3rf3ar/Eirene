@@ -18,6 +18,10 @@ packager = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(packager)
 
 
+def checksum_entry(archive):
+    return f'{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n'
+
+
 @pytest.mark.parametrize('target', packager.TARGETS)
 def test_release_archives_preserve_binary_and_license(target, tmp_path):
     binary = tmp_path / 'binary'
@@ -37,8 +41,7 @@ def test_release_archives_preserve_binary_and_license(target, tmp_path):
             assert set(bundle.getnames()) == {'eirene', 'LICENSE', 'NOTICE'}
             assert bundle.getmember('eirene').mode == 0o755
             assert bundle.extractfile('eirene').read() == binary.read_bytes()
-    checksum = archive.with_name(archive.name + '.sha256').read_bytes()
-    assert checksum == f'{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n'.encode('ascii')
+    assert list(archive.parent.iterdir()) == [archive]
 
 
 @pytest.fixture
@@ -56,7 +59,7 @@ def installer(tmp_path):
     for target in ('linux-amd64', 'linux-arm64', 'macos-silicon'):
         for version in ('1.2.3', '2.3.4', '0.1.7b1'):
             packager.package(target, binary, fixture, version)
-    (fixture / 'SHA256SUMS').write_text(''.join(p.read_text() for p in sorted(fixture.glob('*.sha256'))))
+    (fixture / 'SHA256SUMS').write_text(''.join(checksum_entry(p) for p in sorted(fixture.glob('*.tar.gz'))))
     (tools / 'uname').write_text('#!/bin/sh\nif [ "$1" = -s ]; then echo "$TEST_OS"; else echo "$TEST_CPU"; fi\n')
     (tools / 'sysctl').write_text('#!/bin/sh\necho "${TEST_SILICON:-0}"\n')
     (tools / 'curl').write_text(f'#!{sys.executable}\n' + '''import os, sys, shutil
@@ -223,7 +226,7 @@ def test_bad_executable_leaves_previous_installation_intact(installer):
     bad = fixture / 'broken'
     bad.write_text('#!/bin/sh\nexit 42\n')
     archive = packager.package('linux-amd64', bad, fixture, '1.2.3')
-    (fixture / 'SHA256SUMS').write_text(archive.with_name(archive.name + '.sha256').read_text())
+    (fixture / 'SHA256SUMS').write_text(checksum_entry(archive))
     result = run()
     assert result.returncode != 0
     assert 'could not run' in result.stderr
@@ -297,7 +300,7 @@ def test_staged_help_failure_preserves_existing_binary(installer):
     bad = fixture / 'broken-help'
     bad.write_text('#!/bin/sh\nif [ "$1" = --help ]; then exit 7; fi\necho version\n')
     archive = packager.package('linux-amd64', bad, fixture, '1.2.3')
-    (fixture / 'SHA256SUMS').write_text(archive.with_name(archive.name + '.sha256').read_text())
+    (fixture / 'SHA256SUMS').write_text(checksum_entry(archive))
     result = run()
     assert result.returncode != 0
     assert 'failed --help' in result.stderr
@@ -408,7 +411,7 @@ def test_installer_runs_only_three_executable_checks(installer):
     binary = fixture / 'counted'
     binary.write_text('#!/bin/sh\nprintf "%s\\n" "$1" >> "$HOME/binary-checks"\necho fixture\n')
     archive = packager.package('linux-amd64', binary, fixture, '1.2.3')
-    (fixture / 'SHA256SUMS').write_text(archive.with_name(archive.name + '.sha256').read_text())
+    (fixture / 'SHA256SUMS').write_text(checksum_entry(archive))
     result = run(EIRENE_NO_PATH='0')
     assert result.returncode == 0, result.stderr
     assert (Path(env['HOME']) / 'binary-checks').read_text().splitlines() == [
