@@ -20,6 +20,7 @@ DEFAULTS: dict[str, Any] = {
     "model": None,
     "mode": "manual",
     "theme": "default",
+    "seasonal_effects": True,
     "providers": {},
     "skills": {},
     "shell_timeout": 120,
@@ -252,6 +253,7 @@ def _merge_defaults(data: dict[str, Any]) -> dict[str, Any]:
     merged["auto_compact"] = bool(merged.get("auto_compact", False))
     merged["reduce_motion"] = bool(merged.get("reduce_motion", False))
     merged["accessible_icons"] = bool(merged.get("accessible_icons", False))
+    merged["seasonal_effects"] = bool(merged.get("seasonal_effects", True))
     if merged.get("mode") not in VALID_MODES:
         merged["mode"] = "manual"
     level = str(merged.get("log_level", "INFO")).upper()

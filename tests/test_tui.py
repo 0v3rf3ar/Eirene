@@ -40,6 +40,9 @@ class Script:
 
 async def start(workdir, provider=None, size=(100, 32), resume=""):
     app = Eirene(workdir, resume)
+    # Keep general UI expectations independent of the machine's calendar.
+    # Snowfall and its hidden control are exercised in test_snow.py.
+    app.config.set("seasonal_effects", False)
     context = app.run_test(size=size)
     pilot = await context.__aenter__()
     await pilot.pause()

@@ -459,6 +459,9 @@ class Eirene(App):
 
     def _start_command(self, text: str) -> None:
         """Run a slash command in its own task."""
+        if text.strip().lower() == "/snow":
+            self.transcript._snowfall.toggle()
+            return
         if self.command and not self.command.done():
             self.say("finish the current command first, or press esc", "warn")
             return

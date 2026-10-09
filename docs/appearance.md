@@ -26,7 +26,19 @@ it. Cancelling returns to the previous theme.
 A theme changes Eirene's interface palette, not your shell's global theme. Use the
 picker descriptions to compare contrast against your terminal background.
 
+## December snowfall
+
+Subtle snowfall appears in the empty chat during December 1–31, using the local
+system date. It adds no decorations to the banner. Automatic snowfall stops when
+conversation content appears and returns after `/clear`.
+
+Small Unicode dots move within character cells at 30 frames per second;
+accessible icons use ASCII dots instead. Set `seasonal_effects` to `false` in
+configuration to disable automatic snowfall.
+
 ## Reduce motion
+
+Reduced motion disables snowfall.
 
 ```sh
 eirene --reduce-motion

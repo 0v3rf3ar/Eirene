@@ -99,6 +99,7 @@ choices, platform behavior, and provider-specific limits can narrow them.
   "model": null,
   "mode": "manual",
   "theme": "default",
+  "seasonal_effects": true,
   "providers": {},
   "skills": {},
   "shell_timeout": 120,
@@ -202,13 +203,14 @@ layers are independent: changing one does not replace credentials for another.
 | `execution_isolation` | `"auto"` | Always normalized to `auto`; selects platform behavior. Legacy `container_image` is removed. |
 | `isolate_network` | `true` | Restricts network access for sandboxed execution; a manually enabled MCP server can declare its own network grant. |
 | `theme` | `"default"` | Saved palette name; available names are in [appearance](appearance.md). |
+| `seasonal_effects` | `true` | Automatic snowfall in the empty chat during December, using the local system date. |
 | `notifications` | `false` | Desktop notifications; `/notification` controls it. |
 | `prompt_suggest` | `false` | Additional model requests for follow-up drafts; `/prompt-suggest` controls it. |
 | `reduce_motion` | `false` | Static activity markers. `--reduce-motion` or a nonempty `EIRENE_REDUCE_MOTION` also enables it. |
 | `accessible_icons` | `false` | Alternative icon presentation. |
 | `check_updates` | `true` | Startup release checks. A nonempty `EIRENE_NO_UPDATE_CHECK` skips these checks; `/update check` remains explicit. |
 
-`isolate_network`, `auto_compact`, `reduce_motion`, and `accessible_icons` are
+`isolate_network`, `auto_compact`, `reduce_motion`, `seasonal_effects`, and `accessible_icons` are
 converted with Python boolean truthiness on load. Other boolean preferences are
 not all normalized; consistently use JSON booleans. For the actual execution
 boundary and temporary host grants, see [permissions](harness.md).

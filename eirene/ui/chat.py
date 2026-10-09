@@ -13,6 +13,7 @@ from textual.widgets import Static
 from . import art, diff, markup, palette, theme
 from .composer import PromptRow
 from .format import safe_notice, strip_escapes
+from .snow import Snowfall
 
 PANEL_LABEL = "Tip:"
 PANEL_DIVIDER = "│"
@@ -600,6 +601,24 @@ class Transcript(VerticalScroll):
         self._follow_token = 0
         self._programmatic_follow = False
         self._following = True
+        self._snow_idle = True
+        self._snowfall = Snowfall(self)
+
+    def on_mount(self) -> None:
+        self._snowfall.mount()
+
+    def on_unmount(self) -> None:
+        self._snowfall.close()
+
+    def refresh_snow(self) -> None:
+        if self._snow_idle or self._snowfall.override is True:
+            self._snowfall.start()
+        else:
+            self._snowfall.stop()
+
+    def render(self):
+        snow = self._snowfall.render()
+        return snow if snow is not None else super().render()
 
     def watch_scroll_y(self, old_value: float, new_value: float) -> None:
         super().watch_scroll_y(old_value, new_value)
@@ -673,6 +692,10 @@ class Transcript(VerticalScroll):
 
     async def push(self, block: Widget, live: bool = False) -> Widget:
         """Append a block, following it only when already at the bottom."""
+        if not isinstance(block, (ArtBlock, NoticeBlock)):
+            self._snow_idle = False
+            if self._snowfall.override is not True:
+                self._snowfall.stop()
         follow = self._following
         await self.mount(block)
         if live:
@@ -704,6 +727,8 @@ class Transcript(VerticalScroll):
         self._live.clear()
         self._following = True
         self.remove_children()
+        self._snow_idle = True
+        self._snowfall.start()
 
 
 def _wear_surface(widget) -> None:
