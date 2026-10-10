@@ -292,3 +292,22 @@ async def test_api_retry_is_reported_without_restarting(workdir, tmp_path, monke
 
 async def _approve_native():
     return "yes"
+
+
+async def test_full_access_broker_previews_external_edit_before_approval(workdir, outside):
+    target = outside / "secret.txt"
+    target.write_text("old\n")
+    asked = []
+
+    async def approve(name, label, preview, reason):
+        assert target.read_text() == "old\n"
+        assert "-old" in preview and "+new" in preview
+        asked.append(name)
+        return "no"
+
+    broker = PermissionBroker(workdir, approve, full_access=True)
+    result = await broker._decide("Edit", {
+        "file_path": str(target), "old_string": "old", "new_string": "new"})
+    assert asked == ["native_edit_file"]
+    assert result["behavior"] == "deny"
+    assert target.read_text() == "old\n"

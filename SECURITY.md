@@ -18,7 +18,7 @@ By default, Eirene's native command runtime uses Bubblewrap on Linux and sandbox
 (Seatbelt) on macOS. It fails closed when the required backend is unavailable;
 Linux also requires working user namespaces. The workspace is writable, and
 additional paths need explicit grants. Network access is disabled unless approved.
-Execution approval (yes or always) grants full host access only for the current
+Approval to leave the sandbox (yes or always) grants full host access only for the current
 response. The approval UI discloses this scope. Sandbox restrictions return on
 completion, failure, interruption, or cancellation; managed services and commands
 started under the grant are stopped. Normal question answers never grant access,
@@ -44,7 +44,8 @@ Codex and Claude Code subscription providers own their execution environments;
 Eirene forwards approvals and requests their native sandbox controls.
 
 `/permissions full-access` explicitly disables command isolation, path containment,
-network restrictions, and Eirene approval prompts for the current process.
+and network restrictions for the current process. Manual approvals remain active;
+only Auto mode skips approvals under full access.
 Commands retain the OS account's privileges; this does not grant root access.
 Plan mode remains read-only. `/permissions sandboxed` stops Eirene-managed command
 processes and MCP servers and restores restrictions. External effects already

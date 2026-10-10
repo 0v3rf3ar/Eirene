@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from math import ceil
+from time import monotonic
 
 from rich.text import Text
+from rich.align import Align
 from textual.containers import VerticalScroll
 from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Static
 
 from . import art, diff, markup, palette, theme
+from .backdrop import faded_pixel_logo
 from .composer import PromptRow
 from .format import safe_notice, strip_escapes
 from .snow import Snowfall
@@ -18,7 +22,8 @@ from .snow import Snowfall
 PANEL_LABEL = "Tip:"
 PANEL_DIVIDER = "│"
 MAX_TOOL_OUTPUT_LINES = 14
-FLUSH_INTERVAL = 1 / 24
+MAX_COMMAND_LABEL_CHARS = 120
+FLUSH_INTERVAL = 1 / 60
 FILE_TOOLS = ("read_file", "write_file", "edit_file", "list_dir", "glob")
 
 
@@ -379,19 +384,47 @@ class AnswerBlock(Block):
 
     def __init__(self) -> None:
         self.buffer = ""
+        self._visible = 0
+        self._frame_at = monotonic()
+        self._reveal_by = self._frame_at
+        self._rendered = None
         super().__init__(Text(""))
 
     def feed(self, text: str) -> None:
+        if self._visible == len(self.buffer):
+            self._frame_at = monotonic()
+            self._reveal_by = self._frame_at + 0.12
         self.buffer += strip_escapes(text)
 
     def _width(self) -> int:
         return max(self.content_size.width, 4) if self.size.width else markup.DEFAULT_WIDTH
 
     def on_resize(self, event) -> None:
-        self.flush()
+        self._draw()
 
     def flush(self) -> None:
-        self.update(markup.render(self.buffer.rstrip(), self._width()))
+        """Show everything immediately for restored or completed messages."""
+        self._visible = len(self.buffer)
+        self._draw()
+
+    def advance(self) -> None:
+        """Reveal characters at each frame, with at most 120 ms of catch-up."""
+        now = monotonic()
+        elapsed = max(now - self._frame_at, FLUSH_INTERVAL)
+        self._frame_at = now
+        pending = len(self.buffer) - self._visible
+        if pending:
+            step = max(1, ceil(240 * elapsed), ceil(pending * min(elapsed / 0.06, 1)))
+            self._visible = (len(self.buffer) if now >= self._reveal_by else
+                             min(len(self.buffer), self._visible + step))
+        self._draw()
+
+    def _draw(self) -> None:
+        text = self.buffer[:self._visible].rstrip()
+        key = (text, self._width())
+        if key != self._rendered:
+            self._rendered = key
+            self.update(markup.render(*key))
 
     def action_open_link(self, url: str) -> None:
         """Open a link from rendered assistant Markdown."""
@@ -399,7 +432,7 @@ class AnswerBlock(Block):
 
     def get_selection(self, selection):
         """Copy what is on screen, without the panel padding."""
-        shown = markup.Markdown(self.buffer.rstrip(), self._width()).plain()
+        shown = markup.Markdown(self.buffer[:self._visible].rstrip(), self._width()).plain()
         picked = selection.extract(shown)
         return (markup.trim(picked), "\n") if picked is not None else None
 
@@ -461,6 +494,9 @@ class ToolBlock(Block):
 class CommandBlock(ToolBlock):
     """A shell command with an explicit running/success/failure state."""
 
+    def on_resize(self, event) -> None:
+        self.flush()
+
     def __init__(self, name: str, label: str):
         self.expanded = False
         self._saved_key = None
@@ -505,7 +541,11 @@ class CommandBlock(ToolBlock):
         body.append(f"{art.icon('bullet')} ", style=color)
         body.append(action, style="bold")
         body.append("(")
-        body.append(self.label or "(empty)", style="underline")
+        label = " ".join(self.label.split())
+        limit = min(MAX_COMMAND_LABEL_CHARS, max(self.content_size.width - 32, 24))
+        if len(label) > limit:
+            label = label[:limit - 1] + "…"
+        body.append(label or "(empty)", style="underline")
         body.append(")")
         body.append("  ▾ collapse" if self.expanded else "  ▸ expand", style="dim")
         if self.finished and self.seconds >= 1:
@@ -609,6 +649,7 @@ class Transcript(VerticalScroll):
         self._programmatic_follow = False
         self._following = True
         self._snow_idle = True
+        self._face_visible = True
         self._snowfall = Snowfall(self)
 
     def on_mount(self) -> None:
@@ -625,7 +666,24 @@ class Transcript(VerticalScroll):
 
     def render(self):
         snow = self._snowfall.render()
-        return snow if snow is not None else super().render()
+        if snow is not None:
+            return snow
+        if not self._face_visible:
+            return super().render()
+        width, height = self.content_size
+        if width < 1 or height < 1:
+            return Text("")
+        base, background = self.background_colors
+        face = faded_pixel_logo(max(1, width - 4), max(1, height - 2),
+                                base + background)
+        return Align(face, align="center", vertical="middle", width=width,
+                     height=height)
+
+    def hide_face(self) -> None:
+        """Dismiss the welcome decoration when the user begins interacting."""
+        if self._face_visible:
+            self._face_visible = False
+            self.refresh()
 
     def watch_scroll_y(self, old_value: float, new_value: float) -> None:
         super().watch_scroll_y(old_value, new_value)
@@ -699,6 +757,8 @@ class Transcript(VerticalScroll):
 
     async def push(self, block: Widget, live: bool = False) -> Widget:
         """Append a block, following it only when already at the bottom."""
+        if isinstance(block, UserBlock):
+            self.hide_face()
         if not isinstance(block, (ArtBlock, NoticeBlock)):
             self._snow_idle = False
             if self._snowfall.override is not True:
@@ -718,7 +778,7 @@ class Transcript(VerticalScroll):
             return
         follow = self._following
         for block in list(self._live):
-            flush = getattr(block, "flush", None)
+            flush = getattr(block, "advance", None) or getattr(block, "flush", None)
             if flush:
                 flush()
         if follow:
@@ -726,6 +786,9 @@ class Transcript(VerticalScroll):
 
     def settle(self) -> None:
         """Stop tracking finished blocks."""
+        for block in self._live:
+            if isinstance(block, AnswerBlock):
+                block.flush()
         self.flush_live()
         self._live.clear()
 
@@ -735,6 +798,7 @@ class Transcript(VerticalScroll):
         self._following = True
         self.remove_children()
         self._snow_idle = True
+        self._face_visible = True
         self._snowfall.start()
 
 

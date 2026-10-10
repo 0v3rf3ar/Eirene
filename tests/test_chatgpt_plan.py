@@ -482,3 +482,45 @@ async def test_model_command_asks_reasoning_and_cancellation_preserves_selection
 def test_previous_empty_response_items_do_not_discard_visible_history():
     inputs = to_responses_input([{"role": "assistant", "content": "earlier answer", "response_items": []}])
     assert inputs[0]["content"][0]["text"] == "earlier answer"
+
+
+@pytest.mark.parametrize("recover", [True, False])
+async def test_tls_handshake_failure_retries_once(recover):
+    provider = ChatGPTPlan()
+    save_account(provider.auth)
+    requests = []
+    def handler(req):
+        requests.append(req)
+        if len(requests) == 1 or not recover:
+            raise httpx.ConnectError("[SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC]", request=req)
+        return httpx.Response(200, text=sse(
+            {"type": "response.output_text.delta", "delta": "Recovered"},
+            {"type": "response.completed", "response": {"status": "completed", "output": []}}))
+    base.set_transport(httpx.MockTransport(handler))
+    if recover:
+        events = [e async for e in provider.stream([], "test")]
+        assert "".join(e.text for e in events if isinstance(e, base.TextDelta)) == "Recovered"
+    else:
+        with pytest.raises(ProviderError):
+            _ = [e async for e in provider.stream([], "test")]
+    assert len(requests) == 2
+
+
+async def test_tls_failure_after_text_does_not_replay_answer():
+    provider = ChatGPTPlan()
+    save_account(provider.auth)
+    requests = []
+    class BrokenStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield sse({"type": "response.output_text.delta", "delta": "Partial"}).encode()
+            raise httpx.ReadError("SSL: BAD_RECORD_MAC")
+    def handler(req):
+        requests.append(req)
+        return httpx.Response(200, stream=BrokenStream())
+    base.set_transport(httpx.MockTransport(handler))
+    events = []
+    with pytest.raises(ProviderError):
+        async for event in provider.stream([], "test"):
+            events.append(event)
+    assert len(requests) == 1
+    assert [e.text for e in events if isinstance(e, base.TextDelta)] == ["Partial"]

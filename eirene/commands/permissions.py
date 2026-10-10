@@ -14,7 +14,7 @@ async def run(app, args: str) -> None:
             ("sandboxed", "Sandboxed", "current" if current == "sandboxed" else "",
              "Workspace isolation and approval checks. Default for new processes."),
             ("full-access", "Full access", "current" if current == "full-access" else "",
-             "Host files, network and commands without approval or isolation. "
+             "Host files, network and commands without isolation. Approval follows the mode. "
              "OS privileges still apply. Lasts for this process; plan mode remains read-only."),
         ]
         wanted = await app.ask_choice("permissions", options, selected=current)
@@ -36,6 +36,6 @@ async def run(app, args: str) -> None:
     if setter:
         setter(wanted)
     app.say(f"Permissions: {wanted}. " + (
-        "Host files, network and commands are allowed without approval; OS privileges still apply. "
+        "Host files, network and commands are available; approval follows the mode. OS privileges still apply. "
         "Plan mode remains read-only."
         if full_access(app.config) else "Managed processes stopped; workspace isolation and approval checks are enabled."))

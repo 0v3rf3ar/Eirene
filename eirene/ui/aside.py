@@ -5,13 +5,14 @@ from __future__ import annotations
 from rich.cells import cell_len
 from rich.text import Text
 from textual import events
-from textual.containers import Container, VerticalScroll, Horizontal
+from textual.containers import VerticalScroll, Horizontal
 from textual.widgets import Static
 from textual.message import Message
 
 from . import art, markup, theme
 from .format import strip_escapes
 from .palette import FOREGROUND
+from .window import DraggableWindow
 
 CLOSE = "[x]"
 MAX_WIDTH = 100
@@ -101,7 +102,7 @@ class AsideBody(VerticalScroll):
     can_focus = False
 
 
-class AsidePanel(Container):
+class AsidePanel(DraggableWindow):
     """A window floating over the chat, covering only its own area."""
 
     DEFAULT_CSS = f"""
@@ -172,6 +173,7 @@ class AsidePanel(Container):
 
     def ask(self, question: str) -> None:
         """Show the window with a pending answer."""
+        self.reset_position()
         self._hide_toggle()
         self._content = None
         self._content_width = None
@@ -185,6 +187,7 @@ class AsidePanel(Container):
 
     def show_content(self, content: Text) -> None:
         """Show a finished, selectable panel without adding it to the chat."""
+        self.reset_position()
         self._hide_toggle()
         self._content = content
         self._content_width = max(
@@ -230,6 +233,7 @@ class AsidePanel(Container):
         self.refresh_body()
 
     def close(self) -> None:
+        self.reset_position()
         self._hide_toggle()
         self.display = False
         self._content = None
@@ -239,7 +243,7 @@ class AsidePanel(Container):
         self.note = ""
 
     def _place(self, screen=None) -> None:
-        """Centre the window and pin the button to its corner."""
+        """Size the window, preserve its position, and pin the close button."""
         try:
             screen = screen or self.app.size
         except Exception:  # noqa: BLE001
@@ -257,8 +261,7 @@ class AsidePanel(Container):
         self.query_one(AsideBody).styles.max_height = max(
             min(int(screen.height * HEIGHT_SHARE), screen.height - 2), 1)
         height = min(self.outer_size.height or 0, screen.height)
-        self.styles.offset = (max((screen.width - width) // 2, 0),
-                              max((screen.height - height) // 2, 0))
+        self.position_window(screen, width, height)
         self.close_button.styles.offset = (max(self._width - len(CLOSE), 0), 0)
 
     def on_resize(self, event: events.Resize) -> None:
@@ -292,10 +295,25 @@ class AsidePanel(Container):
         self.body.update(body)
         self._place()
 
+    def drag_handle(self, event: events.MouseDown) -> bool:
+        if self.close_button.region.contains(event.screen_x, event.screen_y):
+            return False
+        # Status panels render their own title inside the selectable body.
+        # Treat that row as a handle just like the window border.
+        title = self.body.region
+        return (super().drag_handle(event)
+                or (title.x <= event.screen_x < title.right
+                    and event.screen_y == title.y))
+
     def on_click(self, event: events.Click) -> None:
-        """The [x] or the title row closes it."""
+        """The [x] closes it; the title row is a drag handle."""
+        if self._dragged:
+            event.stop()
+            event.prevent_default()
+            self._dragged = False
+            return
         if not self.display:
             return
-        if event.y <= 0 or isinstance(event.widget, CloseButton):
+        if self.close_button.region.contains(event.screen_x, event.screen_y):
             event.stop()
             self.close()

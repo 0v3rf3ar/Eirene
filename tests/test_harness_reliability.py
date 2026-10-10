@@ -179,7 +179,7 @@ async def test_sandbox_command_is_status_only(workdir):
     from eirene.commands.sandbox import run
     from eirene.core.errors import CommandError
     messages = []
-    app = SimpleNamespace(agent=SimpleNamespace(provider=SimpleNamespace(owns_context=False)),
+    app = SimpleNamespace(agent=SimpleNamespace(provider=SimpleNamespace(owns_context=False), mode=Mode.MANUAL, always=set()),
                           sandbox=SimpleNamespace(root=workdir), theme="textual-dark", config={},
                           aside=SimpleNamespace(show_content=lambda body: messages.append(body.plain)))
     await run(app, "")
@@ -316,7 +316,7 @@ async def test_native_approval_does_not_duplicate_highlighted_diff(workdir, monk
     from test_tui import start
     from eirene.ui.chat import ChangeBlock, DiffBlock
     app, pilot, context = await start(workdir)
-    async def approve(*args):
+    async def approve(*args, **kwargs):
         return "yes"
     monkeypatch.setattr(app.permission, "ask", approve)
     patch = "--- a/demo.py\n+++ b/demo.py\n@@ -1 +1 @@\n-old\n+new\n"

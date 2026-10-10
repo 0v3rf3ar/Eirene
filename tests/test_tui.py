@@ -278,6 +278,36 @@ async def test_back_to_bottom_click_returns_to_latest_message(workdir):
         await context.__aexit__(None, None, None)
 
 
+async def test_chat_face_is_visible_after_resize_without_overlapping_composer(workdir):
+    app, pilot, context = await start(workdir, size=(100, 32))
+    try:
+        for size in ((100, 32), (64, 24)):
+            await pilot.resize_terminal(*size)
+            await pilot.pause()
+            assert "▀" in app.export_screenshot()
+            assert app.transcript.region.bottom == app.query_one("Composer").region.y
+        await type_line(pilot, "/help")
+        await pilot.pause()
+        assert app.prompt.value == ""
+        assert "▀" not in app.export_screenshot()
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_chat_face_disappears_on_first_message(workdir):
+    app, pilot, context = await start(workdir, Script([TextDelta("hello"), Done("stop")]))
+    try:
+        assert "▀" in app.export_screenshot()
+        await type_line(pilot, "hello")
+        await pilot.pause()
+        assert "▀" not in app.export_screenshot()
+        await pilot.resize_terminal(64, 24)
+        await pilot.pause()
+        assert "▀" not in app.export_screenshot()
+    finally:
+        await context.__aexit__(None, None, None)
+
+
 async def test_bottom_dock_is_in_the_right_order(workdir):
     app, pilot, context = await start(workdir)
     try:
@@ -515,6 +545,40 @@ async def test_streaming_does_not_pull_a_reader_back_to_bottom(workdir):
         await context.__aexit__(None, None, None)
 
 
+async def test_answer_reveal_is_progressive_and_catches_up_quickly(monkeypatch):
+    from textual.app import App
+    now = [0.0]
+    monkeypatch.setattr("eirene.ui.chat.monotonic", lambda: now[0])
+    async with App().run_test():
+        answer = AnswerBlock()
+        answer.feed("Smooth streaming text. " * 100)
+        answer.advance()
+        assert 0 < answer._visible < len(answer.buffer)
+        first = answer._visible
+        now[0] = 1 / 60
+        answer.advance()
+        assert first < answer._visible < len(answer.buffer)
+        # Incoming bursts cannot keep extending the catch-up deadline.
+        answer.feed("More text")
+        now[0] = 0.12
+        answer.advance()
+        assert answer._visible == len(answer.buffer)
+
+
+async def test_settle_finishes_answer_animation_immediately():
+    from textual.app import App
+    from eirene.ui.chat import Transcript
+    async with App().run_test():
+        transcript = Transcript()
+        answer = AnswerBlock()
+        answer.feed("The complete reply")
+        transcript._live.append(answer)
+        transcript._following = False
+        transcript.settle()
+        assert answer._visible == len(answer.buffer)
+        assert not transcript._live
+
+
 async def test_streaming_still_follows_when_reader_is_at_bottom(workdir):
     app, pilot, context = await start(workdir, size=(70, 24))
     try:
@@ -710,7 +774,8 @@ async def test_nonzero_command_exit_makes_the_card_fail(workdir, python_command)
                 break
         card = blocks(app, CommandBlock)[0]
         assert card.is_error
-        assert command in content(card)
+        assert card.label == command
+        assert command[:24] in content(card)
     finally:
         await context.__aexit__(None, None, None)
 
@@ -1176,6 +1241,7 @@ async def leave(app, monkeypatch, workdir):
 
     monkeypatch.setattr(app_mod, "Eirene", lambda *a, **k: app)
     monkeypatch.setattr(type(app), "run", lambda self: None)
+    monkeypatch.setattr("eirene.ui.trust.confirm_workspace_trust", lambda path: True)
     return app_mod.run(workdir)
 
 
@@ -1987,6 +2053,109 @@ async def test_the_btw_popup_opens_and_closes(workdir):
         await context.__aexit__(None, None, None)
 
 
+@pytest.mark.parametrize("popup", ["usage", "sandbox", "btw"])
+async def test_chat_popups_drag_and_keep_position_during_updates(workdir, popup):
+    from eirene import commands
+    app, pilot, context = await start(workdir, size=(120, 40))
+    try:
+        if popup in {"usage", "sandbox"}:
+            await commands.dispatch(app, f"/{popup}")
+        else:
+            app.aside.ask("A side question")
+            app.aside.feed("A streamed answer")
+            app.aside.refresh_body()
+        await pilot.pause()
+        original = app.aside.region
+        origin = (original.x + 5, original.y + 1)
+        target = (origin[0] - 7, origin[1] - 4)
+        await pilot.mouse_down(offset=origin)
+        await pilot.hover(offset=target)
+        await pilot.mouse_up(offset=target)
+        await pilot.pause()
+        assert app.aside.open
+        assert app.aside.region.offset == original.offset + (-7, -4)
+        assert app.mouse_captured is None
+        moved = app.aside.region.offset
+        if popup == "btw":
+            app.aside.feed("\nAnother line arrives")
+            app.aside.finish()
+        else:
+            app.aside.refresh_body()
+        await pilot.pause()
+        assert app.aside.region.offset == moved
+        await pilot.click(app.aside.close_button)
+        await pilot.pause()
+        assert not app.aside.open
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_dragged_popup_is_clamped_after_resize_and_can_select_body(workdir):
+    app, pilot, context = await start(workdir, size=(120, 40))
+    try:
+        app.aside.ask("Side question")
+        app.aside.finish("Selectable body text")
+        await pilot.pause()
+        panel = app.aside.region
+        await pilot.mouse_down(offset=(panel.x + 4, panel.y))
+        await pilot.hover(offset=(119, 39))
+        await pilot.mouse_up(offset=(119, 39))
+        await pilot.pause()
+        assert app.aside.region.right <= app.size.width
+        assert app.aside.region.bottom <= app.size.height
+        await pilot.resize_terminal(60, 20)
+        await pilot.pause()
+        panel = app.aside.region
+        assert panel.x >= 0 and panel.y >= 0
+        assert panel.right <= 60 and panel.bottom <= 20
+        body = app.aside.body.region
+        position = panel.offset
+        await pilot.mouse_down(offset=(body.x, body.y + 1))
+        await pilot.hover(offset=(body.x + 10, body.y + 1))
+        await pilot.mouse_up(offset=(body.x + 10, body.y + 1))
+        await pilot.pause()
+        assert app.aside.region.offset == position
+        assert "Selectable" in app.screen.get_selected_text()
+        await pilot.press("escape")
+        app.aside.ask("New popup")
+        await pilot.pause()
+        assert app.aside._window_position is None
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("kind", ["output", "skills"])
+async def test_modal_popups_can_be_dragged(workdir, kind):
+    from types import SimpleNamespace
+    from eirene.ui.output import OutputScreen
+    from eirene.ui.skill_picker import SkillPickerScreen
+    from eirene.ui.window import DraggableWindow
+    app, pilot, context = await start(workdir, size=(100, 40))
+    try:
+        screen = (OutputScreen(SimpleNamespace(label="Output", finished=True,
+                    result="Saved output", is_error=False, seconds=0))
+                  if kind == "output" else SkillPickerScreen([("one", "One", "", "Description")]))
+        await app.push_screen(screen)
+        await pilot.pause()
+        window = screen.query_one(DraggableWindow)
+        original = window.region
+        assert original.x == (app.size.width - original.width) // 2
+        assert original.y == (app.size.height - original.height) // 2
+        origin = (original.x + 5, original.y)
+        target = (origin[0] - 2, origin[1] - 1)
+        await pilot.mouse_down(offset=origin)
+        await pilot.hover(offset=target)
+        await pilot.mouse_up(offset=target)
+        await pilot.pause()
+        assert window.region.offset == original.offset + (-2, -1)
+        assert app.mouse_captured is None
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.screen is not screen
+    finally:
+        await context.__aexit__(None, None, None)
+
+
 async def test_the_btw_popup_reports_a_failure(workdir):
     from eirene import commands
     from eirene.core.errors import ProviderError
@@ -2571,7 +2740,7 @@ async def test_the_btw_window_hides_the_chat_behind_it(workdir):
         await context.__aexit__(None, None, None)
 
 
-async def test_clicking_the_title_row_closes_the_btw_window(workdir):
+async def test_clicking_the_title_row_keeps_the_draggable_btw_window_open(workdir):
     from eirene import commands
 
     app, pilot, context = await start(workdir, Script(
@@ -2587,7 +2756,7 @@ async def test_clicking_the_title_row_closes_the_btw_window(workdir):
         window = app.aside.region
         await pilot.click(offset=(window.x + 2, window.y + 1))
         await pilot.pause()
-        assert not app.aside.open
+        assert app.aside.open
     finally:
         await context.__aexit__(None, None, None)
 
@@ -3648,5 +3817,61 @@ async def test_picker_shortcuts_use_existing_commands(workdir, monkeypatch, key,
         await pilot.press(key)
         assert called == [command], "shortcuts leave active text requests alone"
         app._text_future.cancel()
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_long_command_is_abbreviated_but_approval_shows_it_all(workdir):
+    app, pilot, context = await start(workdir, size=(100, 35))
+    command = "python -c '" + "print(123);" * 100 + "'"
+    try:
+        card = await app.push(CommandBlock("run_command", command))
+        await pilot.pause()
+        assert command not in card.render().plain
+        assert "…" in card.render().plain
+        card.expanded = True
+        card.flush()
+        assert command not in card.render().plain
+        pending = asyncio.create_task(app._approve("run_command", command, command, "command"))
+        await pilot.pause()
+        assert command in app.permission.title
+        await pilot.press("n")
+        assert await pending == "no"
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("tool", ["write_file", "native_write_file"])
+async def test_empty_file_approval_offers_session_edits(workdir, tool):
+    app, pilot, context = await start(workdir)
+    pending = None
+    try:
+        pending = asyncio.create_task(app._approve(tool, "empty.txt", "", ""))
+        await pilot.pause()
+        assert ("always", "allow edits for this session") in app.permission.choices
+        await pilot.press("2")
+        assert await pending == "always"
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        await context.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("action", ["clear", "switch"])
+async def test_session_edit_permission_is_cleared_with_session(workdir, action):
+    from eirene.core.session import Session
+    app, pilot, context = await start(workdir)
+    try:
+        app.agent.always.add("session_edits")
+        if action == "clear":
+            app.clear_session()
+        else:
+            other = Session.create(workdir)
+            other.add_user("another session")
+            other.close()
+            await app.switch_session(other.id)
+        await pilot.pause()
+        assert "session_edits" not in app.agent.always
     finally:
         await context.__aexit__(None, None, None)

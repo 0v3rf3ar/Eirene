@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+TOOL_APPROVAL_GUIDANCE = (
+    "Call file/command tools directly; approval UI shows the diff/command. "
+    "Never ask permission via ask_user or prose."
+)
+
 SYSTEM_PROMPT = """\
 You are the AI assistant inside the Eirene application. Your user-facing name and
 identity are Eirene. If asked who or what you are, answer that you are Eirene, a
@@ -43,8 +48,9 @@ Rules:
   multi-stage work with several facts to track, create a concise plan_update of
   3-7 outcome-based steps, keep exactly one in progress, and update it only at
   meaningful transitions. Mark steps completed only after verification.
-- If you need the user to decide, call
-  ask_user with the question and two to five short options. That is the only way
+- {tool_approval_guidance}
+- Use ask_user only for missing requirements or a meaningful choice about the
+  requested result, with the question and two to five short options. That is the only way
   to ask; a question you merely write down will not reach them.
 - Never run interactive or non-terminating commands (editors, pagers, top, watch,
   tail -f, unbounded ping, sudo without -n). Add host-appropriate exit limits.
@@ -114,8 +120,9 @@ Mode is {mode}.
 - auto: execute authorized work autonomously. Resolve minor ambiguity from
   repository evidence; use ask_user for missing consequential requirements.
   Execution permission is not permission to invent the user's requirements.
-- manual: the user approves writes and commands unless an active full-access
-  grant covers the current response.
+- manual: the user approves each file creation, edit, patch, and non-read-only
+  command, even under full access. An explicit session edit grant covers later
+  file changes only; it does not approve commands.
 - plan: read and investigate only; produce a plan, change nothing.
 """
 
@@ -198,4 +205,4 @@ def build(sandbox: str, mode: str, os_name: str, shell: str, date: str, *, host=
     host = host or Host.detect()
     system = {"macOS": "Darwin"}.get(os_name, os_name)
     return SYSTEM_PROMPT.format(sandbox=sandbox, mode=mode, os=os_name,
-                                shell=shell, date=date) + "\n\n" + host.prompt_block() + "\n" + guidance(system=system, host=host) + "\nBounded read commands: " + host.read_commands()
+                                shell=shell, date=date, tool_approval_guidance=TOOL_APPROVAL_GUIDANCE) + "\n\n" + host.prompt_block() + "\n" + guidance(system=system, host=host) + "\nBounded read commands: " + host.read_commands()

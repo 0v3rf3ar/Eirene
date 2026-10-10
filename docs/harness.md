@@ -57,9 +57,12 @@ finishes, fails, or is stopped. Managed commands and services started under that
 temporary grant are stopped when it ends. Ordinary question answers do not grant
 this access, and Plan mode cannot acquire it through an execution approval.
 
-While that full-access grant is active, remaining normal-mode actions in the
-response can proceed without another approval. Manual mode is therefore not a
-promise of a separate prompt for each later action after granting host access.
+Full access changes where tools can run, not whether they need approval. Manual
+mode still asks before each file change and non-read-only command, including
+while a temporary host-access grant is active. Approving a workspace edit does
+not grant host access. Choose **allow edits for this session** in a file-change
+prompt to approve later creations, edits, and patches in the current session.
+This does not approve commands or access outside the sandbox.
 
 ## Explicit full access
 
@@ -67,9 +70,10 @@ promise of a separate prompt for each later action after granting host access.
 /permissions full-access
 ```
 
-This removes Eirene's filesystem containment, command isolation, network
-restrictions, and approval prompts for the current process. Commands still have
-only your operating-system account's privileges. It does not provide root or
+This removes Eirene's filesystem containment, command isolation, and network
+restrictions for the current process. Approval still follows the selected mode:
+Manual asks before changes and commands; Auto proceeds without prompts. Commands
+still have only your operating-system account's privileges. It does not provide root or
 administrator access, and Plan mode remains read-only.
 
 Full access is process-local. It is not saved as the startup default, including

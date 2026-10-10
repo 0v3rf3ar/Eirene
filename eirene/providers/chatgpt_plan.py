@@ -8,7 +8,8 @@ import httpx
 
 from ..core.errors import AuthError, ProviderError
 from .base import (Done, Provider, TextDelta, ThinkingDelta, ToolCall, Usage,
-                   parse_json, raise_for_status, sse_lines, wrap_transport_error)
+                   parse_json, raise_for_status, sse_lines, transient_tls_error,
+                   wrap_transport_error)
 from .chatgpt_auth import ChatGPTAuth, RESOURCE
 
 
@@ -63,6 +64,21 @@ class ChatGPTPlan(Provider):
         return options
 
     async def stream(self, messages, model, *, system="", tools=None, max_tokens=8192):
+        for attempt in range(2):
+            progressed = False
+            try:
+                async for event in self._stream_once(messages, model, system=system,
+                                                     tools=tools, max_tokens=max_tokens):
+                    if isinstance(event, (TextDelta, ToolCall)):
+                        progressed = True
+                    yield event
+                return
+            except ProviderError as exc:
+                detail = str(exc.__cause__ or exc)
+                if attempt or progressed or not transient_tls_error(detail):
+                    raise
+
+    async def _stream_once(self, messages, model, *, system="", tools=None, max_tokens=8192):
         body = {"model": model, "input": to_responses_input(messages),
                 "store": False, "stream": True, "include": ["reasoning.encrypted_content"]}
         if system:

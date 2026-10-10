@@ -41,6 +41,7 @@ class PermissionBar(Static):
         self.index = 0
         self.title = ""
         self.reason = ""
+        self.choices = CHOICES
 
     def on_mount(self) -> None:
         self.display = False
@@ -57,8 +58,10 @@ class PermissionBar(Static):
         """Dismiss as a denial."""
         self._resolve(NO)
 
-    async def ask(self, title: str, reason: str) -> str:
+    async def ask(self, title: str, reason: str, *, edits: bool = False) -> str:
         """Show the prompt and wait for a choice."""
+        self.choices = [(YES, "yes"), (ALWAYS, "allow edits for this session"),
+                        (NO, "no, stop here")] if edits else CHOICES
         self.title = title
         self.reason = reason
         self.index = 0
@@ -85,7 +88,7 @@ class PermissionBar(Static):
         if self.reason:
             body.append(f"  {self.reason}\n", style="dim")
         room = max(self.size.width - 4, 1)
-        for position, (_, label) in enumerate(CHOICES):
+        for position, (_, label) in enumerate(self.choices):
             selected = position == self.index
             marker = art.icon("arrow") if selected else " "
             row = Text(f" {marker} {position + 1}. {label}",
@@ -107,13 +110,13 @@ class PermissionBar(Static):
         event.stop()
         event.prevent_default()
         if key in ("up", "k"):
-            self.index = (self.index - 1) % len(CHOICES)
+            self.index = (self.index - 1) % len(self.choices)
             self._draw()
         elif key in ("down", "j"):
-            self.index = (self.index + 1) % len(CHOICES)
+            self.index = (self.index + 1) % len(self.choices)
             self._draw()
         elif key == "enter":
-            self._resolve(CHOICES[self.index][0])
+            self._resolve(self.choices[self.index][0])
         elif key in ("y", "1"):
             self._resolve(YES)
         elif key in ("a", "2"):

@@ -6,6 +6,10 @@ Enter slash commands in Eirene's prompt. Type `/` to open completion or use
 `/help` for the command list. A command that opens a picker expects you to select
 an item there; it does not automatically accept a name as an argument.
 
+Move floating popups such as `/usage` and `/btw` by dragging their top border or
+title row with the left mouse button. Output and skill chooser windows also
+support dragging. Close a popup with Esc, or use `[x]` when shown.
+
 ## Connections and access
 
 | Command | Action | Guide |

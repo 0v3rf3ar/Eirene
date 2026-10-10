@@ -17,6 +17,19 @@ from ..core.errors import (AuthError, ConnectionFailed, ModelNotFound, ProviderE
                            RateLimitError)
 
 
+def transient_tls_error(detail: str) -> bool:
+    """Recognize retryable TLS glitches without bypassing certificate failures."""
+    detail = detail.lower()
+    if any(marker in detail for marker in (
+            "certificate", "unknown issuer", "unknown ca", "hostname mismatch")):
+        return False
+    return any(marker in detail for marker in (
+        "bad record mac", "bad_record_mac", "bad decrypt", "bad_decrypt",
+        "decryption failed", "decrypt_error", "unexpected eof", "unexpected_eof",
+        "tls handshake eof", "ssl_error_syscall", "tls alert internal error",
+        "tlsv1 alert internal error"))
+
+
 @dataclass
 class ConnectionStatus:
     text: str

@@ -76,19 +76,23 @@ async def test_restoring_sandbox_stops_full_access_service(workdir, python_comma
         await processes.stop(process_id)
 
 
-async def test_full_access_runs_host_command_without_approval(workdir, outside, python_command):
+@pytest.mark.parametrize("mode,expected", [(Mode.MANUAL, 1), (Mode.AUTO, 0)])
+async def test_full_access_preserves_mode_approval(workdir, outside, python_command, mode, expected):
     target = outside / "installed.txt"
     command = python_command(f"from pathlib import Path; Path({str(target)!r}).write_text('done')")
     provider = Script([ToolCall("host", "run_command", {"command": command}), Done("tool_calls")],
                       [Done("stop")])
-    runner = build(workdir, provider, mode=Mode.MANUAL, permissions="full-access")
+    runner = build(workdir, provider, mode=mode, permissions="full-access")
+    approvals = []
 
-    async def unexpected_approval(*args):
-        pytest.fail("full access must not prompt")
+    async def approve(*args):
+        approvals.append(args)
+        return "yes"
 
-    runner.approve = unexpected_approval
+    runner.approve = approve
     await drive(runner)
     assert target.read_text() == "done"
+    assert len(approvals) == expected
     assert "Permissions: full-access" in provider.systems[0]
 
 
@@ -155,8 +159,9 @@ def test_native_full_access_and_plan_policies(provider_class, workdir):
     if isinstance(provider, CodexSubscription):
         assert provider._turn_policy()["sandboxPolicy"]["type"] == "dangerFullAccess"
         assert provider._thread_options("test")["sandbox"] == "danger-full-access"
+        assert provider._turn_policy()["approvalPolicy"] == "untrusted"
     else:
-        assert provider._permission_mode() == "bypassPermissions"
+        assert provider._permission_mode() == "manual"
     provider.set_context(workdir, "plan")
     if isinstance(provider, CodexSubscription):
         assert provider._turn_policy()["sandboxPolicy"]["type"] == "readOnly"
@@ -168,3 +173,111 @@ def test_native_full_access_and_plan_policies(provider_class, workdir):
         assert provider._turn_policy()["sandboxPolicy"]["type"] == "workspaceWrite"
     else:
         assert provider._permission_mode() == "manual"
+
+
+@pytest.mark.parametrize("permissions", ["sandboxed", "full-access"])
+@pytest.mark.parametrize("answer,expected", [("yes", 4), ("always", 1)])
+async def test_manual_edits_need_approval_until_session_edits_allowed(workdir, permissions, answer, expected):
+    provider = Script(
+        [ToolCall("create", "write_file", {"path": "a.txt", "content": "a"}), Done("tool_calls")],
+        [ToolCall("edit", "edit_file", {"path": "a.txt", "old_string": "a", "new_string": "b"}), Done("tool_calls")],
+        [ToolCall("patch", "apply_patch", {"patch": "--- /dev/null\n+++ b.txt\n@@ -0,0 +1 @@\n+new\n"}), Done("tool_calls")],
+        [Done("stop")],
+        [ToolCall("next", "write_file", {"path": "c.txt", "content": "c"}), Done("tool_calls")],
+        [Done("stop")])
+    runner = build(workdir, provider, mode=Mode.MANUAL, permissions=permissions)
+    approvals = []
+
+    async def approve(*args):
+        approvals.append(args)
+        # No file may be changed until its approval callback has run.
+        if len(approvals) == 1:
+            assert not (workdir / "a.txt").exists()
+        assert runner.config.get("permissions") == permissions
+        return answer
+
+    runner.approve = approve
+    await drive(runner)
+    await drive(runner, "next turn")
+    assert len(approvals) == expected
+    assert (workdir / "a.txt").read_text() == "b"
+    assert (workdir / "b.txt").read_text() == "new\n"
+    assert (workdir / "c.txt").read_text() == "c"
+    assert runner.config.get("permissions") == permissions
+
+
+async def test_manual_without_approver_denies_file_changes(workdir):
+    runner = build(workdir, Script(
+        [ToolCall("write", "write_file", {"path": "blocked.txt", "content": "x"}), Done("tool_calls")],
+        [Done("stop")]), mode=Mode.MANUAL)
+    await drive(runner)
+    assert not (workdir / "blocked.txt").exists()
+
+
+async def test_session_edit_permission_does_not_approve_commands(workdir):
+    runner = build(workdir, Script(
+        [ToolCall("write", "write_file", {"path": "a.txt", "content": "a"}), Done("tool_calls")],
+        [ToolCall("command", "run_command", {"command": "touch unapproved.txt"}), Done("tool_calls")],
+        [Done("stop")]), mode=Mode.MANUAL, permissions="full-access")
+    asked = []
+
+    async def approve(name, *args):
+        asked.append(name)
+        return "always" if name == "write_file" else "no"
+
+    runner.approve = approve
+    await drive(runner)
+    assert asked == ["write_file", "run_command"]
+    assert not (workdir / "unapproved.txt").exists()
+
+
+@pytest.mark.parametrize("answer,expected", [("yes", 3), ("always", 1)])
+async def test_native_manual_file_approvals_share_session_edit_permission(workdir, answer, expected):
+    runner = build(workdir, Script([]), mode=Mode.MANUAL, permissions="full-access")
+    asked = []
+
+    async def approve(name, *args):
+        asked.append(name)
+        return answer
+
+    runner.approve = approve
+    for name in ("native_write_file", "native_edit_file", "native_apply_patch"):
+        assert await runner._approve_native(name, "file.txt", "diff", "edit") == "yes"
+    assert len(asked) == expected
+    runner.mode = Mode.PLAN
+    assert await runner._approve_native("native_write_file", "file.txt", "diff", "edit") == "no"
+
+
+async def test_temporary_host_access_keeps_manual_file_prompts(workdir, outside):
+    runner = build(workdir, Script(
+        [ToolCall("access", "request_full_access", {"reason": "host work"}), Done("tool_calls")],
+        [ToolCall("first", "write_file", {"path": str(outside / "first.txt"), "content": "first"}), Done("tool_calls")],
+        [ToolCall("second", "write_file", {"path": "second.txt", "content": "second"}), Done("tool_calls")],
+        [Done("stop")]), mode=Mode.MANUAL)
+    asked = []
+
+    async def approve(name, *args):
+        asked.append(name)
+        if name == "write_file":
+            assert runner.config.get("permissions") == "full-access"
+        return "yes"
+
+    runner.approve = approve
+    await drive(runner)
+    assert asked == ["request_full_access", "write_file", "write_file"]
+    assert (outside / "first.txt").read_text() == "first"
+    assert (workdir / "second.txt").read_text() == "second"
+    assert runner.config.get("permissions") == "sandboxed"
+
+
+@pytest.mark.parametrize("provider_class", [CodexSubscription, ClaudeCode])
+def test_native_auto_full_access_skips_approvals(provider_class, workdir):
+    provider = provider_class()
+    provider.set_context(workdir, "auto")
+    provider.set_permissions("full-access")
+    if isinstance(provider, CodexSubscription):
+        policy = provider._turn_policy()
+        assert policy["approvalPolicy"] == "never"
+        assert policy["sandboxPolicy"]["type"] == "dangerFullAccess"
+    else:
+        assert provider._permission_mode() == "bypassPermissions"

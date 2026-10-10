@@ -14,7 +14,7 @@ async def test_command_approval_enables_host_access_for_one_response(workdir, ou
     first, second = outside / "first.txt", outside / "second.txt"
     command = python_command(f"from pathlib import Path; Path({str(first)!r}).write_text('installed')")
     provider = Script(
-        [ToolCall("install", "run_command", {"command": command}), Done("tool_calls")],
+        [ToolCall("install", "run_command", {"command": command, "write_paths": [str(outside)]}), Done("tool_calls")],
         [ToolCall("verify", "read_file", {"path": str(first)}), Done("tool_calls")],
         [TextDelta("done"), Done("stop")],
         [ToolCall("next", "write_file", {"path": str(second), "content": "next"}), Done("tool_calls")],
@@ -101,16 +101,17 @@ async def test_failure_restores_permissions(workdir):
     assert not runner.sandbox.full_access
 
 
-async def test_workspace_write_approval_grants_access_until_response_ends(workdir):
+async def test_workspace_write_approval_does_not_grant_host_access(workdir):
     provider = Script([ToolCall("write", "write_file", {"path": "file.txt", "content": "done"}), Done("tool_calls")],
                       [TextDelta("done"), Done("stop")])
     runner = build(workdir, provider, mode=Mode.MANUAL)
     async def approve(*args):
-        assert "until this response finishes" in args[-1]
+        assert "full host access" not in args[-1]
         return "yes"
     runner.approve = approve
     await drive(runner)
-    assert "This approval lasts only until" in provider.systems[1]
+    assert (workdir / "file.txt").read_text() == "done"
+    assert "Permissions: sandboxed" in provider.systems[1]
     assert runner.config.get("permissions") == "sandboxed"
 
 

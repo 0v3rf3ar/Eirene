@@ -39,7 +39,7 @@ from .ui.theme import THEMES
 from .ui.format import display_path
 from .ui.aside import AsidePanel
 from .ui.chat import (AnswerBlock, ArtBlock, BackToBottom, ChangeBlock, CommandBlock,
-                      DiffBlock, NoticeBlock, PromptNavigator,
+                      DiffBlock, FLUSH_INTERVAL, NoticeBlock, PromptNavigator,
                       ToolBlock, Transcript, UserBlock)
 from .ui.complete import SlashMenu
 from .ui.composer import Composer, ModeLine, Prompt
@@ -184,7 +184,7 @@ class Eirene(App):
         self._restore_provider()
         self.refresh_mode_line()
         self.refresh_plan()
-        self._flusher = self.set_interval(1 / 20, self._flush_live)
+        self._flusher = self.set_interval(FLUSH_INTERVAL, self._flush_live)
         self.name_the_tab()
         self.prompt.focus()
         if self.config.get("check_updates", True) and not os.environ.get("EIRENE_NO_UPDATE_CHECK"):
@@ -438,6 +438,7 @@ class Eirene(App):
         if self._text_future and not self._text_future.done():
             self._text_future.set_result(text)
             return
+        self.transcript.hide_face()
         if text.startswith("/"):
             self._start_command(text)
             return
@@ -549,8 +550,9 @@ class Eirene(App):
                        reason: str) -> str:
         """Agent permission callback."""
         native_change = name.startswith("native_")
-        if native_change and preview:
+        if native_change:
             name = name.removeprefix("native_")
+        if native_change and preview:
             if not any(card.diff_text == preview for card in self.transcript.query(ChangeBlock)):
                 await self.push(ChangeBlock(label, preview, self._change_action(label)))
         if preview and name not in ("run_command",) + agent_mod.CHANGE_TOOLS:
@@ -560,7 +562,8 @@ class Eirene(App):
         if name == "request_full_access":
             title = "allow full host access for this response"
         try:
-            return await self.permission.ask(title, reason)
+            return await self.permission.ask(
+                title, reason, edits=name in agent_mod.CHANGE_TOOLS)
         finally:
             self.prompt.focus()
 
@@ -969,6 +972,7 @@ class Eirene(App):
             self.say("still working - press esc first", "warn")
             return
         self.session.clear()
+        self.agent.always.clear()
         self._titled = False
         self.agent.usage = UsageTotals()
         plan_mod.clear(self.sandbox.root, self.session.id)
@@ -1008,6 +1012,7 @@ class Eirene(App):
             previous.close()
             self.session = resumed
             self.agent.session = resumed
+            self.agent.always.clear()
             self.agent.usage = UsageTotals()
             reset_provider = getattr(self.agent.provider, "reset_thread", None)
             if reset_provider:
@@ -1141,6 +1146,11 @@ def invocation() -> str:
 
 def run(sandbox: Path, resume: str = "") -> int:
     """Start the TUI."""
+    from .ui.trust import confirm_workspace_trust
+
+    sandbox = sandbox.expanduser().resolve()
+    if not confirm_workspace_trust(sandbox):
+        return 0
     app = Eirene(sandbox, resume)
     app.run()
     if app.session.saved:

@@ -8,6 +8,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..core.prompt import TOOL_APPROVAL_GUIDANCE
+
 
 COMPACT_TOOLS = {
     "request_full_access",
@@ -102,7 +104,7 @@ class LocalProfile:
             if value != "unknown":
                 facts += f"{label}: {value[:240] if label == 'Environment preflight' else value[:160]}\n"
         access = _field(original, "Permissions")
-        policy = ("Full access: host files/network/commands allowed; OS privileges apply."
+        policy = ("Full access: host files/network/commands allowed; OS privileges apply; manual still asks before changes and commands."
                   if access.startswith("full-access") and mode != "plan" else
                   "Sandboxed: host approval or request_full_access grants access for this response; plan: reads only.")
         base = f"""You are Eirene. Use tools; be concise.
@@ -110,6 +112,7 @@ Sandbox: {sandbox}
 OS: {host}
 Mode: {mode}
 {facts}{policy}
+{TOOL_APPROVAL_GUIDANCE}
 Use preflight facts first; check unknown tools with bounded read-only probes. Never guess a package manager.
 Use focused file/search tools; don't repeat calls.
 Reads: pattern/context, tail, offset/limit, byte_offset.

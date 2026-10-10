@@ -122,7 +122,7 @@ class ClaudeCode(Provider):
             reason = "Claude Code on native Windows has no kernel sandbox; this turn may run commands with your user account's filesystem and network access"
             if self.approve is None or await self.approve("native_execution", "Claude Code on Windows", "", reason) not in ("yes", "always"):
                 raise ProviderError("Native Windows Claude Code execution needs approval; use WSL2 for sandboxed execution")
-        gate = self.mode != "plan" and self.approve is not None and not full
+        gate = self.mode != "plan" and self.approve is not None and (self.mode != "auto" or not full)
         asking = self.choose is not None
         broker = None
         args = ["-p", prompt, "--output-format", "stream-json",
@@ -137,7 +137,8 @@ class ClaudeCode(Provider):
         if gate or asking:
             broker = PermissionBroker(self.root, self.approve if gate else None,
                                       self.choose if asking else None,
-                                      "deny" if self.mode == "plan" else "allow")
+                                      "deny" if self.mode == "plan" else "allow",
+                                      full_access=full)
             await broker.start()
             command, permission_args, environment = broker.command()
             server: dict[str, Any] = {"type": "stdio", "command": command,
@@ -299,7 +300,7 @@ class ClaudeCode(Provider):
             yield event
 
     def _permission_mode(self) -> str:
-        if getattr(self, "permissions", "sandboxed") == "full-access" and self.mode != "plan":
+        if getattr(self, "permissions", "sandboxed") == "full-access" and self.mode == "auto":
             return "bypassPermissions"
         return {"plan": "plan", "auto": "auto"}.get(self.mode, "manual")
 
@@ -319,9 +320,11 @@ class ClaudeCode(Provider):
 
 
 ASK_GUIDANCE = (
-    "When you need the user to decide something, call the "
+    "Only for missing requirements or a meaningful choice about the result, call the "
     f"{ASK_TOOL} tool with two to five short options instead of "
-    "ending your turn with a question. Their answer comes back as the tool result.")
+    "ending your turn with a question. Their answer comes back as the tool result. "
+    "Never use it to ask permission for file changes or commands; call those tools "
+    "directly so Eirene presents the actual approval and diff.")
 
 
 def _system_prompt(system: str, asking: bool) -> str:

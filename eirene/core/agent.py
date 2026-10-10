@@ -297,7 +297,8 @@ class Agent:
             # and enabled skills, without Eirene tool instructions.
             from .platforms import guidance
             return (self.host.prompt_block() + "\n" + guidance(native=True, host=self.host)
-                    + "\n" + self._permission_guidance(native=True) + "\n\n"
+                    + "\n" + self._permission_guidance(native=True)
+                    + "\n" + prompts.TOOL_APPROVAL_GUIDANCE + "\n\n"
                     + skills_mod.inline_block(active_skills))
         self.project = project_mod.discover(self.sandbox.root)
         text = prompts.build(sandbox=str(self.sandbox.root), mode=self.mode.value,
@@ -320,14 +321,14 @@ class Agent:
             return "Permissions: plan mode is read-only, regardless of access level."
         if full_access(self.config):
             return ("Permissions: full-access. Host file access, network and command execution "
-                    "are enabled without Eirene approval or command isolation. "
+                    "are enabled without command isolation. Approval still follows the selected mode. "
                     "Perform authorized work; OS privileges still apply. Use sudo -n when needed. "
                     + ("This approval lasts only until the current response finishes."
                        if self._temporary_permissions is not None else ""))
         request = ("Use the CLI's native command escalation/approval mechanism. " if native else
                    "Request execution approval for host actions, or use request_full_access with a concrete reason. ")
         return ("Permissions: sandboxed. " + request + "A yes grants temporary "
-                "full access until this response finishes, then sandboxing returns automatically. "
+                "full access for host actions until this response finishes, then sandboxing returns automatically. Manual approvals still apply; workspace edit approval never grants host access. "
                 "System installation needs host access; approval must precede execution. "
                 "Do not substitute project dependencies for a requested system installation. "
                 "Do not ask for approval and then claim the tool was executed.")
@@ -410,14 +411,19 @@ class Agent:
         from .permissions import full_access
         if self.mode is Mode.PLAN:
             return NO
-        if full_access(self.config):
+        edit = name in {"native_write_file", "native_edit_file", "native_apply_patch"}
+        approval_key = "session_edits" if edit else name
+        if (self.mode is Mode.AUTO and full_access(self.config)) or approval_key in self.always:
             return YES
         if self.approve is None:
             return NO
-        if self.mode is not Mode.PLAN:
-            reason = (reason + "; " if reason else "") + "Yes allows full host access until this response finishes; sandboxing then returns."
+        host_approval = not edit and not full_access(self.config)
+        if host_approval:
+            reason = (reason + "; " if reason else "") + "Yes allows full host access until this response finishes; sandboxing then returns. Manual approvals still apply."
         answer = await self.approve(name, label, preview, reason)
-        if answer in (YES, ALWAYS):
+        if answer == ALWAYS:
+            self.always.add(approval_key)
+        if host_approval and answer in (YES, ALWAYS):
             self._grant_turn_access()
         # Native adapters must not translate this into a standing session grant.
         return YES if answer == ALWAYS else answer
@@ -964,11 +970,13 @@ class Agent:
                           call.name in {"run_command", "start_process", "language_diagnostics"})
         if native_windows:
             escape = "Windows native execution has no kernel filesystem or network isolation; approve this command with your user account's access"
-        verdict, reason = decide(self.mode, kind, escape)
         from .permissions import full_access
         unrestricted = full_access(self.config) and self.mode is not Mode.PLAN
-        self.sandbox.full_access = full_access(self.config)
         if unrestricted:
+            escape = ""
+        verdict, reason = decide(self.mode, kind, escape)
+        self.sandbox.full_access = full_access(self.config)
+        if unrestricted and self.mode is Mode.AUTO:
             verdict, reason = ALLOW, ""
         if native_windows and self.mode is Mode.PLAN:
             verdict, reason = BLOCK, "native Windows commands cannot enforce plan mode; use portable file/search tools"
@@ -993,16 +1001,17 @@ class Agent:
             yield ToolFinished(call.id, call.name, label, message, True, 0.0)
             return
 
-        if verdict == ASK and (escape or call.name not in self.always):
+        approval_key = "session_edits" if call.name in CHANGE_TOOLS else call.name
+        if verdict == ASK and (escape or approval_key not in self.always):
             yield Phase(WAITING)
-            host_approval = self.mode is not Mode.PLAN
+            host_approval = self.mode is not Mode.PLAN and bool(escape)
             if host_approval:
-                reason = (reason + "; " if reason else "") + "Yes allows full host access until this response finishes; sandboxing then returns."
+                reason = (reason + "; " if reason else "") + "Yes allows full host access until this response finishes; sandboxing then returns. Manual approvals still apply."
             answer = await self._ask(call, label, reason, preview)
             if answer == ALWAYS:
                 # "always" covers a tool, never a standing exit from the sandbox.
-                if not escape:
-                    self.always.add(call.name)
+                if not escape or approval_key == "session_edits":
+                    self.always.add(approval_key)
             elif answer != YES:
                 self.session.add_note("tool_state", call_id=call.id, state="denied")
                 message = "denied by the user"
@@ -1263,7 +1272,7 @@ class Agent:
     async def _ask(self, call: ToolCall, label: str, reason: str,
                    preview: str = "") -> str:
         if self.approve is None:
-            return YES
+            return NO
         preview = preview or tools.preview(call.name, call.arguments, self.sandbox)
         try:
             answer = await self.approve(call.name, label, preview, reason)

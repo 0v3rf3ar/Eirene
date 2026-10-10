@@ -28,11 +28,13 @@ class PermissionBroker:
     """Expose an authenticated loopback approval endpoint to an MCP child."""
 
     def __init__(self, root: Path, approve: ApprovalFn | None = None,
-                 choose: ChoiceFn | None = None, fallback: str = "allow") -> None:
+                 choose: ChoiceFn | None = None, fallback: str = "allow", *,
+                 full_access: bool = False) -> None:
         self.root = root
         self.approve = approve
         self.choose = choose
         self.fallback = fallback
+        self.full_access = full_access
         self.token = secrets.token_urlsafe(24)
         self.server: asyncio.Server | None = None
         self.port = 0
@@ -103,7 +105,8 @@ class PermissionBroker:
         if self.approve is None:
             return (_deny("plan mode makes no changes")
                     if self.fallback == "deny" else _allow(arguments))
-        name, label, preview = describe_change(tool_name, arguments, self.root)
+        name, label, preview = describe_change(tool_name, arguments, self.root,
+                                               full_access=self.full_access)
         reason = "Claude Code wants to modify files" if preview else "Claude Code tool"
         answer = await self.approve(name, label, preview, reason)
         if answer == "always":
@@ -113,9 +116,10 @@ class PermissionBroker:
 
 
 def describe_change(tool_name: str, arguments: dict[str, Any],
-                    root: Path) -> tuple[str, str, str]:
+                    root: Path, *, full_access: bool = False) -> tuple[str, str, str]:
     """Build an Eirene label and diff from Claude Code tool input."""
     box = Sandbox(root)
+    box.full_access = full_access
     path = str(arguments.get("file_path") or arguments.get("path") or "workspace files")
     if tool_name in ("Write", "write_file"):
         content = str(arguments.get("content") or "")
@@ -156,7 +160,8 @@ TOOL_SCHEMAS = [
     {"name": "ask_user",
      "description": "Ask the Eirene user to choose between options. Use this "
                     "instead of ending your turn with a question, so they can "
-                    "answer with one key.",
+                    "answer with one key. Use only for missing requirements or result choices, "
+                    "never permission to create/edit files or run commands; their tools request approval.",
      "inputSchema": {"type": "object", "properties": {
          "question": {"type": "string",
                       "description": "What you need decided, in one line."},

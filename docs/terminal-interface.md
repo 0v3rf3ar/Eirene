@@ -80,6 +80,13 @@ when opening ordinary quick-action menus.
 
 Approval prompts are different from ordinary choices. A command approval can
 grant host access for the rest of the response, as disclosed by the prompt.
+Manual mode continues to ask before changes and commands under host access.
+File-change prompts offer **allow edits for this session**; choosing it does not
+approve commands. Long command labels are abbreviated in the transcript (at most
+120 characters, shortened further to fit the terminal), while approval prompts
+show the full command.
+
+Drag `/sandbox` and `/usage` by their top border or title row to reposition them.
 Answering an ordinary task question does not grant execution access. Read
 [modes and permissions](harness.md) for the scope of those decisions.
 

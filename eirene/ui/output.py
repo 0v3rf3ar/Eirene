@@ -1,16 +1,17 @@
 """Paged command output, available during execution and after session resume."""
 from rich.text import Text
 from textual.screen import ModalScreen
-from textual.containers import Vertical, VerticalScroll, Horizontal
+from textual.containers import VerticalScroll, Horizontal
 from textual.widgets import Button, Static
 from ..core import artifacts
 from .format import strip_escapes
+from .window import DraggableWindow
 
 
 class OutputScreen(ModalScreen):
     DEFAULT_CSS = """
     OutputScreen { align: center middle; }
-    OutputScreen > Vertical { width: 90%; height: 85%; border: round $accent; background: $surface; padding: 1; }
+    OutputScreen > DraggableWindow { width: 90%; height: 85%; border: round $accent; background: $surface; padding: 1; }
     OutputScreen VerticalScroll { height: 1fr; }
     OutputScreen Horizontal { height: 3; }
     OutputScreen #output-title { height: auto; max-height: 4; }
@@ -25,7 +26,7 @@ class OutputScreen(ModalScreen):
         self.byte_offset = 0
 
     def compose(self):
-        with Vertical():
+        with DraggableWindow():
             yield Static(Text(self.card.label), id="output-title")
             yield Static("", id="output-state")
             with VerticalScroll():

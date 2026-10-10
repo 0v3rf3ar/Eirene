@@ -131,7 +131,9 @@ TOOLS: list[Tool] = [
          }, ""),
     Tool("ask_user", ASK,
          "Ask the user to choose between options. Use this instead of ending "
-         "your turn with a question, so they can answer with one key.", {
+         "your turn with a question, so they can answer with one key. "
+         "Use only for missing requirements or result choices. Never ask permission to "
+         "create/edit files or run commands; call those tools directly for approval.", {
              "type": "object",
              "properties": {
                  "question": {"type": "string",

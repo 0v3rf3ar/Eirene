@@ -1,16 +1,17 @@
 """Centered skill chooser with a scrollable description."""
 
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
 from .picker import Picker
+from .window import DraggableWindow
 
 
 class SkillPickerScreen(ModalScreen[str | None]):
     DEFAULT_CSS = """
     SkillPickerScreen { align: center middle; }
-    SkillPickerScreen > Vertical {
+    SkillPickerScreen > DraggableWindow {
         width: 80%; max-width: 100; height: 80%;
         border: round $primary; background: $surface; padding: 1;
     }
@@ -31,7 +32,7 @@ class SkillPickerScreen(ModalScreen[str | None]):
         self.selected = selected
 
     def compose(self):
-        with Vertical():
+        with DraggableWindow():
             yield Picker(show_detail=False, right_hint=True)
             with VerticalScroll():
                 yield Static("", id="skill-description", markup=False)

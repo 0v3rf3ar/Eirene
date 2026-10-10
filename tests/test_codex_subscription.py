@@ -7,9 +7,12 @@ import os
 import stat
 import sys
 
+import pytest
+
 from eirene.providers.base import Done, PlanUpdate, TextDelta, ThinkingDelta, Usage
 from eirene.providers.codex_subscription import CodexSubscription
 from eirene.tools import activity
+from eirene.core.errors import ProviderError
 
 
 FAKE_SERVER = r'''#!{python}
@@ -285,5 +288,91 @@ async def test_retry_notification_does_not_abort_turn(workdir, tmp_path, monkeyp
         events = [e async for e in provider.stream([{"role": "user", "content": "go"}], "codex-a")]
         assert any(isinstance(e, ConnectionStatus) for e in events)
         assert any(isinstance(e, Done) for e in events)
+    finally:
+        await provider.close()
+
+
+@pytest.mark.parametrize("failure,progress,recover", [
+    ("SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC", None, True),
+    ("SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC", None, False),
+    ("SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC", "text", True),
+    ("SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC", "tool", True),
+    ("certificate verify failed", None, True),
+    ("plan usage exceeded", None, True),
+])
+async def test_terminal_tls_retry_is_silent_bounded_and_preserves_work(
+        workdir, failure, progress, recover):
+    class Server:
+        def __init__(self):
+            self.starts = []
+            self.notices = []
+
+        async def request(self, method, params):
+            assert method == "turn/start"
+            self.starts.append(params)
+            turn_id = f"turn-{len(self.starts)}"
+            if len(self.starts) == 2 and recover:
+                self.notices.extend([
+                    {"method": "item/agentMessage/delta", "params": {
+                        "turnId": turn_id, "delta": "Recovered"}},
+                    {"method": "turn/completed", "params": {"turn": {
+                        "id": turn_id, "status": "completed"}}},
+                ])
+            else:
+                if progress == "text":
+                    self.notices.append({"method": "item/agentMessage/delta", "params": {
+                        "turnId": turn_id, "delta": "Already shown"}})
+                elif progress == "tool":
+                    self.notices.append({"method": "item/started", "params": {
+                        "turnId": turn_id, "item": {"type": "fileChange", "id": "edit"}}})
+                self.notices.extend([
+                    {"method": "error", "params": {"turnId": turn_id,
+                        "willRetry": False, "error": {"message": failure}}},
+                    {"method": "turn/completed", "params": {"turn": {
+                        "id": turn_id, "status": "failed", "error": {"message": failure}}}},
+                ])
+            return {"turn": {"id": turn_id}}
+
+        async def notification(self, timeout):
+            return self.notices.pop(0)
+
+    server = Server()
+    provider = CodexSubscription()
+    provider.set_context(workdir, "auto")
+    provider._rpc = server
+    provider._thread_id = "thread"
+    events = []
+    succeeds = "BAD_RECORD_MAC" in failure and progress is None and recover
+    async def collect():
+        async for event in provider.stream([{"role": "user", "content": "fix it"}], "model"):
+            events.append(event)
+    if succeeds:
+        await collect()
+        assert [e.text for e in events if isinstance(e, TextDelta)] == ["Recovered"]
+        assert isinstance(events[-1], Done)
+    else:
+        with pytest.raises(ProviderError, match=failure):
+            await collect()
+    expected = 2 if "BAD_RECORD_MAC" in failure and progress is None else 1
+    assert len(server.starts) == expected
+    if expected == 2:
+        assert server.starts[1]["input"] == server.starts[0]["input"]
+        assert server.starts[1]["threadId"] == "thread"
+    from eirene.providers.base import ConnectionStatus
+    assert not any(isinstance(e, ConnectionStatus) for e in events)
+    assert provider._turn_id == ""
+
+
+async def test_native_tls_retry_is_silent(workdir, tmp_path, monkeypatch):
+    import test_codex_subscription as fixture
+    retry = '{{"method": "error", "params": {{"turnId": "turn-1", "willRetry": True, "error": {{"message": "BAD_RECORD_MAC"}}}}}},'
+    monkeypatch.setattr(fixture, "FAKE_SERVER", FAKE_SERVER.replace("notices = [", "notices = [" + retry))
+    provider = CodexSubscription(binary=fake_codex(tmp_path))
+    provider.set_context(workdir, "auto")
+    try:
+        events = [e async for e in provider.stream([{"role": "user", "content": "go"}], "model")]
+        from eirene.providers.base import ConnectionStatus
+        assert not any(isinstance(e, ConnectionStatus) for e in events)
+        assert isinstance(events[-1], Done)
     finally:
         await provider.close()

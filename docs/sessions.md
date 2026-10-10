@@ -6,6 +6,17 @@ A session keeps the conversation for a workspace so you can return to a task.
 Messages are saved as you work. Session history is context, not a snapshot of the
 project: loading a session does not restore files to their earlier state.
 
+Every interactive launch first asks whether you trust the files in the selected
+workspace, including when resuming a session. The prompt shows the resolved
+workspace path before creating a session or initializing the agent, project
+instructions, skills, or providers. Choose **Yes, trust this workspace** to
+continue; this option is selected by default. Choose **No, exit Eirene** to
+decline. Escape, Ctrl+C, and Ctrl+D also leave without starting the agent.
+
+Trust lasts for that interactive launch and does not grant full access or bypass
+tool approvals. One-shot `-p` runs and scheduled tasks remain noninteractive and
+use their existing permission settings.
+
 ## Resume from the terminal
 
 ```sh

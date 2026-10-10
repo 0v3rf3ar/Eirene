@@ -11,7 +11,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 
 from .. import __version__
 from ..core.errors import AuthError, ConnectionFailed, ProviderError
-from .base import ConnectionStatus
+from .base import ConnectionStatus, transient_tls_error
 from ..core.subprocesses import executable_argv
 from ..tools import activity
 from .base import (Done, Event, PlanUpdate, Provider, ProviderTool, TextDelta,
@@ -143,16 +143,20 @@ class CodexSubscription(Provider):
             text = "\n\n".join(piece for piece in pieces if piece)
             self._system_sent = True
 
-        result = await server.request("turn/start", {
+        turn_options = {
             "threadId": self._thread_id,
             "input": [{"type": "text", "text": text}],
             "model": model,
             "cwd": str(self.root),
             **self._turn_policy(),
-        })
+        }
+        result = await server.request("turn/start", turn_options)
         turn = result.get("turn", {}) if isinstance(result, dict) else {}
         self._turn_id = str(turn.get("id") or "")
         usage = Usage()
+        retries = 0
+        progressed = False
+        pending_error = ""
         try:
             while True:
                 message = await server.notification(self.timeout)
@@ -160,7 +164,10 @@ class CodexSubscription(Provider):
                 params = message.get("params") or {}
                 if params.get("threadId") not in (None, self._thread_id):
                     continue
+                if self._turn_id and params.get("turnId") not in (None, self._turn_id):
+                    continue
                 if method == "item/agentMessage/delta":
+                    progressed = progressed or bool(params.get("delta"))
                     yield TextDelta(str(params.get("delta") or ""))
                 elif method == "item/reasoning/summaryTextDelta":
                     yield ThinkingDelta(str(params.get("delta") or ""))
@@ -182,6 +189,8 @@ class CodexSubscription(Provider):
                 elif method == "item/started":
                     item = params.get("item") or {}
                     item_type = str(item.get("type") or "")
+                    if item_type not in {"reasoning", "agentMessage"}:
+                        progressed = True
                     if item_type == "fileChange":
                         item_id = str(item.get("id") or "")
                         if item_id:
@@ -221,7 +230,12 @@ class CodexSubscription(Provider):
                     error = params.get("error") or {}
                     detail = str(error.get("message") or "Codex turn failed")
                     if params.get("willRetry"):
-                        yield ConnectionStatus("Codex reconnecting: " + detail)
+                        if not transient_tls_error(detail):
+                            yield ConnectionStatus("Codex reconnecting: " + detail)
+                        continue
+                    if transient_tls_error(detail) and not progressed and retries < 1:
+                        # Wait for the failed turn to close before starting another.
+                        pending_error = detail
                         continue
                     raise ProviderError(detail)
                 elif method == "turn/completed":
@@ -231,7 +245,19 @@ class CodexSubscription(Provider):
                     status = str(completed.get("status") or "completed")
                     if status == "failed":
                         error = completed.get("error") or {}
-                        raise ProviderError(str(error.get("message") or "Codex turn failed"))
+                        detail = str(error.get("message") or pending_error or "Codex turn failed")
+                        if transient_tls_error(detail) and not progressed and retries < 1:
+                            retries += 1
+                            pending_error = ""
+                            # Resubmit the request only after the failed turn has
+                            # closed and before any answer or tool work started.
+                            result = await server.request("turn/start", turn_options)
+                            turn = result.get("turn", {}) if isinstance(result, dict) else {}
+                            self._turn_id = str(turn.get("id") or "")
+                            if not self._turn_id:
+                                raise ProviderError("Codex did not return a retry turn id")
+                            continue
+                        raise ProviderError(detail)
                     yield Done("stop" if status == "completed" else status)
                     return
         except asyncio.CancelledError:
@@ -290,7 +316,8 @@ class CodexSubscription(Provider):
             return {"approvalPolicy": "never",
                     "sandboxPolicy": {"type": "readOnly"}}
         if getattr(self, "permissions", "sandboxed") == "full-access":
-            return {"approvalPolicy": "never", "sandboxPolicy": {"type": "dangerFullAccess"}}
+            return {"approvalPolicy": "never" if self.mode == "auto" else "untrusted",
+                    "sandboxPolicy": {"type": "dangerFullAccess"}}
         if self.mode == "auto":
             return {"approvalPolicy": "on-request", "sandboxPolicy": {
                 "type": "workspaceWrite", "writableRoots": [str(self.root)],
