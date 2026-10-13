@@ -7,14 +7,12 @@ from math import ceil
 from time import monotonic
 
 from rich.text import Text
-from rich.align import Align
 from textual.containers import VerticalScroll
 from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Static
 
 from . import art, diff, markup, palette, theme
-from .backdrop import faded_pixel_logo
 from .composer import PromptRow
 from .format import safe_notice, strip_escapes
 from .snow import Snowfall
@@ -57,8 +55,9 @@ class UserBlock(Block):
 
     SENT = "#f8f8f2"
 
-    def __init__(self, text: str):
+    def __init__(self, text: str, *, file_tokens: list[str] | None = None):
         self.raw = strip_escapes(text)
+        self.file_tokens = file_tokens or []
         super().__init__(self._body())
         self.shown = self._Static__content.plain
 
@@ -85,6 +84,11 @@ class UserBlock(Block):
                 body.append(f"{art.icon('prompt')} ", style="bold")
             body.append(line)
         body.stylize(colour)
+        for token in self.file_tokens:
+            column = body.plain.find(token)
+            while column >= 0:
+                body.stylize("bold italic", column, column + len(token))
+                column = body.plain.find(token, column + len(token))
         return body
 
     def get_selection(self, selection):
@@ -445,7 +449,11 @@ class ToolBlock(Block):
     """A tool call with live output."""
 
     def __init__(self, name: str, label: str, *, hide_output: bool = False):
-        self.hide_output = hide_output
+        quiet_tools = {"read_attachment", "read_file", "web_search", "Read", "WebSearch"}
+        self.hide_output = (hide_output or name in quiet_tools
+                            or any(name.endswith(f"__{tool}") for tool in quiet_tools)
+                            or (name == "MCP" and (label in quiet_tools
+                                or any(label.endswith(f"__{tool}") for tool in quiet_tools))))
         self.tool = name
         self.label = strip_escapes(label)
         self.output = ""
@@ -649,7 +657,6 @@ class Transcript(VerticalScroll):
         self._programmatic_follow = False
         self._following = True
         self._snow_idle = True
-        self._face_visible = True
         self._snowfall = Snowfall(self)
 
     def on_mount(self) -> None:
@@ -668,22 +675,7 @@ class Transcript(VerticalScroll):
         snow = self._snowfall.render()
         if snow is not None:
             return snow
-        if not self._face_visible:
-            return super().render()
-        width, height = self.content_size
-        if width < 1 or height < 1:
-            return Text("")
-        base, background = self.background_colors
-        face = faded_pixel_logo(max(1, width - 4), max(1, height - 2),
-                                base + background)
-        return Align(face, align="center", vertical="middle", width=width,
-                     height=height)
-
-    def hide_face(self) -> None:
-        """Dismiss the welcome decoration when the user begins interacting."""
-        if self._face_visible:
-            self._face_visible = False
-            self.refresh()
+        return super().render()
 
     def watch_scroll_y(self, old_value: float, new_value: float) -> None:
         super().watch_scroll_y(old_value, new_value)
@@ -757,8 +749,6 @@ class Transcript(VerticalScroll):
 
     async def push(self, block: Widget, live: bool = False) -> Widget:
         """Append a block, following it only when already at the bottom."""
-        if isinstance(block, UserBlock):
-            self.hide_face()
         if not isinstance(block, (ArtBlock, NoticeBlock)):
             self._snow_idle = False
             if self._snowfall.override is not True:
@@ -798,7 +788,6 @@ class Transcript(VerticalScroll):
         self._following = True
         self.remove_children()
         self._snow_idle = True
-        self._face_visible = True
         self._snowfall.start()
 
 

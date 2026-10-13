@@ -70,7 +70,7 @@ model identifiers, or every nested Eirene field.
    The next save can replace it; preserve both files before recovery.
 3. Old versions are migrated in memory, then built-in defaults are copied and
    top-level saved keys are overlaid. Nested objects are not recursively merged.
-4. Selected types and ranges are normalized. The resulting schema version is `3`.
+4. Selected types and ranges are normalized. The resulting schema version is `4`.
 5. A save writes indented JSON to a temporary `.config-*.tmp` file beside the
    destination, flushes and syncs it, then replaces the destination atomically.
    On POSIX, the saved config is mode `0600` and its parent is tightened to `0700`.
@@ -78,6 +78,9 @@ model identifiers, or every nested Eirene field.
 A read permission error raises a configuration error rather than loading defaults.
 Migration does not rewrite the file until a save occurs. Version 1/2 migrations
 restore automatic isolation, network isolation, and automatic compaction defaults.
+Version 4 replaces the old 60000-token default threshold with model-aware
+budgeting (`context_warning: 0`), preserving other custom thresholds. To keep
+60000 intentionally, set that value with `version: 4`.
 Setting `version` to an older number can therefore change those values on load.
 Do not use this field to select a program release.
 
@@ -89,12 +92,12 @@ empty objects if their top-level value is not an object.
 
 ## Complete default file
 
-These are the defaults for a new configuration at schema version 3. Runtime
+These are the defaults for a new configuration at schema version 4. Runtime
 choices, platform behavior, and provider-specific limits can narrow them.
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "provider": null,
   "model": null,
   "mode": "manual",
@@ -105,11 +108,12 @@ choices, platform behavior, and provider-specific limits can narrow them.
   "shell_timeout": 120,
   "max_iterations": 0,
   "max_output_bytes": 200000,
+  "max_attachment_bytes": 20000000,
   "request_timeout": 300,
   "retry_attempts": 12,
   "notifications": false,
   "max_tokens": 16384,
-  "context_warning": 60000,
+  "context_warning": 0,
   "log_level": "INFO",
   "log_max_bytes": 2000000,
   "log_backups": 3,
@@ -225,10 +229,11 @@ inclusive range shown. A conversion failure uses the built-in default.
 | `shell_timeout` | 120 | 1–86400 | Seconds; fallback command and configured tool-hook deadline. Command classification or an explicit tool timeout can choose another deadline. |
 | `max_iterations` | 0 | 0–10000 | Model/tool rounds per managed turn; 0 removes this configured cap. Local model profiles and delegation impose independent limits. |
 | `max_output_bytes` | 200000 | 1024–100000000 | Command output budget at the execution layer. Context and UI limits can truncate further. Does not increase artifact capacity. |
+| `max_attachment_bytes` | 20000000 | 1–1000000000 | Maximum size of each dropped file in bytes. Defaults to 20 MB. Changes apply to new attachments. |
 | `request_timeout` | 300 | 1–86400 | Provider timeout in seconds. Both local and hosted Ollama use at least 600 seconds in the provider factory. |
 | `retry_attempts` | 12 | 1–100 | Total allowed attempts per eligible provider call, including the first attempt. |
 | `max_tokens` | 16384 | 512–200000 | Requested output allowance per model response; provider and local-profile limits still apply. |
-| `context_warning` | 60000 | 0–10000000 | Estimated token budget input for managed context. Zero currently falls back to 60000 at use sites; it does not disable budgeting. |
+| `context_warning` | 0 | 0–10000000 | Zero selects model-aware budgeting; positive values cap input earlier. Unknown capacities fall back to 60000. |
 | `log_max_bytes` | 2000000 | 10000–100000000 | Runtime log rotation threshold in bytes. |
 | `log_backups` | 3 | 0–20 | Rotated runtime logs retained. |
 
@@ -239,16 +244,35 @@ run timeouts are separate. Increasing one does not increase the others.
 
 ## Context limits and cost rates
 
-`auto_compact` defaults to true. When false, exceeding the managed budget fails
-with a request to compact or enable automatic compaction. Native CLI connections
+`auto_compact` defaults to true. When false, proactive compaction is skipped,
+but older history is still compacted before a request exceeds the available
+context. Context limits recycle history so long sessions can continue.
+Native CLI connections
 own their context and bypass Eirene's managed budgeting.
 
 `model_context_limits` maps exact model identifiers to positive integer token
-limits. It has no wildcard or provider-name matching. Local Ollama preparation
+limits shared across providers. `providers.<provider>.model_context_limits`
+uses the same format and takes precedence for that provider and model. Invalid
+values are ignored. There is no wildcard matching. Local Ollama preparation
 can supply a lower effective limit. Budgeting reserves the output allowance plus
 2048 tokens for general API providers, or 256 for local profiles, then accounts
 for instructions and tool schemas. An oversized `max_tokens` can leave no room
 for input even when the conversation is short.
+`providers.<provider>.context_limit` supplies a provider-wide limit for every
+model without a more specific entry. Provider/model entries take precedence,
+then shared model entries, then this provider-wide setting, then advertised or
+built-in capacity.
+Input is capped at 80% of known capacity for general managed providers.
+ChatGPT plan connections use the catalog's effective percentage (95% by
+default) and capacity, falling back to a shared 500000-token operational default
+for all ChatGPT plan models, including unknown models.
+An exact provider/model or shared model override takes precedence.
+With `context_warning: 0`, known large windows are not capped at 60000.
+Automatic and manual compaction normally target 65% of the available history
+budget, increasing the target when the latest request needs more room. They
+preserve that request unchanged and leave room for subsequent work when possible.
+
+See the [configuration examples and native CLI behavior](context-and-usage.md#configure-any-provider-and-model).
 
 `model_costs` maps exact recorded model identifiers to rate objects:
 

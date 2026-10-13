@@ -20,6 +20,48 @@ def test_defaults_when_missing():
     assert config.data["providers"] == {}
 
 
+@pytest.mark.parametrize("provider", ["chatgpt-plan", "chatgpt", "anthropic", "gemini",
+    "ollama-local", "custom-openai", "custom-anthropic", "chatgpt-subscription", "claude-code"])
+def test_provider_model_context_override_and_persistence(provider):
+    config = Config.load()
+    config.set("model_context_limits", {"same-model": 128000})
+    config.provider_config(provider)["model_context_limits"] = {"same-model": 500000}
+    config.save()
+    loaded = Config.load()
+    assert loaded.model_context_limit(provider, "same-model") == 500000
+    assert loaded.model_context_limit("other-provider", "same-model") == 128000
+    assert loaded.model_context_limit(provider, "unknown-model") == 0
+
+
+@pytest.mark.parametrize("value", [None, "large", True, -1, 0, 1.5])
+def test_invalid_provider_context_limit_uses_shared_limit(value):
+    config = Config.load()
+    config.set("model_context_limits", {"m": 128000})
+    config.provider_config("custom-openai")["model_context_limits"] = {"m": value}
+    assert config.model_context_limit("custom-openai", "m") == 128000
+
+
+def test_provider_wide_context_limit_applies_to_every_model():
+    config = Config.load()
+    config.provider_config("chatgpt-plan")["context_limit"] = 500000
+    config.set("model_context_limits", {"shared-model": 128000})
+    config.provider_config("chatgpt-plan")["model_context_limits"] = {"special-model": 256000}
+    config.save()
+    loaded = Config.load()
+    for model in ("gpt-6.1-sol", "gpt-6-astra", "future-model"):
+        assert loaded.model_context_limit("chatgpt-plan", model) == 500000
+    assert loaded.model_context_limit("chatgpt-plan", "special-model") == 256000
+    assert loaded.model_context_limit("chatgpt-plan", "shared-model") == 128000
+    assert loaded.model_context_limit("other-provider", "future-model") == 0
+
+
+@pytest.mark.parametrize("version, threshold, expected", [(3, 60000, 0),
+    (3, 120000, 120000), (4, 60000, 60000), (4, 0, 0)])
+def test_context_threshold_migration(version, threshold, expected):
+    paths.config_file().write_text(json.dumps({"version": version, "context_warning": threshold}))
+    assert Config.load().get("context_warning") == expected
+
+
 def test_save_and_reload():
     config = Config.load()
     config.provider = "anthropic"

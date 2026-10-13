@@ -5,7 +5,6 @@ from __future__ import annotations
 from rich.text import Text
 
 from ..ui import art
-from ..ui.chat import Block
 from . import commands, register
 from ..ui.shortcuts import SHORTCUTS, EDITING_KEYS
 
@@ -28,4 +27,4 @@ async def run(app, args: str) -> None:
                 "Click command output to expand it and inspect the result.",
                 "Send a follow-up while working to queue it for the next safe step."):
         body.append(f"  {tip}\n", style="dim")
-    await app.push(Block(body))
+    app.aside.show_content(body)

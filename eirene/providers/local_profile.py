@@ -15,7 +15,7 @@ COMPACT_TOOLS = {
     "request_full_access",
     "ask_user", "read_file", "list_dir", "glob", "search_text",
     "write_file", "edit_file", "apply_patch", "run_command", "web_search", "web_fetch",
-    "read_output", "start_process", "poll_process", "stop_process", "list_processes",
+    "read_output", "read_attachment", "start_process", "poll_process", "stop_process", "list_processes",
 }
 PLUGIN_TOOLS = {"load_skill", "load_plugin_resource", "delegate_tasks", "plan_show", "plan_update", "plan_set_status"}
 BALANCED_TOOLS = COMPACT_TOOLS | {

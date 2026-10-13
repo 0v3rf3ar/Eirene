@@ -44,7 +44,7 @@ async def test_resume_loads_behind_splash(workdir, monkeypatch, initial, load_se
     def resume(session_id):
         splash = app.query_one(StartupSplash)
         time.sleep(load_seconds)
-        seen.append(splash.display and "▀" in content(splash))
+        seen.append(splash.display and "█" in content(splash))
         return original(session_id)
 
     app = Eirene(workdir, session.id if initial else "")
@@ -78,14 +78,43 @@ async def test_resume_loads_behind_splash(workdir, monkeypatch, initial, load_se
             assert rows[-1].startswith(" " * 3)
             assert rows[-1].endswith(" " * 3)
             assert set(rows[-1].strip()) == {"━"}
-            picture_rows = [i for i, row in enumerate(rows) if "▀" in row]
-            assert abs(picture_rows[0] - (height - 1 - picture_rows[-1])) <= 1
-            for i in picture_rows:
-                left = rows[i].index("▀")
-                right = width - rows[i].rindex("▀") - 1
-                assert abs(left - right) <= 1
+            picture = splash._pixels.plain.splitlines()
+            top = (height - len(picture)) // 2
+            for index, row in enumerate(picture):
+                left = (width - len(row)) // 2
+                assert rows[top + index] == " " * left + row + " " * (width - left - len(row))
         splash.finish()
         await pilot.resize_terminal(60, 24)
+
+
+def test_transparent_logo_leaves_empty_half_cells_unpainted(monkeypatch):
+    from eirene.ui import splash
+    pixels = bytes([0, 0, 100, 200, 0, 100, 200, 240] * 2)
+    monkeypatch.setattr(splash, "_logo", lambda: (4, 4, pixels))
+    picture = pixel_logo(4, 2, transparent=True)
+    assert picture.plain.splitlines() == [" ▄██", " ▄██"]
+    assert all(span.style.bgcolor is None for span in picture.spans)
+    assert picture.spans[1].style.color.name == "#969696"
+
+
+def test_transparent_logo_preserves_black_inside_the_portrait(monkeypatch):
+    from eirene.ui import splash
+    pixels = bytes([255, 0, 0, 255] * 4)
+    monkeypatch.setattr(splash, "_logo", lambda: (4, 4, pixels))
+    picture = pixel_logo(4, 2, transparent=True)
+    assert picture.plain.splitlines() == ["████", "████"]
+    assert picture.spans[1].style.color.name == "#000000"
+    assert all(span.style.bgcolor is None for span in picture.spans)
+
+
+async def test_startup_picture_uses_transparent_background(workdir):
+    app = Eirene(workdir)
+    async with app.run_test(size=(60, 24)):
+        splash = app.query_one(StartupSplash)
+        splash._draw()
+        assert splash.styles.background.a == 0
+        assert splash._pixels.plain.startswith(" ")
+        assert all(span.style.bgcolor is None for span in splash._pixels.spans)
 
 
 async def test_local_status_shows_model_without_profile_tier(workdir):

@@ -84,6 +84,7 @@ class ProviderTool:
     finished: bool = False
     is_error: bool = False
     preview: str = ""
+    attachment_id: str = ""
 
 
 @dataclass

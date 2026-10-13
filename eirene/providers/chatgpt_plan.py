@@ -12,6 +12,9 @@ from .base import (Done, Provider, TextDelta, ThinkingDelta, ToolCall, Usage,
                    wrap_transport_error)
 from .chatgpt_auth import ChatGPTAuth, RESOURCE
 
+# Shared operational default for every plan model. Live metadata wins.
+DEFAULT_CONTEXT_WINDOW = 500000
+
 
 class ChatGPTPlan(Provider):
     name = "chatgpt-plan"
@@ -22,6 +25,7 @@ class ChatGPTPlan(Provider):
         self.auth = ChatGPTAuth(timeout=timeout)
         self.reasoning_efforts = dict(reasoning_efforts or {})
         self._catalog = {}
+        self._context_checked = set()
 
     async def _headers(self):
         return {"Content-Type": "application/json",
@@ -62,6 +66,34 @@ class ChatGPTPlan(Provider):
                 description = level.get("description", "") if isinstance(level, dict) else ""
                 options.append((effort, effort, description))
         return options
+
+    def context_window(self, model):
+        """Plan catalog capacity, falling back to the shared plan default."""
+        metadata = self._catalog.get(model, {})
+        for key in ("context_window", "context_length", "max_context_tokens"):
+            value = metadata.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                return value
+        return DEFAULT_CONTEXT_WINDOW
+
+    def context_input_ratio(self, model):
+        percent = self._catalog.get(model, {}).get("effective_context_window_percent", 95)
+        if not isinstance(percent, (int, float)) or isinstance(percent, bool) or not 0 < percent <= 100:
+            percent = 95
+        return percent / 100
+
+    async def resolve_context_window(self, model):
+        if model not in self._catalog and model not in self._context_checked:
+            try:
+                await self.models()
+            except AuthError:
+                raise
+            except ProviderError:
+                # Catalog availability must not prevent inference using the
+                # default capacity. Reconnecting creates a fresh catalog.
+                pass
+            self._context_checked.add(model)
+        return self.context_window(model)
 
     async def stream(self, messages, model, *, system="", tools=None, max_tokens=8192):
         for attempt in range(2):

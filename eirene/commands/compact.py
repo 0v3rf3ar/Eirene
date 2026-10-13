@@ -16,9 +16,21 @@ async def run(app, args: str) -> None:
     if app.turn and not app.turn.done():
         raise CommandError("wait for the current answer to finish")
 
-    app.say("compacting…")
-    before, after, summary = await do_compact(app.session, app.agent.provider,
-                                              app.agent.model)
+    progress = await app.show_compaction() if hasattr(app, "show_compaction") else None
+    if progress is not None:
+        app.mark_busy(True)
+    try:
+        context, budget = await app.agent.compaction_budget()
+        if budget <= 0:
+            raise CommandError("instructions, tools and response allowance exceed the model context budget")
+        before, after, summary = await do_compact(app.session, app.agent.provider,
+            app.agent.model, target_tokens=app.agent.compaction_target(budget),
+            context_tokens=context or None,
+            on_progress=progress.set_stage if progress is not None else app.say)
+    finally:
+        if progress is not None:
+            app.mark_busy(False)
+            await progress.remove()
     saved = max(before - after, 0)
     app.say(f"{art.icon('ok')} context {human_count(before)} → {human_count(after)} "
             f"tokens (saved ~{human_count(saved)})")

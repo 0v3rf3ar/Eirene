@@ -231,6 +231,8 @@ class ClaudeCode(Provider):
                             self._running[tool_id] = (name, label)
                             # Read the file before the tool rewrites it.
                             yield ProviderTool(tool_id, name, label, _tool_kind(name),
+                                               attachment_id=str((block.get("input") or {}).get("attachment_id") or "")
+                                                   if name.endswith("__read_attachment") else "",
                                                preview=_change_preview(
                                                    name, block.get("input"), self.root))
                     raw_usage = message.get("usage") or {}

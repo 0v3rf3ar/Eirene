@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 
 from ..providers.base import TextDelta
 from .errors import ProviderError
@@ -18,19 +19,24 @@ KEEP_TAIL = 4
 
 async def compact(session: Session, provider, model: str, *,
                   target_tokens: int | None = None, context_tokens: int | None = None,
-                  automatic: bool = False) -> tuple[int, int, str]:
+                  automatic: bool = False,
+                  on_progress: Callable[[str], None] | None = None) -> tuple[int, int, str]:
     """Summarise history; returns before, after, summary."""
     if len(session.messages) < 3:
         raise ProviderError("nothing to compact yet")
+    progress = on_progress or (lambda stage: None)
+    progress("reading conversation")
     before = estimate_messages(session.messages)
     latest = next((Message(m) for m in reversed(session.messages)
                    if m.get("role") == "user" and not m.get("compaction_summary")), None)
     available = max(0, target_tokens - estimate_messages([latest] if latest else []) - 160) if target_tokens else 2400
-    memory = execution_memory(session.messages, min(2400, available))
+    # Memory and summary share the space left after the unchanged latest request.
+    memory = execution_memory(session.messages, min(2400, available // 2))
     transcript = _transcript(session.messages)
     output_tokens = min(2048, max(64, available // 3))
     summary = ""
     try:
+        progress("summarising older messages")
         summary = await asyncio.wait_for(
             _bounded_summary(provider, model, transcript, context_tokens, output_tokens),
             timeout=60)
@@ -45,6 +51,7 @@ async def compact(session: Session, provider, model: str, *,
         summary = "Earlier instructions (quoted, may be superseded by the latest request):\n"
         summary += shorten("\n".join(requests), max(64, output_tokens * 4 - len(summary)))
 
+    progress("preserving recent work")
     tail = _safe_tail(session.messages)
     saved = artifacts.Writer()
     try:
@@ -75,12 +82,27 @@ async def compact(session: Session, provider, model: str, *,
         if latest is not None and latest not in rebuilt:
             rebuilt.insert(2, latest)
         if estimate_messages(rebuilt) > target_tokens:
+            # Small local windows can fit the latest request but not the full
+            # handoff prose. Keep that request verbatim and a shorter handoff
+            # pointing to the saved evidence instead of stopping the session.
+            remaining = max(0, target_tokens - estimate_messages([latest] if latest else [])) * 4
+            reference = f"Earlier evidence: output artifact {saved.id}; use read_output before repeating actions.\n"
+            label = "Conversation memory:\n"
+            available_chars = remaining - len(reference) - len(label) - 8
+            if available_chars >= 32:
+                memory = shorten(memory, available_chars // 3)
+                summary = shorten(summary, available_chars - len(memory))
+                summary_message["content"] = label + summary
+                memory_message["content"] = reference + memory
+                memory_message["execution_memory"] = memory
+        if estimate_messages(rebuilt) > target_tokens:
             raise ProviderError("the current request and memory exceed the model context; shorten the request or choose a larger context model")
     elif estimate_messages(rebuilt) >= before:
         for message in rebuilt[2:]:
             if message.get("role") == "tool":
                 message["content"] = shorten(str(message.get("content", "")), 4000)
     session.replace_history(rebuilt, summary)
+    progress("complete")
     return before, estimate_messages(rebuilt), summary
 
 

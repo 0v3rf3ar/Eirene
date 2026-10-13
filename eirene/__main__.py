@@ -48,6 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="disable animated terminal title indicators")
     parser.add_argument("--permission-proxy", metavar="PORT:TOKEN",
                         help=argparse.SUPPRESS)
+    parser.add_argument("--attachment-reader", metavar="SESSION", help=argparse.SUPPRESS)
     parser.add_argument("-v", "--version", action="version",
                         version=f"eirene {__version__}")
     return parser
@@ -104,6 +105,9 @@ def main(argv: list[str] | None = None) -> int:
         from .providers.permission_proxy import proxy_main
         port, _, token = args.permission_proxy.partition(":")
         return proxy_main(int(port), token)
+    if args.attachment_reader:
+        from .providers.attachment_reader import reader_main
+        return reader_main(args.attachment_reader)
 
     if args.no_color:
         os.environ["NO_COLOR"] = "1"

@@ -64,7 +64,7 @@ without removing credentials.
 | `reduce_motion` | `false` | Static activity markers; also `--reduce-motion`. |
 | `accessible_icons` | `false` | Accessible icon presentation. |
 | `check_updates` | `true` | Startup update checks; `/update check` remains available. |
-| `auto_compact` | `true` | Automatic context summaries for managed conversations. |
+| `auto_compact` | `true` | Proactive context summaries; required compaction still runs at the available-context boundary. |
 | `isolate_network` | `true` | Require approval for network access under sandboxed permissions. |
 
 `permissions` is always saved as `sandboxed`. `/permissions full-access` is an
@@ -77,8 +77,10 @@ shows its status and does not select a container or image.
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `max_tokens` | `16384` | Requested response token budget, subject to provider support. |
-| `context_warning` | `60000` | Context warning/compaction budget input; actual model limits also matter. |
-| `model_context_limits` | `{}` | Explicit context limits by model identifier. |
+| `context_warning` | `0` | Model-aware compaction threshold; a positive value caps input earlier. |
+| `model_context_limits` | `{}` | Shared context limits by exact model identifier, across providers. |
+| `providers.<provider>.model_context_limits` | `{}` | Context limits for exact models on one provider; overrides shared limits. |
+| `providers.<provider>.context_limit` | unset | One context limit for all models on that provider; exact-model entries take precedence. |
 | `model_costs` | `{}` | Input/output USD per million token rates by model identifier. |
 | `request_timeout` | `300` | Provider request timeout in seconds; both Ollama connections use at least 600 seconds. |
 | `retry_attempts` | `12` | Retry attempts for eligible transient API failures, range 1–100. |
@@ -99,7 +101,10 @@ replacing it:
 
 The price values are examples. Match your actual model identifier and pricing.
 A configured context number does not extend the model's real context window.
-See [context and usage](context-and-usage.md).
+For every provider, including custom endpoints, see the
+[per-provider and per-model configuration guide](context-and-usage.md#configure-any-provider-and-model).
+ChatGPT plan models share a 500000-token operational default when the model
+catalog supplies no capacity; see [ChatGPT plan defaults](context-and-usage.md#chatgpt-plan-defaults).
 
 ## Commands and logging
 

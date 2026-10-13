@@ -121,7 +121,9 @@ async def test_help_lists_every_command(workdir):
     try:
         await dispatch(app, "/help")
         await settle(pilot)
-        body = "\n".join(texts(app))
+        assert app.aside.open
+        body = app.aside._content.plain
+        assert not any("commands" in text and "/help" in text for text in texts(app))
         for name in EXPECTED:
             assert f"/{name}" in body
         assert "shift + tab" in body
@@ -440,6 +442,53 @@ async def test_compact_shrinks_the_context(workdir):
         assert "→" in body and "saved" in body
         assert len(app.session.messages) < 16
     finally:
+        await context.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("outcome", ["complete", "fail", "cancel"])
+async def test_compact_progress_lifecycle(workdir, outcome):
+    from eirene.core.errors import ProviderError
+    from eirene.ui.compaction import CompactionProgress
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    class SlowSummary(Script):
+        async def stream(self, *args, **kwargs):
+            entered.set()
+            await release.wait()
+            if outcome == "fail":
+                raise ProviderError("summary unavailable")
+            yield TextDelta("Earlier task summary")
+            yield Done()
+
+    app, pilot, context = await start(workdir, SlowSummary())
+    task = None
+    try:
+        for _ in range(4):
+            app.session.add_user("question " * 100)
+            app.session.add_assistant("answer " * 100)
+        original = list(app.session.messages)
+        task = asyncio.create_task(dispatch(app, "/compact"))
+        await asyncio.wait_for(entered.wait(), 5)
+        progress = app.query_one(CompactionProgress)
+        assert progress.region.width <= 42
+        assert "[" in progress.render().plain and "━" in progress.render().plain
+        assert app._busy
+        if outcome == "cancel":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            release.set()
+            await task
+        await settle(pilot)
+        assert not app.query(CompactionProgress)
+        assert not app._busy
+        if outcome != "complete":
+            assert app.session.messages == original
+    finally:
+        if task and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         await context.__aexit__(None, None, None)
 
 

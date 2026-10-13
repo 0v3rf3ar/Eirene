@@ -12,7 +12,7 @@ from typing import Any
 from .errors import ConfigError
 from . import paths
 
-CONFIG_VERSION = 3
+CONFIG_VERSION = 4
 
 DEFAULTS: dict[str, Any] = {
     "version": CONFIG_VERSION,
@@ -26,11 +26,12 @@ DEFAULTS: dict[str, Any] = {
     "shell_timeout": 120,
     "max_iterations": 0,
     "max_output_bytes": 200_000,
+    "max_attachment_bytes": 20_000_000,
     "request_timeout": 300,
     "retry_attempts": 12,
     "notifications": False,
     "max_tokens": 16384,
-    "context_warning": 60000,
+    "context_warning": 0,
     "log_level": "INFO",
     "log_max_bytes": 2_000_000,
     "log_backups": 3,
@@ -58,6 +59,7 @@ INTEGER_LIMITS = {
     "shell_timeout": (1, 86_400),
     "max_iterations": (0, 10_000),
     "max_output_bytes": (1_024, 100_000_000),
+    "max_attachment_bytes": (1, 1_000_000_000),
     "request_timeout": (1, 86_400),
     "retry_attempts": (1, 100),
     "max_tokens": (512, 200_000),
@@ -99,6 +101,20 @@ class Config:
 
     def provider_config(self, name: str) -> dict[str, Any]:
         return self.data.setdefault("providers", {}).setdefault(name, {})
+
+    def model_context_limit(self, provider: str, model: str) -> int:
+        """Provider-specific model limits take precedence over shared limits."""
+        entry = self.get("providers", {}).get(provider, {})
+        scoped = entry.get("model_context_limits", {}) if isinstance(entry, dict) else {}
+        shared = self.get("model_context_limits", {})
+        for limits in (scoped, shared):
+            value = limits.get(model) if isinstance(limits, dict) else None
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                return value
+        value = entry.get("context_limit") if isinstance(entry, dict) else None
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+        return 0
 
     def set_provider(self, name: str, *, api_key: str | None = None,
                      base_url: str | None = None, model: str | None = None) -> None:
@@ -292,6 +308,12 @@ def _migrate(data: dict[str, Any]) -> dict[str, Any]:
         migrated["isolate_network"] = True
         migrated["auto_compact"] = True
         version = 3
+    if version < 4:
+        # Replace the old fixed default with model-aware budgeting. Custom
+        # thresholds remain intact; users can explicitly restore 60000 in v4.
+        if migrated.get("context_warning") == 60000:
+            migrated["context_warning"] = 0
+        version = 4
     migrated["version"] = min(max(version, 1), CONFIG_VERSION)
     return migrated
 

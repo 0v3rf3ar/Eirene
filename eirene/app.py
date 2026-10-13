@@ -19,6 +19,7 @@ from textual.css.query import NoMatches
 
 from . import __version__, commands
 from .core import agent as agent_mod
+from .core.attachments import MAX_DROPPED_FILES, store_attachment, attachment_manifest
 from .core import notify, paths, questions
 from .core import skills as skills_mod
 from .core import plans as plan_mod
@@ -46,7 +47,8 @@ from .ui.composer import Composer, ModeLine, Prompt
 from .ui.permission import PermissionBar
 from .ui.picker import Picker
 from .ui.processes import ProcessBar
-from .ui.status import StatusLine
+from .ui.status import ContextIndicator, StatusLine
+from .ui.compaction import CompactionProgress
 from .ui.splash import StartupSplash
 from .ui.tasks import TaskList
 
@@ -271,13 +273,17 @@ class Eirene(App):
     async def replay_transcript(self) -> int:
         """Redraw a resumed conversation."""
         cards: dict[str, ToolBlock] = {}
+        attachment_cards: dict[str, ToolBlock] = {}
         shown = 0
         history = self.session.transcript_messages or self.session.messages
         for message in history:
             role = message.get("role")
             body = str(message.get("content") or "")
             if role == "user":
-                await self.push(UserBlock(body))
+                if not message.get("attachments"):
+                    attachment_cards.clear()
+                await self.push(UserBlock(body, file_tokens=[item["token"]
+                    for item in message.get("files") or [] if item.get("token")]))
                 shown += 1
             elif role == "assistant":
                 if body.strip():
@@ -287,6 +293,12 @@ class Eirene(App):
                     block.flush()
                     shown += 1
                 for call in message.get("tool_calls") or []:
+                    attachment_id = str(call.get("attachment_id") or
+                        ((call.get("arguments") or {}).get("attachment_id")
+                         if call.get("name") == "read_attachment" else "") or "")
+                    if attachment_id and attachment_id in attachment_cards:
+                        cards[str(call.get("id", ""))] = attachment_cards[attachment_id]
+                        continue
                     label = (call.get("label") or
                              tool_registry.describe(call.get("name", ""),
                                                     call.get("arguments") or {},
@@ -302,13 +314,15 @@ class Eirene(App):
                             hide_output=call.get("name") == "web_search" and
                             getattr(self.agent.provider, "profile", None) is not None))
                     cards[str(call.get("id", ""))] = card
+                    if attachment_id:
+                        attachment_cards[attachment_id] = card
                     shown += 1
             elif role == "tool":
                 card = cards.get(str(message.get("tool_call_id", "")))
                 if card is not None:
                     card.artifact_id = str(message.get("artifact_id") or "")
                     card.finish(body, bool(message.get("is_error")),
-                                float(message.get("seconds") or 0.0))
+                                card.seconds + float(message.get("seconds") or 0.0))
                     card.flush()
         self.prompt.recall_from([m.get("content", "") for m in history
                                  if m.get("role") == "user"])
@@ -375,6 +389,12 @@ class Eirene(App):
     async def push(self, block, live: bool = False):
         return await self.transcript.push(block, live)
 
+    async def show_compaction(self, stage: str = "preparing") -> CompactionProgress:
+        progress = CompactionProgress()
+        await self.query_one(Composer).mount(progress, before=self.query_one(ContextIndicator))
+        progress.set_stage(stage)
+        return progress
+
     def say(self, text: str, kind: str = "info", *, markdown: bool = False) -> None:
         """Queue a one-line notice."""
         self.call_later(self.push, NoticeBlock(text, kind, markdown=markdown))
@@ -429,6 +449,25 @@ class Eirene(App):
         self.prompt.focus()
         self.prompt.insert(event.character)
 
+    async def on_paste(self, event: events.Paste) -> None:
+        """Terminal drops can arrive while the transcript has focus."""
+        if self.picker.waiting or self.permission.waiting:
+            return
+        self.prompt.focus()
+        await self.prompt._on_paste(event)
+
+    async def on_prompt_files_dropped(self, message: Prompt.FilesDropped) -> None:
+        for path in message.paths:
+            if len([token for token in self.prompt._files if token in self.prompt.text]) >= MAX_DROPPED_FILES:
+                self.say(f"attach up to {MAX_DROPPED_FILES} files per message", "warn")
+                break
+            try:
+                item = store_attachment(path, int(self.config.get("max_attachment_bytes", 20_000_000)))
+                self.prompt.attach_file(item)
+            except EireneError as exc:
+                self.say(str(exc), "warn")
+        self.prompt.focus()
+
     async def on_prompt_sent(self, message: Prompt.Sent) -> None:
         self._idle_escape_at = 0.0
         self.clear_prompt_suggestion()
@@ -438,13 +477,20 @@ class Eirene(App):
         if self._text_future and not self._text_future.done():
             self._text_future.set_result(text)
             return
-        self.transcript.hide_face()
         if text.startswith("/"):
             self._start_command(text)
             return
+        if message.files and not self.agent.ready:
+            self.say("no provider selected; run /connect", "warn")
+            self.prompt.value = text
+            self.prompt._files = {item["token"]: item for item in message.files}
+            self.prompt._line_cache.clear()
+            self.prompt.refresh()
+            return
+        sent_text = attachment_manifest(text, message.files)
         if self.turn and not self.turn.done():
-            self.agent.steer(text)
-            await self.push(UserBlock(text))
+            self.agent.steer(sent_text, files=message.files)
+            await self.push(UserBlock(text, file_tokens=[item["token"] for item in message.files]))
             self.say("queued for the next safe execution boundary")
             return
         old_plan = plan_mod.load(self.sandbox.root, self.session.id)
@@ -455,8 +501,8 @@ class Eirene(App):
         if not self.session.name:
             self.session.name = name_from(text)
             self.name_the_tab()
-        await self.push(UserBlock(text))
-        self.turn = asyncio.create_task(self._run_turn(text))
+        await self.push(UserBlock(text, file_tokens=[item["token"] for item in message.files]))
+        self.turn = asyncio.create_task(self._run_turn(sent_text, files=message.files))
 
     def _start_command(self, text: str) -> None:
         """Run a slash command in its own task."""
@@ -569,7 +615,9 @@ class Eirene(App):
 
     # the turn
 
-    async def _run_turn(self, text: str, *, record_text: str | None = None) -> None:
+    async def _run_turn(self, text: str, *, record_text: str | None = None,
+                        attachments: list[dict] | None = None,
+                        files: list[dict] | None = None) -> None:
         self.clear_prompt_suggestion()
         self.status.start()
         self.mark_busy(True)
@@ -579,8 +627,13 @@ class Eirene(App):
         suggestion_started = False
         turn_completed = False
         cards: dict[str, ToolBlock] = {}
+        attachment_cards: dict[str, ToolBlock] = {}
+        compaction: CompactionProgress | None = None
         try:
-            async for event in self.agent.run(text, record_text=record_text):
+            options = {"attachments": attachments} if attachments else {}
+            if files:
+                options["files"] = files
+            async for event in self.agent.run(text, record_text=record_text, **options):
                 if isinstance(event, agent_mod.Answer):
                     if event.text:
                         self.status.mark_activity()
@@ -600,6 +653,16 @@ class Eirene(App):
                     self.status.set_phase(event.name)
                 elif isinstance(event, agent_mod.Tokens):
                     self.status.set_tokens(event.input_tokens, event.output_tokens)
+                elif isinstance(event, agent_mod.ContextCompaction):
+                    self.status.set_phase("compacting context")
+                    if event.stage == "complete":
+                        if compaction is not None:
+                            await compaction.remove()
+                            compaction = None
+                    else:
+                        if compaction is None:
+                            compaction = await self.show_compaction(event.stage)
+                        compaction.set_stage(event.stage)
                 elif isinstance(event, agent_mod.PlanChanged):
                     if event.steps:
                         objective = self.session.name or "Complete the current request"
@@ -620,6 +683,14 @@ class Eirene(App):
                     self.clear_prompt_suggestion()
                     suggestion_started = False
                     answer = None
+                    if event.attachment_id and event.attachment_id in attachment_cards:
+                        card = attachment_cards[event.attachment_id]
+                        cards[event.id] = card
+                        card.finished = False
+                        card.is_error = False
+                        card.output = ""
+                        card.result = ""
+                        card.flush()
                     if (event.name not in {"plan_update", "plan_set_status", "plan_clear"}
                             and event.id not in cards):
                         block = (CommandBlock(event.name, event.label)
@@ -628,6 +699,8 @@ class Eirene(App):
                                      hide_output=event.name == "web_search" and
                                      getattr(self.agent.provider, "profile", None) is not None))
                         cards[event.id] = await self.push(block, live=True)
+                        if event.attachment_id:
+                            attachment_cards[event.attachment_id] = block
                 elif isinstance(event, agent_mod.ToolOutput):
                     if event.chunk:
                         self.status.mark_activity()
@@ -651,7 +724,7 @@ class Eirene(App):
                                      hide_output=event.name == "web_search" and
                                      getattr(self.agent.provider, "profile", None) is not None))
                         card = await self.push(block)
-                    card.finish(event.result, event.is_error, event.seconds)
+                    card.finish(event.result, event.is_error, card.seconds + event.seconds)
                     card.artifact_id = event.artifact_id
                     card.flush()
                 elif isinstance(event, agent_mod.Notice):
@@ -687,6 +760,8 @@ class Eirene(App):
                 pass
             raise
         finally:
+            if compaction is not None:
+                await compaction.remove()
             if not turn_completed:
                 self.clear_prompt_suggestion()
             self.mark_busy(False)

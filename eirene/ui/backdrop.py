@@ -1,4 +1,4 @@
-"""Shared faint logo background for the trust screen and conversation."""
+"""Faint logo background for the workspace trust screen."""
 
 from functools import lru_cache
 
@@ -59,4 +59,4 @@ class LogoBackdrop(Static):
 
     def on_resize(self, event: events.Resize) -> None:
         self.update(pixel_logo(max(1, event.size.width - 4),
-                               max(1, event.size.height - 2)))
+                               max(1, event.size.height - 2), transparent=True))

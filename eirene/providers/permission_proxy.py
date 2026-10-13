@@ -100,6 +100,8 @@ class PermissionBroker:
         return {"answer": str(chosen)}
 
     async def _decide(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if tool_name == "mcp__eirene_attachments__read_attachment":
+            return _allow(arguments)
         if tool_name == ASK_TOOL or tool_name in self.always:
             return _allow(arguments)
         if self.approve is None:

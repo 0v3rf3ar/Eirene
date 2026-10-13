@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from textual.renderables.blank import Blank
 
 import pytest
 
@@ -278,32 +279,33 @@ async def test_back_to_bottom_click_returns_to_latest_message(workdir):
         await context.__aexit__(None, None, None)
 
 
-async def test_chat_face_is_visible_after_resize_without_overlapping_composer(workdir):
+async def test_chat_background_stays_clear_after_resize_without_overlapping_composer(workdir):
     app, pilot, context = await start(workdir, size=(100, 32))
     try:
         for size in ((100, 32), (64, 24)):
             await pilot.resize_terminal(*size)
             await pilot.pause()
-            assert "▀" in app.export_screenshot()
+            assert isinstance(app.transcript.render(), Blank)
             assert app.transcript.region.bottom == app.query_one("Composer").region.y
         await type_line(pilot, "/help")
         await pilot.pause()
         assert app.prompt.value == ""
-        assert "▀" not in app.export_screenshot()
+        assert app.aside.open
+        assert "/help" in app.aside._content.plain
     finally:
         await context.__aexit__(None, None, None)
 
 
-async def test_chat_face_disappears_on_first_message(workdir):
+async def test_chat_background_stays_clear_after_first_message(workdir):
     app, pilot, context = await start(workdir, Script([TextDelta("hello"), Done("stop")]))
     try:
-        assert "▀" in app.export_screenshot()
+        assert isinstance(app.transcript.render(), Blank)
         await type_line(pilot, "hello")
         await pilot.pause()
-        assert "▀" not in app.export_screenshot()
+        assert isinstance(app.transcript.render(), Blank)
         await pilot.resize_terminal(64, 24)
         await pilot.pause()
-        assert "▀" not in app.export_screenshot()
+        assert isinstance(app.transcript.render(), Blank)
     finally:
         await context.__aexit__(None, None, None)
 
@@ -314,7 +316,7 @@ async def test_bottom_dock_is_in_the_right_order(workdir):
         composer = app.query_one("Composer")
         names = [type(child).__name__ for child in composer.children]
         assert names == ["Picker", "PermissionBar", "SlashMenu", "StatusLine",
-                         "TaskList", "Rule", "PromptRow", "Rule", "ModeLine", "ProcessBar"]
+                         "TaskList", "ContextIndicator", "Rule", "PromptRow", "Rule", "ModeLine", "ProcessBar"]
         row = [type(child).__name__ for child in app.query_one("PromptRow").children]
         assert row == ["Marker", "Prompt"]
         assert content(app.query_one("Marker")) == "❯"

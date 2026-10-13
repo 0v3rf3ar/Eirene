@@ -13,6 +13,23 @@ line and press Enter; the backslash is replaced by the line break. Multiline
 pastes keep their line breaks. Large pastes collapse into a short label in the
 composer and expand back to their full text when sent.
 
+Drop files from your file manager into the terminal to attach them to your next
+chat message. This requires a terminal that delivers dropped paths as paste
+events; pasting an absolute file path works too. Quoted paths, escaped spaces,
+local `file://` URLs, and multiple files are supported. Each file appears inside
+the input as a bold `[filename.ext]` token. Delete the token to remove it; undo
+restores it. Files are sent with your next chat message.
+
+Dropped files are copied into private attachment storage. The message includes
+their attachment IDs, and the model can use the `read_attachment` tool to read
+them without opening the original path. Text is read in pages, binary files can
+be read as base64, and PNG, JPEG, GIF, and WebP files load for vision with an
+image-capable model. The default limit is **20 MB per file**; edit
+`max_attachment_bytes` in [config.json](config-file.md) to change it. You can
+attach up to ten files, including files outside the project; attaching one does
+not grant the agent access to other files in that location. Stored attachments
+remain available when you resume the conversation.
+
 Up and Down recall previous prompts when you are at the corresponding edge of
 the input. In a multiline draft, they first move through its lines. Secret input
 is masked and excluded from ordinary prompt history.

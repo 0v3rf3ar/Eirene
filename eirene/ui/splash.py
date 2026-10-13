@@ -29,9 +29,23 @@ def _gray(value: int) -> str:
     return f"#{value:02x}{value:02x}{value:02x}"
 
 
-def pixel_logo(width: int, height: int) -> Text:
+@lru_cache(maxsize=1)
+def _silhouette(width: int, height: int, pixels: bytes) -> bytes:
+    """Keep the portrait's black hair/shadows inside each row's outer contour."""
+    mask = bytearray(width * height)
+    for y in range(height):
+        row = pixels[y * width:(y + 1) * width]
+        filled = [x for x, value in enumerate(row) if value]
+        if filled:
+            start, end = y * width + filled[0], y * width + filled[-1] + 1
+            mask[start:end] = b"\x01" * (end - start)
+    return bytes(mask)
+
+
+def pixel_logo(width: int, height: int, *, transparent: bool = False) -> Text:
     """Fit the logo while accounting for two pixels per terminal cell."""
     source_width, source_height, pixels = _logo()
+    mask = _silhouette(source_width, source_height, pixels) if transparent else b""
     columns = max(1, min(width, height * 2))
     rows = max(1, min(height, (columns + 1) // 2))
     body = Text(no_wrap=True, overflow="crop")
@@ -44,7 +58,22 @@ def pixel_logo(width: int, height: int) -> Text:
             source_x = min(source_width - 1, x * source_width // columns)
             top = pixels[top_row * source_width + source_x]
             bottom = pixels[bottom_row * source_width + source_x]
-            body.append("▀", style=Style(color=_gray(top), bgcolor=_gray(bottom)))
+            if transparent:
+                top_inside = mask[top_row * source_width + source_x]
+                bottom_inside = mask[bottom_row * source_width + source_x]
+                # Terminal opacity can affect ANSI background colors but leave
+                # foreground ink opaque. Draw both halves using foreground ink
+                # so the desktop never changes the portrait's internal shading.
+                if top_inside and bottom_inside:
+                    body.append("█", style=Style(color=_gray((top + bottom) // 2)))
+                elif top_inside:
+                    body.append("▀", style=Style(color=_gray(top)))
+                elif bottom_inside:
+                    body.append("▄", style=Style(color=_gray(bottom)))
+                else:
+                    body.append(" ")
+            else:
+                body.append("▀", style=Style(color=_gray(top), bgcolor=_gray(bottom)))
     return body
 
 
@@ -58,7 +87,7 @@ class StartupSplash(Static):
         width: 100vw;
         height: 100vh;
         overlay: screen;
-        background: #000000;
+        background: transparent;
         color: #ffffff;
         content-align: center top;
         display: none;
@@ -130,7 +159,7 @@ class StartupSplash(Static):
         width, height = max(1, self.app.size.width), max(1, self.app.size.height)
         image_size = (max(1, width - 4), max(1, height - 6))
         if self._logo_size != image_size:
-            self._pixels = pixel_logo(*image_size)
+            self._pixels = pixel_logo(*image_size, transparent=True)
             self._logo_size = image_size
         body = Text(no_wrap=True, overflow="crop")
         picture = self._pixels if height >= 4 else Text("")

@@ -35,6 +35,17 @@ class Tool:
 
 
 TOOLS: list[Tool] = [
+    Tool("read_attachment", READ,
+         "Read a file attached to the conversation using its attachment_id from the user's message. "
+         "Text is returned in bounded byte pages with continuation offsets. Images load for vision. "
+         "Other binary files return base64; set encoding to text or base64 to override auto detection.", {
+             "type": "object", "properties": {
+                 "attachment_id": {"type": "string", "description": "ID of a file attached to this conversation."},
+                 "offset": {"type": "integer", "description": "Starting byte offset, default 0."},
+                 "limit": {"type": "integer", "description": "Maximum bytes to read, default 4096."},
+                 "encoding": {"type": "string", "enum": ["auto", "text", "base64"]},
+             }, "required": ["attachment_id"],
+         }),
     Tool("load_plugin_resource", READ,
          "Read a supporting file from an enabled installed plugin, with bounded line ranges. "
          "Use for skill rule files, agent profiles, templates and bundled scripts; does not execute files.", {
@@ -428,12 +439,22 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
                   on_output: Callable[[str], None] | None = None,
                   isolation: str = "none", isolate_network: bool = False,
                   plan_scope: str | None = None, read_only: bool = False,
-                  search_service=None, call_id="", config=None) -> str:
+                  search_service=None, call_id="", config=None,
+                  file_attachments: dict[str, dict] | None = None) -> str:
     """Run a tool call and return its text result."""
     if name not in BY_NAME:
         raise ToolError(f"unknown tool '{name}'")
     if not isinstance(args, dict):
         raise ToolError("arguments must be an object")
+
+    if name == "read_attachment":
+        from ..core.attachments import read_attachment
+        attachment_id = _text(args, "attachment_id")
+        item = (file_attachments or {}).get(attachment_id)
+        if item is None:
+            raise ToolError("attachment is not available in this conversation")
+        return read_attachment(item, int(args.get("offset", 0)), int(args.get("limit", 4096)),
+                               encoding=str(args.get("encoding", "auto")), max_chars=max_bytes)
 
     if name == "ask_user":
         return str(args.get("question", "")).strip() or "a question"

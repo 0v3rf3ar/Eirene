@@ -11,12 +11,40 @@ from textual.widgets import Static
 
 from . import art
 from .format import strip_escapes
+from ..core.usage import human_count
 
 TICK = 0.1
 FADE_AFTER = (5, 15, 30, 60)
 BRIGHTNESS = (1.0, 0.8, 0.6, 0.45, 0.3)
 CONNECTION_PHASES = {"reconnecting", "waiting for response"}
 PROVIDER_PHASES = {"thinking", "reasoning", "answering", "working"}
+
+
+class ContextIndicator(Static):
+    """Show high context usage on the right, directly above the input."""
+
+    DEFAULT_CSS = """
+    ContextIndicator {
+        width: 1fr;
+        height: 1;
+        padding: 0 1;
+        text-align: right;
+        color: $warning;
+        background: transparent;
+        display: none;
+    }
+    """
+
+    def on_mount(self):
+        self.set_interval(0.25, self.refresh_context)
+        self.refresh_context()
+
+    def refresh_context(self):
+        agent = self.app.agent
+        used, limit = agent.context_usage() if agent.ready else (0, 0)
+        self.display = bool(limit > 0 and used / limit > 0.85)
+        self.update(Text(f"context ~{used / limit:.0%} · {human_count(used)} / {human_count(limit)}"
+                         if self.display else "", no_wrap=True, overflow="ellipsis"))
 
 
 class StatusLine(Static):

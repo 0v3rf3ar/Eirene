@@ -21,11 +21,10 @@ flowchart TD
     B --> C[Estimate history and reserve response space]
     C --> D{Input fits the budget?}
     D -->|Yes| E[Request the next model response]
-    D -->|No, automatic compaction enabled| F[Build summary and execution memory]
-    D -->|No, automatic compaction disabled| X[Stop with a context budget error]
+    D -->|No| F[Build summary and execution memory]
     F --> G[Rebuild history and check the budget again]
     G -->|Fits| E
-    G -->|Still too large| X
+    G -->|Current request itself cannot fit| X[Request needs a smaller input or supported larger window]
     E --> H[Execute requested tools]
     H --> I[Save output artifacts and retain bounded observations]
     I --> C
@@ -63,7 +62,9 @@ These profiles are runtime heuristics rather than measured model benchmarks.
 
 The provider's effective context is the smaller of the profile allowance and
 the model's advertised context length, when available. An exact-model entry in
-`model_context_limits` can reduce the agent's budget further. Increasing that
+`model_context_limits` (shared across providers) or
+`providers.ollama-local.model_context_limits` can reduce the agent's budget
+further. Increasing that
 setting does not override the local profile or the model's advertised limit.
 Ollama requests receive the provider's effective context through `num_ctx`.
 
@@ -92,12 +93,14 @@ For a local model, the agent calculates:
 ```text
 hard_limit = min(local effective context, configured model limit if present)
 response_reserve = effective max_tokens + 256
-input_budget = min(context_warning, hard_limit - response_reserve)
+input_budget = min(0.8 * hard_limit, hard_limit - response_reserve)
+if context_warning > 0: input_budget = min(input_budget, context_warning)
 history_budget = input_budget - instruction_and_tool_overhead
 ```
 
-`context_warning` defaults to 60,000 estimated tokens. A value of zero currently
-falls back to that default. The agent estimates instructions, serialized tool
+`context_warning` defaults to zero, selecting model-aware budgeting. A positive
+value imposes an earlier threshold. When no model capacity is known, the
+fallback input threshold is 60,000 tokens. The agent estimates instructions, serialized tool
 schemas, message content, and tool arguments using roughly one token per four
 characters; this is an approximation rather than the model's tokenizer.
 
@@ -108,8 +111,10 @@ instructions and tools occupy an estimated 900 tokens, history has approximately
 size for every compact-profile conversation.
 
 If history plus overhead fits, execution continues directly. Otherwise, the
-agent compacts the conversation when `auto_compact` is enabled, which is the
-default. With automatic compaction disabled, it returns a context budget error.
+agent compacts older conversation history and continues. `auto_compact: true`
+enables proactive compaction. When false, Eirene waits until the available
+context boundary, then still compacts to continue the session. Response space,
+hardware profiles, and the model's advertised capacity remain reserved.
 
 ## 4. Build a compact handoff
 
@@ -189,7 +194,9 @@ General managed API providers also use budgeting and compaction, with a
 2,048-token overhead reserve instead of the local profile's 256. The adaptive
 profiles described here apply specifically to `ollama-local`. Installed Codex and
 Claude Code CLI connections own their context handling and bypass Eirene's
-managed budgeting loop.
+managed budgeting loop. Configured model capacity and positive compaction
+thresholds are forwarded to Codex. See
+[configuration for any provider/model](context-and-usage.md#configure-any-provider-and-model).
 
 The summary transcript itself bounds tool-result excerpts to 600 characters and
 very long transcripts to 120,000 characters, retaining the beginning and recent

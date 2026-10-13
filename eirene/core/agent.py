@@ -20,7 +20,7 @@ from . import skills as skills_mod
 from .errors import Cancelled, EireneError, ProviderError, SandboxError, ToolError
 from .modes import ALLOW, ASK, BLOCK, Mode, decide
 from .session import Message, Session
-from .usage import Usage, estimate_messages
+from .usage import Usage, estimate_messages, estimate_tokens
 from . import project as project_mod
 from . import hooks as hook_mod
 from .mcp import MCPManager
@@ -82,6 +82,7 @@ class ToolStarted:
     name: str
     label: str
     kind: str
+    attachment_id: str = ""
 
 
 @dataclass
@@ -123,6 +124,11 @@ class Notice:
 
 
 @dataclass
+class ContextCompaction:
+    stage: str
+
+
+@dataclass
 class Failed:
     text: str
 
@@ -136,7 +142,7 @@ class TurnDone:
 
 
 AgentEvent = (Phase | Thought | Answer | ToolPreview | ToolStarted | ToolOutput
-              | ToolFinished | Tokens | PlanChanged | Notice | Failed | TurnDone)
+              | ToolFinished | Tokens | PlanChanged | Notice | ContextCompaction | Failed | TurnDone)
 
 ApprovalFn = Callable[[str, str, str, str], Awaitable[str]]
 ChoiceFn = Callable[[str, list], Awaitable[str | None]]
@@ -172,7 +178,7 @@ class Agent:
                        for name, definition in merged_mcp_servers(config).items()}
         self.mcp = MCPManager(definitions, self.sandbox.root)
         self.logger = get_logger()
-        self.pending_input: list[str] = []
+        self.pending_input: list[tuple[str, list[dict] | None, list[dict] | None]] = []
         self._input_arrived = asyncio.Event()
         from .plugin_runtime import PluginRuntime
         self.plugin_runtime = PluginRuntime(session.id)
@@ -184,9 +190,12 @@ class Agent:
         self._work_revision = 0
         self._delegation_depth = 0
         self._delegated_usage = Usage()
+        self._context_overhead = 0
+        self._effective_context_window = 0
 
-    def steer(self, text: str) -> None:
-        self.pending_input.append(text)
+    def steer(self, text: str, *, attachments: list[dict] | None = None,
+              files: list[dict] | None = None) -> None:
+        self.pending_input.append((text, attachments, files))
         self._input_arrived.set()
 
     def _consume_input(self) -> bool:
@@ -195,8 +204,8 @@ class Agent:
         if pending:
             self._tool_cache.clear()
             self._work_revision += 1
-        for text in pending:
-            self.session.add_user(text)
+        for text, attachments, files in pending:
+            self.session.add_user(text, attachments, files)
         return bool(pending)
 
     # setup
@@ -206,6 +215,9 @@ class Agent:
         self.provider = provider
         self.provider_key = provider_key
         self.model = model
+        self._context_overhead = 0
+        self._effective_context_window = 0
+        self._configure_provider_context()
         if previous is not None and previous is not provider:
             close = getattr(previous, "close", None)
             if close:
@@ -226,16 +238,70 @@ class Agent:
         """Rough token count of the history."""
         return estimate_messages(self.session.messages)
 
+    def context_limit(self) -> int:
+        configured = self.config.model_context_limit(self.provider_key, self.model)
+        if configured:
+            return int(configured)
+        window = getattr(self.provider, "context_window", None)
+        return window(self.model) if window else 0
+
+    def _context_input_budget(self, hard: int, reserve: int) -> int:
+        ratio = getattr(self.provider, "context_input_ratio", lambda model: 0.8)(self.model)
+        budget = min(int(hard * ratio), hard - reserve) if hard else CONTEXT_WARNING
+        threshold = int(self.config.get("context_warning", 0) or 0)
+        return min(budget, threshold) if threshold > 0 else budget
+
+    def _configure_provider_context(self) -> None:
+        setter = getattr(self.provider, "set_context_limits", None)
+        if setter:
+            setter(self.config.model_context_limit(self.provider_key, self.model),
+                   int(self.config.get("context_warning", 0) or 0))
+
+    async def compaction_budget(self) -> tuple[int, int]:
+        """Resolve capacity and reserve instructions, tools and reply space."""
+        hard = self.context_limit()
+        resolve = getattr(self.provider, "resolve_context_window", None)
+        if resolve and not self.config.model_context_limit(self.provider_key, self.model):
+            hard = await resolve(self.model)
+        prepare = getattr(self.provider, "prepare_context", None)
+        local = await prepare(self.model) if prepare else 0
+        if local:
+            hard = min(hard, local) if hard else local
+        system, specs = self.system_prompt(), self.tool_specs()
+        profile = getattr(self.provider, "profile", None)
+        if local and profile:
+            system, specs = profile.system(system), profile.tools(specs)
+        overhead = estimate_tokens(system) + estimate_tokens(json.dumps(specs))
+        self._context_overhead = overhead
+        self._effective_context_window = hard
+        reserve = self.max_tokens + (256 if local else 2048)
+        if self.config.get("auto_compact", True):
+            budget = self._context_input_budget(hard, reserve)
+        else:
+            # Disabling proactive compaction still recycles history before an
+            # over-capacity request. A growing conversation is not a stop cap.
+            budget = hard - reserve if hard else CONTEXT_WARNING
+        return hard, budget - overhead
+
+    def compaction_target(self, budget: int) -> int:
+        latest = next((m for m in reversed(self.session.messages)
+                       if m.get("role") == "user" and not m.get("compaction_summary")), None)
+        request = estimate_messages([latest]) if latest else 0
+        return max(1, min(budget, max(int(budget * 0.65), request + 1024)))
+
+    def context_usage(self) -> tuple[int, int]:
+        """Cheap display estimate; local capacity follows the effective profile."""
+        limit = self.context_limit()
+        profile = getattr(self.provider, "profile", None)
+        if profile:
+            local = self._effective_context_window or profile.context_tokens
+            limit = min(limit, local) if limit else local
+        return self.context_size() + self._context_overhead, limit
+
     def context_is_heavy(self) -> bool:
         """True once the history is worth compacting."""
-        configured = self.config.get("model_context_limits", {})
-        model_limit = configured.get(self.model) if isinstance(configured, dict) else None
-        try:
-            model_warning = int(model_limit * 0.8) if model_limit else 0
-        except (TypeError, ValueError):
-            model_warning = 0
-        limit = model_warning or int(self.config.get("context_warning", CONTEXT_WARNING)
-                                     or CONTEXT_WARNING)
+        model_limit = self.context_limit()
+        limit = self._context_input_budget(model_limit, self.max_tokens + 2048)
         return limit > 0 and self.context_size() > limit
 
     @property
@@ -353,10 +419,11 @@ class Agent:
 
     # the loop
 
-    async def run(self, text: str, *, record_text: str | None = None
+    async def run(self, text: str, *, record_text: str | None = None,
+                  attachments: list[dict] | None = None, files: list[dict] | None = None
                   ) -> AsyncIterator[AgentEvent]:
         """Keep approved host access inside this response's lifetime."""
-        stream = self._run(text, record_text=record_text)
+        stream = self._run(text, record_text=record_text, attachments=attachments, files=files)
         try:
             async for event in stream:
                 if isinstance(event, TurnDone):
@@ -428,7 +495,8 @@ class Agent:
         # Native adapters must not translate this into a standing session grant.
         return YES if answer == ALWAYS else answer
 
-    async def _run(self, text: str, *, record_text: str | None = None
+    async def _run(self, text: str, *, record_text: str | None = None,
+                   attachments: list[dict] | None = None, files: list[dict] | None = None
                    ) -> AsyncIterator[AgentEvent]:
         if not self.ready:
             yield Failed("no provider selected; run /connect")
@@ -447,7 +515,11 @@ class Agent:
                 for name, definition in definitions.items()}, self.sandbox.root)
         native_plugins = getattr(self.provider, "set_plugins", None)
         if native_plugins:
-            native_plugins({} if self.mode is Mode.PLAN else definitions)
+            native_definitions = {} if self.mode is Mode.PLAN else dict(definitions)
+            if getattr(self.provider, "owns_context", False):
+                from ..providers.attachment_reader import definition
+                native_definitions["eirene_attachments"] = definition(self.session.id)
+            native_plugins(native_definitions)
         if self.mode is Mode.PLAN or getattr(self.provider, "owns_context", False):
             await self.mcp.close()
         else:
@@ -456,13 +528,13 @@ class Agent:
         self._consume_input()
         self._turn_instructions = text if record_text is not None and record_text != text else ""
         self._delegated_usage = Usage()
-        self.session.add_user(record_text if record_text is not None else text)
+        self.session.add_user(record_text if record_text is not None else text, attachments, files)
         self._tool_cache.clear()
         self._work_revision = 0
         self.logger.info("turn.started", extra={"session_id": self.session.id,
                                                 "provider": self.provider_key,
                                                 "model": self.model,
-                                                "attachment_count": 0})
+                                                "attachment_count": len(attachments or []) + len(files or [])})
         started = time.monotonic()
         first_token = 0.0
         turn_usage = Usage()
@@ -557,7 +629,8 @@ class Agent:
                                                event.result[:24000], event.is_error, 0.0, output.id)
                             continue
                         self.session.add_note("provider_tool", id=event.id, name=event.name,
-                                              label=event.label, finished=False)
+                                              label=event.label, finished=False,
+                                              attachment_id=event.attachment_id)
                         yield Phase(RUNNING if event.kind == tools.EXEC else
                                     (WRITING if event.kind == tools.WRITE
                                      else THINKING))
@@ -566,7 +639,7 @@ class Agent:
                                               event.preview)
                         else:
                             yield ToolStarted(event.id, event.name, event.label,
-                                              event.kind)
+                                              event.kind, event.attachment_id)
                     elif isinstance(event, Done):
                         finish = event.reason
                         response_items = event.response_items
@@ -703,35 +776,33 @@ class Agent:
     async def _budget_context(self):
         if getattr(self.provider, "owns_context", False):
             return
-        from .usage import estimate_tokens
         from .compact import compact
-        limits = self.config.get("model_context_limits", {})
-        hard = int(limits.get(self.model, 0) or 0)
-        prepare = getattr(self.provider, "prepare_context", None)
-        local = await prepare(self.model) if prepare else 0
-        if local:
-            hard = min(hard, local) if hard else local
-        overhead = estimate_tokens(self.system_prompt()) + estimate_tokens(json.dumps(self.tool_specs()))
-        if local:
-            profile = self.provider.profile
-            overhead = estimate_tokens(profile.system(self.system_prompt())) + estimate_tokens(json.dumps(profile.tools(self.tool_specs())))
-        reserve = self.max_tokens + (256 if local else 2048)
-        threshold = int(self.config.get("context_warning", CONTEXT_WARNING) or CONTEXT_WARNING)
-        budget = min(threshold, hard - reserve) if hard else threshold
+        hard, budget = await self.compaction_budget()
         if budget <= 0:
             raise ProviderError("instructions, tools and response allowance exceed the model context budget")
-        if self.context_size() + overhead <= budget:
+        if self.context_size() <= budget:
             return
-        if not self.config.get("auto_compact", True):
-            raise ProviderError("context budget reached; use /compact or enable auto_compact")
         yield Notice("preparing conversation memory", transient=True, phase="working")
-        before, after, _ = await compact(self.session, self.provider, self.model,
-            target_tokens=budget - overhead if local else None, context_tokens=hard or None,
-            automatic=True)
+        stages = asyncio.Queue()
+        task = asyncio.create_task(compact(self.session, self.provider, self.model,
+            target_tokens=self.compaction_target(budget), context_tokens=hard or None,
+            automatic=True, on_progress=stages.put_nowait))
+        try:
+            while not task.done() or not stages.empty():
+                try:
+                    stage = await asyncio.wait_for(stages.get(), 0.1)
+                except asyncio.TimeoutError:
+                    continue
+                yield ContextCompaction(stage)
+            before, after, _ = await task
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         self.session.add_note("context_compacted", before=before, after=after)
         yield Notice(f"context compacted {before} → {after} estimated tokens", transient=True)
-        if self.context_size() + overhead > budget:
-            raise ProviderError("context still exceeds budget after compaction; reduce tool output or response allowance")
+        if self.context_size() > budget:
+            raise ProviderError("the current request and required memory exceed the model's available context")
 
     async def _dispatch(self, calls):
         parallel_names = {"read_file", "list_dir", "glob", "search_text", "find_symbol", "find_references", "read_output"}
@@ -836,6 +907,7 @@ class Agent:
     async def _stream_once(self):
         """One provider call."""
         assert self.provider is not None
+        self._configure_provider_context()
         configure = getattr(self.provider, "set_context", None)
         setter = getattr(self.provider, "set_permissions", None)
         if setter:
@@ -1025,7 +1097,9 @@ class Agent:
 
         yield Phase(RUNNING if kind == tools.EXEC else
                     (WRITING if kind == tools.WRITE else THINKING))
-        yield ToolStarted(call.id, call.name, label, kind)
+        attachment_id = (str(call.arguments.get("attachment_id") or "")
+                         if call.name == "read_attachment" else "")
+        yield ToolStarted(call.id, call.name, label, kind, attachment_id)
         self.session.add_note("tool_state", call_id=call.id, tool=call.name,
                               state="started", approved=True)
         output = artifacts.Writer()
@@ -1113,12 +1187,21 @@ class Agent:
             except EireneError as exc:
                 result = f"{result}\nvision payload failed: {exc.user_message()}"
                 is_error = True
+        if (call.name == "read_attachment" and not is_error
+                and call.arguments.get("encoding", "auto") == "auto"):
+            try:
+                from .attachments import attachment_image
+                item = self.session.file_attachments[str(call.arguments.get("attachment_id", ""))]
+                vision_image = attachment_image(item)
+            except (EireneError, KeyError) as exc:
+                result = f"{result}\nvision payload failed: {exc}"
+                is_error = True
         self.session.add_tool_result(call.id, call.name, result, is_error, seconds, output.id)
         self.session.add_note("tool_state", call_id=call.id,
                               state="failed" if is_error else "succeeded", artifact_id=output.id)
         if vision_image:
             self.session.add_user(
-                f"Image content loaded from {call.arguments.get('path')}.", [vision_image])
+                f"Image content loaded from {vision_image['name']}.", [vision_image])
         self.logger.info("tool.finished", extra={"session_id": self.session.id,
                                                  "tool": call.name,
                                                  "seconds": seconds,
@@ -1132,7 +1215,7 @@ class Agent:
         """Bound all observations by context left after instructions and reply."""
         from .usage import estimate_tokens
         profile = getattr(self.provider, "profile", None)
-        context = int(self.config.get("model_context_limits", {}).get(self.model, 0) or 0)
+        context = self.context_limit()
         prepare = getattr(self.provider, "prepare_context", None)
         if profile:
             local = await prepare(self.model) if prepare else profile.context_tokens
@@ -1144,8 +1227,7 @@ class Agent:
             system, specs = self.system_prompt(), self.tool_specs()
             ceiling = 12000
         overhead = estimate_tokens(system) + estimate_tokens(json.dumps(specs))
-        threshold = int(self.config.get("context_warning", CONTEXT_WARNING) or CONTEXT_WARNING)
-        budget = min(threshold, context - self.max_tokens - (256 if profile else 2048)) if context else threshold
+        budget = self._context_input_budget(context, self.max_tokens + (256 if profile else 2048))
         available = max(0, budget - overhead - self.context_size() - 64 * share)
         return min(ceiling, available * 4 // max(1, share))
 
@@ -1185,6 +1267,8 @@ class Agent:
 
         if name in {"web_search", "web_fetch"}:
             kwargs["search_service"] = self.search_service
+        if name == "read_attachment":
+            kwargs["file_attachments"] = self.session.file_attachments
         if name == "delegate_tasks":
             from .delegation import run_tasks
             task = asyncio.create_task(run_tasks(self, arguments["tasks"], on_output=feed))

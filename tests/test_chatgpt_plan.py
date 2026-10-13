@@ -196,6 +196,80 @@ TOOLS = [{"name": "read_file", "description": "Read a file", "parameters": {
     "type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}]
 
 
+@pytest.mark.parametrize("metadata, expected", [({}, 500000),
+    ({"context_window": 64000}, 64000), ({"context_length": 48000}, 48000),
+    ({"context_window": "unknown"}, 500000), ({"context_window": True}, 500000)])
+def test_plan_context_capacity(metadata, expected):
+    provider = ChatGPTPlan()
+    provider._catalog["m"] = metadata
+    assert provider.context_window("m") == expected
+
+
+async def test_plan_catalog_failure_uses_fallback_without_repeated_requests():
+    provider = ChatGPTPlan()
+    calls = []
+    async def unavailable():
+        calls.append(True)
+        raise ProviderError("catalog temporarily unavailable", retryable=True)
+    provider.models = unavailable
+    assert await provider.resolve_context_window("m") == 500000
+    assert await provider.resolve_context_window("m") == 500000
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("model", ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra",
+    "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5", "future-chatgpt-model"])
+def test_every_plan_model_uses_shared_context_default(model):
+    provider = ChatGPTPlan()
+    assert provider.context_window(model) == 500000
+    provider._catalog[model] = {"context_window": 272000}
+    assert provider.context_window(model) == 272000
+
+
+async def test_plan_automatic_compaction_fits_budget_and_keeps_latest(workdir, config, box):
+    from eirene.core.agent import Agent
+    provider = ChatGPTPlan()
+    provider._catalog["m"] = {"context_window": 32768}
+    async def summary(messages, model, **kwargs):
+        assert estimate_messages(messages) + kwargs["max_tokens"] < 32768
+        yield base.TextDelta("Keep working; preserve the database.")
+        yield base.Done()
+    provider.stream = summary
+    session = Session.create(workdir)
+    for _ in range(20):
+        session.add_user("earlier instructions " * 400)
+        session.add_assistant("completed work " * 400)
+    session.add_user("Finish tests; preserve the database.")
+    agent = Agent(session, config, box)
+    agent.use(provider, "chatgpt-plan", "m")
+    hard, budget = await agent.compaction_budget()
+    assert hard == 32768 and 0 < budget < hard - agent.max_tokens
+    notices = [e async for e in agent._budget_context()]
+    assert notices
+    assert agent.context_size() <= int(budget * 0.65)
+    assert session.messages[-1]["content"] == "Finish tests; preserve the database."
+    config.set("model_context_limits", {"m": 64000})
+    assert (await agent.compaction_budget())[0] == 64000
+    config.provider_config("chatgpt-plan")["model_context_limits"] = {"m": 128000}
+    assert (await agent.compaction_budget())[0] == 128000
+    session.close()
+
+
+async def test_codex_sized_plan_budget_is_not_capped_at_60000(workdir, config, box):
+    from eirene.core.agent import Agent
+    provider = ChatGPTPlan()
+    provider._catalog["gpt-6.1-sol"] = {}
+    session = Session.create(workdir)
+    agent = Agent(session, config, box)
+    agent.use(provider, "chatgpt-plan", "gpt-6.1-sol")
+    hard, budget = await agent.compaction_budget()
+    assert hard == 500000
+    assert 400000 < budget < 475000
+    config.set("context_warning", 100000)
+    assert (await agent.compaction_budget())[1] < 100000
+    session.close()
+
+
 async def test_responses_tool_round_trip_and_session_resume(workdir):
     provider = ChatGPTPlan()
     save_account(provider.auth)
@@ -273,6 +347,9 @@ async def test_agent_executes_own_tools_and_sends_results(workdir, config, box):
     save_account(provider.auth)
     calls = []
     def handler(req):
+        if req.method == "GET":
+            return httpx.Response(200, json={"models": [
+                {"slug": "test-model", "visibility": "list", "context_window": 32768}]})
         body = json.loads(req.content)
         calls.append(body)
         # Title generation is a separate inference call without tools.

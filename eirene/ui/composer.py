@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from rich.text import Text
 from textual import events
 from textual.containers import Container, Horizontal
@@ -9,6 +10,7 @@ from textual.message import Message
 from textual.widgets import Static, TextArea
 
 from ..core.modes import Mode
+from ..core.attachments import dropped_paths
 from . import art, theme
 from .format import pasted_label
 
@@ -131,12 +133,20 @@ class Prompt(TextArea):
     class Sent(Message):
         """Text the user sent."""
 
-        def __init__(self, text: str):
+        def __init__(self, text: str, files: list[dict] | None = None):
             super().__init__()
             self.text = text
+            self.files = files or []
 
     class SuggestionAccepted(Message):
         """Accept the optional follow-up without submitting it."""
+
+    class FilesDropped(Message):
+        """Files supplied through a terminal paste/drop."""
+
+        def __init__(self, paths: list[Path]):
+            super().__init__()
+            self.paths = paths
 
     class Draft(Message):
         """The pending text changed."""
@@ -171,6 +181,7 @@ class Prompt(TextArea):
         self._secret = False
         self._silent: str | None = None
         self._pastes: list[tuple[str, str]] = []
+        self._files: dict[str, dict] = {}
 
     # value
 
@@ -204,6 +215,13 @@ class Prompt(TextArea):
     def get_line(self, line_index: int):
         """Mask the text while a secret is wanted."""
         line = super().get_line(line_index)
+        if not self._secret:
+            line = line.copy()
+            for token in self._files:
+                column = line.plain.find(token)
+                while column >= 0:
+                    line.stylize("bold italic", column, column + len(token))
+                    column = line.plain.find(token, column + len(token))
         if not self._secret or not self.text:
             return line
         return Text(MASK * len(line.plain), end="", no_wrap=True)
@@ -243,6 +261,22 @@ class Prompt(TextArea):
     def clear_draft(self) -> None:
         self._load("")
         self._pastes.clear()
+        self._files.clear()
+        self._announce(suggest=False)
+
+    def attach_file(self, item: dict) -> None:
+        """Insert a filename token backed by stored attachment metadata."""
+        from .format import strip_escapes
+        name = strip_escapes(item["name"]).replace("\n", " ").replace("\r", " ")
+        token = f"[{name}]"
+        index = 2
+        while token in self._files or token in self.text:
+            token = f"[{name} ({index})]"
+            index += 1
+        self._files[token] = {**item, "token": token}
+        self.insert(token)
+        self._line_cache.clear()
+        self.refresh()
         self._announce(suggest=False)
 
     def _announce(self, suggest: bool = True) -> None:
@@ -254,7 +288,7 @@ class Prompt(TextArea):
         """Delete folded pastes as a unit when a deletion touches their label."""
         start, end = sorted((start, end))
         if start != end:
-            tokens = {token for token, _ in self._pastes}
+            tokens = {token for token, _ in self._pastes} | self._files.keys()
             for row, line in enumerate(self.document.lines):
                 for token in tokens:
                     column = line.find(token)
@@ -295,6 +329,11 @@ class Prompt(TextArea):
         text = event.text.replace("\r\n", "\n").replace("\r", "\n")
         if not text:
             return
+        if not self._secret and not getattr(self.app, "_text_future", None):
+            paths = dropped_paths(text, self.app.sandbox.root)
+            if paths:
+                self.post_message(self.FilesDropped(paths))
+                return
         if text.count("\n") + 1 >= FOLD_LINES or len(text) >= FOLD_CHARS:
             token = pasted_label(text)
             self._pastes.append((token, text))
@@ -344,10 +383,12 @@ class Prompt(TextArea):
             return
         self.remember(raw)
         text = self.unfold(raw)
+        files = [item for token, item in self._files.items() if token in raw]
         self._load("")
         self._pastes.clear()
+        self._files.clear()
         self._announce(suggest=False)
-        self.post_message(self.Sent(text))
+        self.post_message(self.Sent(text, files))
 
     def _continues(self) -> bool:
         """A trailing backslash means a new line."""
@@ -417,6 +458,8 @@ class Composer(Container):
     def compose(self):
         for widget in self._extras:
             yield widget
+        from .status import ContextIndicator
+        yield ContextIndicator()
         yield Rule()
         with PromptRow():
             yield Marker()

@@ -119,6 +119,39 @@ async def test_subscription_account_models_and_stream(workdir, tmp_path):
         await provider.close()
 
 
+def test_context_override_reaches_codex_without_losing_plugin_config():
+    provider = CodexSubscription()
+    provider._plugin_servers = {"example": {"command": "example-server"}}
+    provider._thread_id = "existing"
+    provider.set_context_limits(500000, 450000)
+    assert not provider._thread_id
+    options = provider._thread_options("gpt-6.1-sol")
+    assert options["config"]["model_context_window"] == 500000
+    assert options["config"]["model_auto_compact_token_limit"] == 450000
+    assert "example" in options["config"]["mcp_servers"]
+    provider._thread_id = "current"
+    provider.set_context_limits(500000, 450000)
+    assert provider._thread_id == "current"
+    provider.set_context_limits(0, 0)
+    assert "model_context_window" not in provider._thread_options("m")["config"]
+
+
+def test_agent_applies_provider_model_limits_to_native_codex(workdir, config, box):
+    from eirene.core.agent import Agent
+    from eirene.core.session import Session
+    config.set("model_context_limits", {"gpt-6.1-sol": 272000})
+    config.provider_config("chatgpt-subscription")["model_context_limits"] = {"gpt-6.1-sol": 500000}
+    config.set("context_warning", 450000)
+    session = Session.create(workdir)
+    agent = Agent(session, config, box)
+    provider = CodexSubscription()
+    agent.use(provider, "chatgpt-subscription", "gpt-6.1-sol")
+    options = provider._thread_options(agent.model)
+    assert options["config"] == {"model_context_window": 500000,
+                                 "model_auto_compact_token_limit": 450000}
+    session.close()
+
+
 async def test_large_command_completion_does_not_stall_stream(workdir, tmp_path):
     provider = CodexSubscription(
         binary=fake_codex(tmp_path, large_output=True), timeout=2)

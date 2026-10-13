@@ -45,6 +45,17 @@ class CodexSubscription(Provider):
         self._file_changes: dict[str, list[dict[str, Any]]] = {}
         self._shown: set[str] = set()
         self._plugin_servers = {}
+        self._context_limits: dict[str, int] = {}
+
+    def set_context_limits(self, window: int, threshold: int = 0) -> None:
+        config = {}
+        if window > 0:
+            config["model_context_window"] = window
+        if threshold > 0:
+            config["model_auto_compact_token_limit"] = min(threshold, int(window * 0.95)) if window else threshold
+        if config != self._context_limits:
+            self.reset_thread()
+            self._context_limits = config
 
     def set_context(self, root: Path, mode: str, approve: ApprovalFn | None = None,
                     choose: ChoiceFn | None = None) -> None:
@@ -287,6 +298,7 @@ class CodexSubscription(Provider):
                               max_tokens: int = 8192) -> AsyncIterator[Event]:
         """Run side questions in a separate read-only Codex conversation."""
         clone = CodexSubscription(timeout=self.timeout, binary=self.binary)
+        clone._context_limits = dict(self._context_limits)
         clone.set_context(self.root, "plan")
         try:
             async for event in clone.stream(messages, model, system=system,
@@ -305,11 +317,14 @@ class CodexSubscription(Provider):
         policy = self._turn_policy()
         sandbox = policy.pop("sandboxPolicy")
         legacy = {"readOnly": "read-only", "dangerFullAccess": "danger-full-access"}.get(sandbox["type"], "workspace-write")
+        config = dict(self._context_limits)
+        if self._plugin_servers:
+            config["mcp_servers"] = self._plugin_servers
         return {"model": model, "cwd": str(self.root), "sandbox": legacy,
                 "approvalPolicy": policy["approvalPolicy"],
                 "developerInstructions": system or None,
                 "serviceName": "eirene",
-                **({"config": {"mcp_servers": self._plugin_servers}} if self._plugin_servers else {})}
+                **({"config": config} if config else {})}
 
     def _turn_policy(self) -> dict[str, Any]:
         if self.mode == "plan":
@@ -551,7 +566,16 @@ def _item_tool(item: dict[str, Any], root: Path) -> ProviderTool | None:
         changes = [change for change in item.get("changes") or []
                    if isinstance(change, dict)]
         label, preview = _file_change_preview(changes, root)
-    return ProviderTool(item_id, name, label[:10000 if kind == "exec" else 120] or name, kind, preview=preview)
+    arguments = item.get("arguments") or {}
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except ValueError:
+            arguments = {}
+    attachment_id = (str(arguments.get("attachment_id") or "")
+                     if isinstance(arguments, dict) and item.get("tool") == "read_attachment" else "")
+    return ProviderTool(item_id, name, label[:10000 if kind == "exec" else 120] or name,
+                        kind, preview=preview, attachment_id=attachment_id)
 
 
 def _relative(path: str, root: Path) -> str:

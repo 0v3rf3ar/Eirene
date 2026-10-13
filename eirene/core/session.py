@@ -60,10 +60,13 @@ class Message(dict):
     """Normalised chat message."""
 
     @staticmethod
-    def user(text: str, attachments: list[dict] | None = None) -> "Message":
+    def user(text: str, attachments: list[dict] | None = None,
+             files: list[dict] | None = None) -> "Message":
         message = Message(role="user", content=text)
         if attachments:
             message["attachments"] = attachments
+        if files:
+            message["files"] = files
         return message
 
     @staticmethod
@@ -92,6 +95,7 @@ class Session:
         self.sandbox = sandbox
         self.path = path
         self.messages: list[Message] = []
+        self.file_attachments: dict[str, dict] = {}
         self.transcript_messages: list[Message] | None = None
         self.started = time.time()
         self.name = ""
@@ -125,6 +129,7 @@ class Session:
     def clear(self) -> None:
         """Forget the history and delete the log."""
         self.messages.clear()
+        self.file_attachments.clear()
         self.transcript_messages = None
         self.close()
         self._closed = False
@@ -146,6 +151,9 @@ class Session:
         session = cls(session_id, sandbox, path)
         session.name = str(meta.get("name") or "")
         for record in records:
+            if record.get("t") == "user":
+                for item in record.get("files") or []:
+                    session.file_attachments[item["id"]] = item
             if record.get("t") == "rename" and record.get("name"):
                 session.name = str(record["name"])
         session.messages = replay(records)
@@ -195,15 +203,19 @@ class Session:
         except (OSError, TypeError, ValueError) as exc:
             raise SessionError(f"cannot persist session: {exc}") from exc
 
-    def add_user(self, text: str, attachments: list[dict] | None = None) -> Message:
+    def add_user(self, text: str, attachments: list[dict] | None = None,
+                 files: list[dict] | None = None) -> Message:
         if not self.name:
             self.name = name_from(text)
         self.start()
-        msg = Message.user(text, attachments)
+        msg = Message.user(text, attachments, files)
         self.messages.append(msg)
         record = {"t": "user", "content": text}
         if attachments:
             record["attachments"] = attachments
+        if files:
+            record["files"] = files
+            self.file_attachments.update({item["id"]: item for item in files})
         self._write(record)
         return msg
 
@@ -289,7 +301,7 @@ def replay(records: list[dict[str, Any]], *, apply_compaction: bool = True) -> l
         kind = record.get("t")
         if kind == "user":
             messages.append(Message.user(record.get("content", ""),
-                                         record.get("attachments")))
+                                         record.get("attachments"), record.get("files")))
         elif kind == "assistant":
             messages.append(Message.assistant(record.get("content", ""),
                                               record.get("tool_calls")))
@@ -313,7 +325,8 @@ def replay(records: list[dict[str, Any]], *, apply_compaction: bool = True) -> l
                 messages.append(msg)
             else:
                 messages.append(Message.assistant("", [{"id": record["id"],
-                    "name": record["name"], "arguments": {}, "label": record.get("label", "")}]))
+                    "name": record["name"], "arguments": {}, "label": record.get("label", ""),
+                    "attachment_id": record.get("attachment_id", "")}]))
     return messages
 
 
@@ -422,7 +435,7 @@ def import_session(source: Path, sandbox: Path) -> "Session":
             continue
         role = raw.get("role")
         if role == "user":
-            session.add_user(str(raw.get("content") or ""), raw.get("attachments"))
+            session.add_user(str(raw.get("content") or ""), raw.get("attachments"), raw.get("files"))
         elif role == "assistant":
             session.add_assistant(str(raw.get("content") or ""), raw.get("tool_calls"))
         elif role == "tool":
