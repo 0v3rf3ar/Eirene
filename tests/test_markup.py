@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from rich.console import Console
 from rich.text import Text
 
@@ -65,9 +67,9 @@ def test_strikethrough():
     assert ("useful", "strike") in styles(body)
 
 
-def test_a_link_shows_its_target():
+def test_a_link_shows_only_its_clickable_label():
     body = inline("see [the docs](https://example.com) for more")
-    assert body.plain == "see the docs (https://example.com) for more"
+    assert body.plain == "see the docs for more"
     assert any(pair[0] == "the docs" and "underline" in pair[1]
                for pair in styles(body))
     assert any(span.style.meta.get("@click") == "open_link('https://example.com')"
@@ -79,6 +81,33 @@ def test_bare_url_is_clickable_without_trailing_punctuation():
     assert body.plain == "Visit https://example.com/docs."
     assert any(span.style.meta.get("@click") == "open_link('https://example.com/docs')"
                for span in body.spans)
+
+
+@pytest.mark.parametrize("source", [
+    "[Alpine](https://alpineapp.email/)",
+    "**[Alpine](https://alpineapp.email/)**",
+    "*[Alpine](https://alpineapp.email/)*",
+    "<strong>[Alpine](https://alpineapp.email/)</strong>",
+    "[**Alpine**](https://alpineapp.email/)",
+])
+def test_markdown_links_keep_their_target_inside_formatting(source):
+    body = inline(source)
+    assert body.plain == "Alpine"
+    style = body.get_style_at_offset(Console(), 0)
+    assert style.underline
+    assert style.meta["@click"] == "open_link('https://alpineapp.email/')"
+    if "**" in source or "<strong>" in source:
+        assert style.bold
+    elif source.startswith("*"):
+        assert style.italic
+    assert inline(source, show_link_urls=True).plain == "Alpine (https://alpineapp.email/)"
+
+
+def test_links_in_code_remain_literal():
+    source = "[Alpine](https://alpineapp.email/)"
+    body = inline(f"`{source}`")
+    assert body.plain == source
+    assert not body.get_style_at_offset(Console(), 0).meta
 
 
 def test_headings_lose_the_hashes():

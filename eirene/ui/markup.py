@@ -66,7 +66,7 @@ CELL_SPLIT = re.compile(r"(?<!\\)\|")
 MAX_CELL = 44
 
 
-def inline(text: str, *, show_link_urls: bool = True) -> Text:
+def inline(text: str, *, show_link_urls: bool = False) -> Text:
     """One line of prose, with the markers applied."""
     body = Text()
     position = 0
@@ -78,7 +78,10 @@ def inline(text: str, *, show_link_urls: bool = True) -> Text:
             url = groups["url"] or groups["bare"].rstrip(".,;:!?)")
             link = Style.parse(LINK_STYLE) + Style.from_meta(
                 {"@click": f"open_link({url!r})"})
-            body.append(groups["label"] or url, style=link)
+            label = (inline(groups["label"], show_link_urls=False)
+                     if groups["label"] is not None else Text(url))
+            label.stylize(link)
+            body.append_text(label)
             if groups["label"] is not None and show_link_urls:
                 body.append(f" ({url})", style=Style.parse("dim") + Style.from_meta(
                     {"@click": f"open_link({url!r})"}))
@@ -87,7 +90,12 @@ def inline(text: str, *, show_link_urls: bool = True) -> Text:
         else:
             for name, style in STYLES.items():
                 if groups.get(name) is not None:
-                    body.append(groups[name], style=style)
+                    # Code is literal; other markers may contain links or
+                    # further inline formatting whose styles must survive.
+                    part = (Text(groups[name]) if name == "code" else
+                            inline(groups[name], show_link_urls=show_link_urls))
+                    part.stylize(style)
+                    body.append_text(part)
                     break
         position = match.end()
     if position < len(text):

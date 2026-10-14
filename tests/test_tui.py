@@ -2391,6 +2391,44 @@ async def test_a_table_in_an_answer_is_drawn_and_selectable(workdir):
         await context.__aexit__(None, None, None)
 
 
+@pytest.mark.parametrize("width", [100, 22])
+@pytest.mark.parametrize("source", [
+    "[Alpine](https://alpineapp.email/)",
+    "**[Alpine](https://alpineapp.email/)**",
+])
+async def test_markdown_links_render_and_open_from_an_answer(workdir, monkeypatch, width, source):
+    app, pilot, context = await start(workdir, size=(width, 32))
+    opened = []
+    monkeypatch.setattr(app, "open_url", opened.append)
+    try:
+        block = AnswerBlock()
+        block.feed("An email app: " + source)
+        await app.push(block)
+        await pilot.pause()
+        block.flush()
+        await pilot.pause()
+
+        shown = content(block)
+        assert "Alpine" in shown
+        assert "[Alpine]" not in shown
+        assert "https://" not in shown
+        assert "alpineapp.email" not in shown
+        assert shown.replace("\n", " ").split() == ["An", "email", "app:", "Alpine"]
+        clickable = []
+        for y in range(block.region.y, block.region.bottom):
+            for x in range(block.region.x, min(block.region.right, app.size.width)):
+                style = app.screen.get_style_at(x, y)
+                if style.meta.get("@click") == "open_link('https://alpineapp.email/')":
+                    clickable.append((x, y))
+        assert clickable, "link metadata must survive rendering and wrapping"
+        if width == 22:
+            assert "\n" in shown
+        await pilot.click(offset=clickable[0])
+        assert opened == ["https://alpineapp.email/"]
+    finally:
+        await context.__aexit__(None, None, None)
+
+
 async def test_every_markdown_style_reaches_the_screen(workdir):
     app, pilot, context = await start(workdir)
     try:
