@@ -209,26 +209,30 @@ def _windows_install(pending: Path, target: Path) -> str:
     quote = lambda value: "'" + str(value).replace("'", "''") + "'"
     script = pending.with_suffix(".ps1")
     backup = target.with_suffix(".previous.exe")
+    error = target.with_suffix(".update-error.txt")
     script.write_text(
         "$ErrorActionPreference = 'Stop'\n"
-        f"Wait-Process -Id {os.getpid()} -Timeout 3600 -ErrorAction SilentlyContinue\n"
-        f"if (Get-Process -Id {os.getpid()} -ErrorAction SilentlyContinue) {{ exit 1 }}\n"
         f"$target = {quote(target)}\n$pending = {quote(pending)}\n$backup = {quote(backup)}\n"
-        "try {\n  Copy-Item -LiteralPath $target -Destination $backup -Force\n"
-        "  $replaced = $false\n"
+        f"$errorLog = {quote(error)}\n"
+        "try {\n"
+        f"  Wait-Process -Id {os.getpid()} -Timeout 3600 -ErrorAction SilentlyContinue\n"
+        f"  if (Get-Process -Id {os.getpid()} -ErrorAction SilentlyContinue) {{ throw 'Timed out waiting for Eirene to exit.' }}\n"
         "  for ($attempt = 0; $attempt -lt 30; $attempt++) {\n"
-        "    try { Move-Item -LiteralPath $pending -Destination $target -Force; $replaced = $true; break }\n"
-        "    catch { Start-Sleep -Seconds 1 }\n"
+        "    try { [System.IO.File]::Replace($pending, $target, $backup); break }\n"
+        "    catch { if ($attempt -eq 29) { throw }; Start-Sleep -Seconds 1 }\n"
         "  }\n"
-        "  if (-not $replaced) { throw 'Executable remains locked; retry the update after closing other Eirene processes.' }\n"
-        "} catch {\n  if (Test-Path -LiteralPath $backup) { Copy-Item -LiteralPath $backup -Destination $target -Force }\n"
-        "  $_ | Out-File -LiteralPath ($pending + '.error.txt')\n"
-        "} finally { Remove-Item -LiteralPath $PSCommandPath -Force }\n", encoding="utf-8")
+        "  Remove-Item -LiteralPath $errorLog -Force -ErrorAction SilentlyContinue\n"
+        "} catch {\n"
+        "  $_ | Out-File -LiteralPath $errorLog -Encoding utf8\n"
+        "  exit 1\n"
+        "} finally { Remove-Item -LiteralPath $PSCommandPath -Force }\n", encoding="utf-8-sig")
     try:
         subprocess.Popen(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                           "-File", str(script)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, creationflags=0x00000008 | 0x00000200)
+                         stderr=subprocess.DEVNULL, cwd=str(target.parent),
+                         creationflags=0x00000008 | 0x00000200)
     except OSError:
         script.unlink(missing_ok=True)
         raise
-    return "Update verified and scheduled. Exit Eirene, then restart after the executable is replaced."
+    return ("Update verified and scheduled. Close all Eirene processes, then wait a few seconds before restarting. "
+            f"If replacement fails, see {error}. The previous version is backed up at {backup}.")

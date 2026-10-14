@@ -183,19 +183,63 @@ async def test_command_check_does_not_download(monkeypatch):
 
 
 def test_windows_helper_waits_retries_and_preserves_backup(tmp_path, monkeypatch):
-    pending = tmp_path / "pending's.exe"
+    pending = tmp_path / "pending's-é.exe"
     target = tmp_path / "eirene.exe"
     pending.write_bytes(b"new")
     spawn = Mock()
     monkeypatch.setattr(updates.subprocess, "Popen", spawn)
     message = updates._windows_install(pending, target)
-    script = pending.with_suffix(".ps1").read_text()
+    script_path = pending.with_suffix(".ps1")
+    assert script_path.read_bytes().startswith(b"\xef\xbb\xbf")
+    script = script_path.read_text(encoding="utf-8-sig")
     assert "Wait-Process" in script and "Get-Process" in script
-    assert "pending''s.exe" in script
-    assert "Copy-Item -LiteralPath $target -Destination $backup" in script
+    assert "pending''s-é.exe" in script
+    assert "[System.IO.File]::Replace($pending, $target, $backup)" in script
+    assert "Copy-Item" not in script and "Move-Item" not in script
+    assert "Out-File -LiteralPath $errorLog" in script
+    assert "if ($attempt -eq 29) { throw }" in script
     assert "$attempt -lt 30" in script
     assert "scheduled" in message
     assert spawn.call_args.args[0][0] == "powershell.exe"
+    assert spawn.call_args.kwargs["cwd"] == str(target.parent)
+    assert str(target.with_suffix(".update-error.txt")) in message
+
+
+def test_windows_helper_launch_failure_cleans_script(tmp_path, monkeypatch):
+    pending = tmp_path / "pending.exe"
+    pending.write_bytes(b"new")
+    monkeypatch.setattr(updates.subprocess, "Popen", Mock(side_effect=OSError("launch failed")))
+    with pytest.raises(OSError, match="launch failed"):
+        updates._windows_install(pending, tmp_path / "eirene.exe")
+    assert not pending.with_suffix(".ps1").exists()
+    assert pending.read_bytes() == b"new"
+
+
+@pytest.mark.skipif(updates.os.name != "nt", reason="native Windows PowerShell replacement")
+def test_windows_helper_replaces_binary_and_existing_backup(tmp_path, monkeypatch):
+    root = tmp_path / "Eirene's-é"
+    root.mkdir()
+    target, pending = root / "eirene.exe", root / "pending.exe"
+    backup = target.with_suffix(".previous.exe")
+    error = target.with_suffix(".update-error.txt")
+    target.write_bytes(b"old")
+    pending.write_bytes(b"new")
+    backup.write_bytes(b"older")
+    error.write_text("stale error")
+    # An absent PID lets the helper run without waiting for the pytest process.
+    monkeypatch.setattr(updates.os, "getpid", lambda: 2147483647)
+    with monkeypatch.context() as patch:
+        patch.setattr(updates.subprocess, "Popen", Mock())
+        updates._windows_install(pending, target)
+    result = updates.subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+         "-File", str(pending.with_suffix(".ps1"))], capture_output=True, timeout=45)
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    assert target.read_bytes() == b"new"
+    assert backup.read_bytes() == b"old"
+    assert not pending.exists()
+    assert not pending.with_suffix(".ps1").exists()
+    assert not error.exists()
 
 
 async def test_typo_alias_dispatches_update(monkeypatch):

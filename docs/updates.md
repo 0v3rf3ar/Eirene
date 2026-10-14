@@ -63,7 +63,10 @@ unchanged. This flow differs from the POSIX installer script's verification.
 
 A frozen POSIX executable is copied to a temporary file beside the installation
 and replaced atomically. Windows uses a helper to wait for the target to unlock
-and preserves a `.previous.exe` backup for recovery. A Python source run only
+and atomically preserves a `.previous.exe` backup for recovery. Close all Eirene
+processes and wait a few seconds before restarting. If replacement fails, the
+helper writes the error to `.update-error.txt` beside the executable and leaves
+the staged update available. A Python source run only
 downloads/verifies the standalone binary; it does not replace the interpreter or
 update the checkout. Startup checks are controlled by
 [configuration](config-file.md#modes-access-and-interface); staging data is listed
