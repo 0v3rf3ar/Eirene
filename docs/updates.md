@@ -9,8 +9,10 @@ checks are separate from the model's tools and execution permissions.
 
 ```text
 /update check
+/update edge check
 ```
 
+The first command checks stable releases; the second includes prereleases.
 The result reports whether a newer release is available. Startup checks are
 enabled by default. Set `check_updates` to `false` in configuration, or set
 `EIRENE_NO_UPDATE_CHECK` before launch, to disable automatic startup checks.
@@ -24,6 +26,18 @@ enabled by default. Set `check_updates` to `false` in configuration, or set
 Eirene checks the release, downloads the matching asset, and attempts installation.
 Follow the result's restart instructions. If an update is already installed or
 scheduled, exit and restart before asking for another update.
+
+`/update` only installs stable releases. To install the newest published version,
+including alpha, beta, and release candidates, use:
+
+```text
+/update edge
+```
+
+Edge compares version numbers across published releases and never installs a
+draft or downgrades your installed version. A newer stable release can also be
+selected by edge. This choice applies to that command only; startup checks remain
+stable. Both channels require a matching binary and verified checksums.
 
 An active standalone process continues running its existing program until restart.
 On Windows, replacing an in-use executable can require exit. Download, verification,

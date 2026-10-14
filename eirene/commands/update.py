@@ -10,22 +10,27 @@ from ..core import updates
 from . import register
 
 
-@register("update", "check GitHub and download/install the latest release", "/update [check]")
+@register("update", "install the latest stable release, or use edge for prereleases", "/update [edge] [check]")
 async def run(app, args: str) -> None:
-    if args not in {"", "check"}:
-        app.say("usage: /update [check]", "warn")
+    args = args.strip()
+    if args not in {"", "check", "edge", "edge check", "check edge"}:
+        app.say("usage: /update [edge] [check]", "warn")
         return
+    edge = "edge" in args.split()
+    check_only = "check" in args.split()
+    command = "/update edge" if edge else "/update"
+    channel = "edge" if edge else "stable"
     if getattr(app, "_update_pending", False):
         app.say("An update is already installed or scheduled. Exit and restart Eirene.")
         return
-    app.say("Checking GitHub for a new Eirene release…")
+    app.say(f"Checking GitHub for a new Eirene {channel} release…")
     try:
-        release = await updates.check()
+        release = await updates.check(edge=edge)
         if release is None:
-            app.say(f"Eirene {__version__} is up to date.")
+            app.say(f"Eirene {__version__} is up to date on the {channel} channel.")
             return
-        if args == "check":
-            app.say(f"Eirene {release.version} is available (current: {__version__}). Run /update to install it.")
+        if check_only:
+            app.say(f"Eirene {release.version} is available (current: {__version__}). Run {command} to install it.")
             return
         app.say(f"Downloading Eirene {release.version}…")
         last_percent = -10

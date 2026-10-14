@@ -78,6 +78,10 @@ TOOL_ICONS = {
     "edit_file": ICONS["edit"],
     "list_dir": ICONS["dir"],
     "glob": ICONS["search"],
+    "web_search": "🌐︎",
+    "WebSearch": "🌐︎",
+    "web_fetch": "🌐︎",
+    "WebFetch": "🌐︎",
     "run_command": ICONS["shell"],
 }
 

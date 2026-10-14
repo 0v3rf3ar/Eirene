@@ -70,8 +70,10 @@ when a short alias is ambiguous. Built-in names always take precedence.
 | `/prompt-suggest [on\|off]` | Show controls or set optional follow-up suggestions. | [Suggestions](prompt-suggestions.md) |
 | `/keybindings` | Show keyboard shortcuts. | [Terminal interface](terminal-interface.md) |
 | `/help` | Show commands, shortcuts, and usage tips. | [Terminal interface](terminal-interface.md) |
-| `/update check` | Check for a newer release without installing it. | [Updates](updates.md) |
-| `/update` | Download and install the latest available release. | [Updates](updates.md) |
+| `/update check` | Check for a newer stable release without installing it. | [Updates](updates.md) |
+| `/update` | Download and install the latest stable release. | [Updates](updates.md) |
+| `/update edge check` | Check for a newer release, including prereleases. | [Updates](updates.md) |
+| `/update edge` | Download and install the newest release, including prereleases. | [Updates](updates.md) |
 | `/exit` | Close Eirene. | [Sessions](sessions.md) |
 
 ## Launch options

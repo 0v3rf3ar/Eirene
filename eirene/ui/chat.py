@@ -482,7 +482,9 @@ class ToolBlock(Block):
         mark = art.icon("ok") if self.finished and not self.is_error else (
             art.icon("dot") if self.is_error else art.icon("clock"))
         body.append(f"{mark} ")
-        body.append(f"{art.tool_icon(self.tool)} ", style="dim")
+        tool_icon = art.tool_icon(self.tool)
+        spacing = "  " if tool_icon == "🌐︎" else " "
+        body.append(f"{tool_icon}{spacing}", style="dim")
         if self.tool in FILE_TOOLS and self.tool not in {"write_file", "edit_file"} \
                 and self.label:
             body.append(f"{art.file_icon(self.label)} ", style="dim")

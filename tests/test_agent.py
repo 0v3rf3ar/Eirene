@@ -396,6 +396,29 @@ async def test_aside_uses_no_tools(workdir):
     assert provider.tools_seen[0] is None
 
 
+@pytest.mark.parametrize("has_history", [False, True])
+async def test_aside_receives_eirene_identity_even_with_an_empty_chat(workdir, has_history):
+    provider = Script([TextDelta("Eirene"), Done("stop")])
+    runner = build(workdir, provider)
+    try:
+        if has_history:
+            await drive(runner, "hello")
+        before = [dict(message) for message in runner.session.messages]
+        [chunk async for chunk in runner.aside("who are you?")]
+
+        system = provider.systems[-1]
+        assert "You are Eirene" in system
+        assert "identity are always Eirene" in system
+        assert "which model or provider" in system
+        assert "You have no\ntools here" in system
+        assert "Sandbox:" not in system
+        assert provider.tools_seen[-1] is None
+        assert provider.histories[-1] == before + [{"role": "user", "content": "who are you?"}]
+        assert [dict(message) for message in runner.session.messages] == before
+    finally:
+        runner.session.close()
+
+
 async def _answer(value):
     return value
 

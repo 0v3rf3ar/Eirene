@@ -26,6 +26,7 @@ from . import paths
 
 REPOSITORY = "0v3rf3ar/Eirene"
 API_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
+RELEASES_URL = f"https://api.github.com/repos/{REPOSITORY}/releases"
 MAX_DOWNLOAD = 300 * 1024 * 1024
 MAX_BINARY = 800 * 1024 * 1024
 
@@ -48,22 +49,55 @@ def _asset_url(url: str, tag: str) -> str:
     return url
 
 
-async def check(client: httpx.AsyncClient | None = None, *, current: str = __version__) -> Release | None:
-    """Return a newer stable release; prereleases and drafts never replace it."""
+async def check(client: httpx.AsyncClient | None = None, *, current: str = __version__,
+                edge: bool = False) -> Release | None:
+    """Return a newer stable release, or the highest published version for edge."""
     if client is None:
         async with httpx.AsyncClient(timeout=8, follow_redirects=True) as owned:
-            return await check(owned, current=current)
+            return await check(owned, current=current, edge=edge)
     try:
-        response = await client.get(API_URL, headers={"Accept": "application/vnd.github+json"})
-        response.raise_for_status()
-        body = response.json()
+        headers = {"Accept": "application/vnd.github+json"}
+        if edge:
+            body = None
+            newest = Version(current)
+            page = 1
+            while True:
+                response = await client.get(RELEASES_URL, headers=headers,
+                                            params={"per_page": 100, "page": page})
+                response.raise_for_status()
+                releases = response.json()
+                if not isinstance(releases, list):
+                    raise UpdateError("invalid release metadata")
+                for candidate in releases:
+                    if not isinstance(candidate, dict) or candidate.get("draft"):
+                        continue
+                    tag = candidate.get("tag_name", "")
+                    if not isinstance(tag, str) or not re.fullmatch(r"v?\d+\.\d+\.\d+[A-Za-z0-9.+-]*", tag):
+                        continue
+                    try:
+                        version = Version(tag.removeprefix("v"))
+                    except InvalidVersion:
+                        continue
+                    if version > newest:
+                        body, newest = candidate, version
+                if not releases or "next" not in response.links:
+                    break
+                page += 1
+            if body is None:
+                return None
+        else:
+            response = await client.get(API_URL, headers=headers)
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            body = response.json()
         if not isinstance(body, dict):
             raise UpdateError("invalid release metadata")
         tag = body.get("tag_name", "")
         if not isinstance(tag, str) or not re.fullmatch(r"v?\d+\.\d+\.\d+[A-Za-z0-9.+-]*", tag):
             raise UpdateError("release has an invalid version tag")
         version = Version(tag.removeprefix("v"))
-        if body.get("draft") or body.get("prerelease") or version.is_prerelease or version <= Version(current):
+        if body.get("draft") or (not edge and (body.get("prerelease") or version.is_prerelease)) or version <= Version(current):
             return None
         assets = {}
         for item in body.get("assets", []):

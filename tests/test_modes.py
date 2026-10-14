@@ -67,6 +67,16 @@ def test_each_mode_describes_itself():
         assert mode.label.endswith("mode")
 
 
+@pytest.mark.parametrize("platform,expected", [
+    ("win32", "⏸\ufe0f"), ("linux", "⏸"), ("darwin", "⏸"),
+])
+def test_manual_icon_presentation_is_platform_specific(monkeypatch, platform, expected):
+    monkeypatch.setattr("eirene.core.modes.sys.platform", platform)
+    assert Mode.MANUAL.icon == expected
+    assert Mode.AUTO.icon == "⚡︎"
+    assert Mode.PLAN.icon == "☷"
+
+
 def test_read_only_commands_need_no_approval():
     from eirene.tools import registry as tools
 
