@@ -60,7 +60,8 @@ def test_sixel_and_ordinary_terminal_detection(monkeypatch):
     monkeypatch.setattr(companion_mod, "sys", SimpleNamespace(
         __stdout__=SimpleNamespace(isatty=lambda: True)))
     monkeypatch.setattr(widgets, "Image", widgets.SixelImage)
-    assert prepare_renderer({}) is widgets.SixelImage
+    from eirene.ui.sixel_portrait import SixelPortrait
+    assert prepare_renderer({}) is SixelPortrait
     monkeypatch.setattr(widgets, "Image", widgets.HalfcellImage)
     assert prepare_renderer({}) is None
 
@@ -84,6 +85,102 @@ def test_blink_keeps_same_silhouette_size_and_position():
     blink = portrait_frame("idle-blink.png")
     assert idle.getchannel("A").getbbox() == blink.getchannel("A").getbbox()
     assert idle.tobytes() != blink.tobytes()
+
+
+def test_sixel_encoder_skips_transparent_pixels_including_last_band():
+    from PIL import Image
+    from eirene.ui.sixel_portrait import transparent_sixels
+
+    image = Image.new("RGBA", (4, 8), (0, 0, 0, 0))
+    image.putpixel((1, 0), (255, 0, 0, 255))
+    image.putpixel((1, 5), (255, 0, 0, 255))
+    image.putpixel((2, 7), (255, 0, 0, 255))
+    data = transparent_sixels(image)
+    assert data.startswith('\x1bP0;1;0q"1;1;4;8')
+    assert ";2;100;0;0" in data
+    assert ";2;0;0;0" not in data, "transparent black must never get a color register"
+    assert "?`$-" in data, "rows 0 and 5 are painted; other bits stay transparent"
+    assert "??A$\x1b\\" in data, "partial last band paints only row 7"
+
+
+@pytest.mark.parametrize("platform,terminal,inline,expected", [
+    ("win32", "windows-terminal", False, True),
+    ("win32", "", False, False),
+    ("linux", "windows-terminal", False, False),
+    ("win32", "windows-terminal", True, False),
+])
+def test_windows_terminal_updates_enable_sync(monkeypatch, platform, terminal, inline, expected):
+    from types import SimpleNamespace
+    from textual.app import App
+    from textual._compositor import CompositorUpdate
+    import eirene.app as app_mod
+
+    monkeypatch.setattr(app_mod, "sys", SimpleNamespace(platform=platform))
+    monkeypatch.setenv("WT_SESSION", terminal)
+    calls = []
+    monkeypatch.setattr(App, "_display", lambda self, screen, update: calls.append(self._sync_available))
+    app = app_mod.Eirene.__new__(app_mod.Eirene)
+    app._driver = SimpleNamespace(is_inline=inline)
+    app._sync_available = False
+    app_mod.Eirene._display(app, SimpleNamespace(query=lambda widget: []), CompositorUpdate())
+    assert calls == [expected]
+
+
+async def test_sixel_overlay_survives_typing_blinks_resize_and_disable(workdir, monkeypatch):
+    from types import SimpleNamespace
+    from textual.app import App
+    from eirene.ui.sixel_portrait import PortraitUpdate, SixelPortrait
+    import eirene.app as app_mod
+    from test_tui import start
+
+    frames = []
+    original_display = App._display
+
+    def capture(self, screen, renderable):
+        if isinstance(renderable, PortraitUpdate):
+            frames.append(renderable.render_segments(self.console))
+        original_display(self, screen, renderable)
+
+    monkeypatch.setattr(app_mod, "prepare_renderer", lambda config: SixelPortrait)
+    monkeypatch.setattr(App, "_display", capture)
+    app, pilot, context = await start(workdir, companion=True)
+    try:
+        companion = app.query_one(Companion)
+        portrait = companion._portrait
+        assert not companion.visible and not portrait.visible
+        initial = portrait.terminal_sequence()
+        assert '\x1bP0;1;0q' in initial and initial.endswith("\x1b8")
+        cached = portrait._encoded
+        for key in "hello":
+            await pilot.press(key)
+            assert portrait.terminal_sequence() == initial
+            assert portrait._encoded is cached
+            assert not portrait.children, "no Sixel implementation is recomposed"
+        assert app.prompt.value == "hello"
+        assert any('\x1bP0;1;0q' in frame for frame in frames)
+        assert portrait._placement_region.bottom == app.query("Composer Rule").first().region.y
+        region = portrait._placement_region
+        update = SimpleNamespace(spans=[(region.bottom + 1, 0, app.size.width)],
+                                 render_segments=lambda console: "text update")
+        assert PortraitUpdate(update, portrait).render_segments(app.console) == "text update"
+        update.spans = [(region.bottom - 1, region.x, region.right)]
+        assert '\x1bP0;1;0q' in PortraitUpdate(update, portrait).render_segments(app.console)
+        companion._tick = 8
+        companion.refresh_companion()
+        assert companion._drawn == "idle-blink.png"
+        assert portrait.terminal_sequence() != initial
+        assert companion._portrait is portrait
+        await pilot.resize_terminal(64, 24)
+        await pilot.pause()
+        assert portrait._placement_region.bottom == app.query("Composer Rule").first().region.y
+        app.config.set("companion", False)
+        companion.refresh_companion()
+        await pilot.pause()
+        assert portrait.terminal_sequence() == ""
+        assert not portrait._placed
+        assert '\x1bP0;1;0q' not in frames[-1]
+    finally:
+        await context.__aexit__(None, None, None)
 
 
 async def test_sleep_wake_reduced_motion_and_compact_layout(workdir, monkeypatch):

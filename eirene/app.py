@@ -16,6 +16,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from .ui.shortcuts import SHORTCUTS
 from textual.css.query import NoMatches
+from textual._compositor import CompositorUpdate
 
 from . import __version__, commands
 from .core import agent as agent_mod
@@ -124,6 +125,19 @@ class Eirene(App):
         self._last_suggestion_exchange = None
 
     # layout
+
+    def _display(self, screen, renderable):
+        # Textual's Windows driver does not probe synchronized output. Windows
+        # Terminal supports it; older versions safely ignore the private mode.
+        if (sys.platform == "win32" and os.environ.get("WT_SESSION")
+                and self._driver is not None and not self._driver.is_inline):
+            self._sync_available = True
+        from .ui.sixel_portrait import PortraitUpdate, SixelPortrait
+        if isinstance(renderable, CompositorUpdate):
+            portraits = screen.query(SixelPortrait)
+            if portraits:
+                renderable = PortraitUpdate(renderable, portraits.first())
+        super()._display(screen, renderable)
 
     def compose(self) -> ComposeResult:
         yield Transcript()

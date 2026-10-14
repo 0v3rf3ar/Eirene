@@ -29,6 +29,31 @@ def test_default_icons_need_no_private_font_glyphs():
                for value in values for char in value)
 
 
+def test_windows_emoji_icons_use_consistent_presentation_and_width(monkeypatch):
+    from rich.cells import cell_len
+    from rich.text import Text
+    from eirene.core.modes import Mode
+
+    monkeypatch.setattr("eirene.core.text.sys.platform", "win32")
+    art.set_accessible(False)
+    assert art.icon("manual") == Mode.MANUAL.icon == "⏸\ufe0f"
+    assert Mode.AUTO.icon == "⚡\ufe0f"
+    for name in ("web_search", "web_fetch", "WebSearch", "WebFetch"):
+        assert art.tool_icon(name) == "🌐\ufe0f"
+    # A following border must start after both cells of a color emoji.
+    for glyph in (Mode.MANUAL.icon, Mode.AUTO.icon, art.tool_icon("web_search")):
+        assert cell_len(glyph) == 2
+        text = Text(glyph + " text")
+        text.truncate(8, pad=True)
+        assert text.cell_len == 8
+    art.set_accessible(True)
+    try:
+        assert art.icon("manual") == "M"
+        assert art.tool_icon("web_search").isascii()
+    finally:
+        art.set_accessible(False)
+
+
 def test_reduce_motion_cli_sets_a_one_run_override(monkeypatch, workdir):
     from eirene import __main__ as cli
     import sys

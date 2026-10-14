@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-import sys
+from .text import terminal_icon
 
 from ..tools.registry import EXEC, READ, WRITE
 
@@ -23,9 +23,8 @@ class Mode(str, Enum):
 
     @property
     def icon(self) -> str:
-        # Windows needs an explicit emoji presentation selector for color.
-        manual = "⏸\ufe0f" if sys.platform == "win32" else "⏸"
-        return {"auto": "⚡︎", "manual": manual, "plan": "☷"}[self.value]
+        glyph = {"auto": "⚡︎", "manual": "⏸", "plan": "☷"}[self.value]
+        return glyph if self is Mode.PLAN else terminal_icon(glyph)
 
     @property
     def blurb(self) -> str:

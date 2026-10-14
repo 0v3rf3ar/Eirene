@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import unicodedata
 
 _SEQUENCES = re.compile(
@@ -9,6 +10,13 @@ _SEQUENCES = re.compile(
     r"|\x1b[PX^_].*?(?:\x1b\\|$)"
     r"|(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]"
     r"|\x1b[@-_]", re.DOTALL)
+
+
+def terminal_icon(glyph: str) -> str:
+    """Use emoji presentation consistently for emoji icons on Windows."""
+    if sys.platform == "win32":
+        return glyph.rstrip("\ufe0e\ufe0f") + "\ufe0f"
+    return glyph
 
 
 def safe_text(text: str, *, tabs: bool = True) -> str:

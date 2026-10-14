@@ -71,9 +71,9 @@ def test_each_mode_describes_itself():
     ("win32", "⏸\ufe0f"), ("linux", "⏸"), ("darwin", "⏸"),
 ])
 def test_manual_icon_presentation_is_platform_specific(monkeypatch, platform, expected):
-    monkeypatch.setattr("eirene.core.modes.sys.platform", platform)
+    monkeypatch.setattr("eirene.core.text.sys.platform", platform)
     assert Mode.MANUAL.icon == expected
-    assert Mode.AUTO.icon == "⚡︎"
+    assert Mode.AUTO.icon == ("⚡\ufe0f" if platform == "win32" else "⚡︎")
     assert Mode.PLAN.icon == "☷"
 
 

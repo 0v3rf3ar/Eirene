@@ -31,7 +31,8 @@ def prepare_renderer(config):
         from textual_image.widget import Image, SixelImage, TGPImage
         # Avoid a large, blurry character-cell picture on ordinary terminals.
         if Image is SixelImage:
-            return SixelImage
+            from .sixel_portrait import SixelPortrait
+            return SixelPortrait
         # The library's automatic Kitty widget is a sibling of TGPImage,
         # with the same renderable; it is not TGPImage itself.
         if getattr(Image, "_Renderable", None) is TGPImage._Renderable:

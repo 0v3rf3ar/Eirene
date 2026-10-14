@@ -6,6 +6,7 @@ import math
 import random
 
 from rich.cells import cell_len
+from ..core.text import terminal_icon
 
 BANNERS = [
     r"""
@@ -134,7 +135,8 @@ TIPS = [
 
 def icon(name: str) -> str:
     table = ASCII_ICONS if ACCESSIBLE else ICONS
-    return table.get(name, table["dot"])
+    glyph = table.get(name, table["dot"])
+    return terminal_icon(glyph) if name == "manual" and not ACCESSIBLE else glyph
 
 
 def set_accessible(enabled: bool) -> None:
@@ -147,7 +149,8 @@ def tool_icon(name: str) -> str:
     if ACCESSIBLE:
         return {"read_file": "R", "write_file": "W", "edit_file": "E",
                 "list_dir": "D", "glob": "S", "run_command": "$"}.get(canonical, "i")
-    return TOOL_ICONS.get(canonical, ICONS["info"])
+    glyph = TOOL_ICONS.get(canonical, ICONS["info"])
+    return terminal_icon(glyph) if glyph == "🌐︎" else glyph
 
 
 def file_icon(path: str) -> str:
