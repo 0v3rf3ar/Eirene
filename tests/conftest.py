@@ -24,6 +24,7 @@ def eirene_home(tmp_path, monkeypatch):
     # Visual regression tests explicitly render true-colour output. Do not let
     # the developer's terminal preference silently disable those colours.
     monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("EIRENE_REDUCE_MOTION", raising=False)
     monkeypatch.setenv(paths.ENV_HOME, str(home))
     monkeypatch.setenv("EIRENE_NO_UPDATE_CHECK", "1")
     paths.ensure_tree()

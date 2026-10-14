@@ -44,6 +44,7 @@ from .ui.chat import (AnswerBlock, ArtBlock, BackToBottom, ChangeBlock, CommandB
                       ToolBlock, Transcript, UserBlock)
 from .ui.complete import SlashMenu
 from .ui.composer import Composer, ModeLine, Prompt
+from .ui.companion import Companion, prepare_renderer
 from .ui.permission import PermissionBar
 from .ui.picker import Picker
 from .ui.processes import ProcessBar
@@ -97,6 +98,7 @@ class Eirene(App):
         if os.environ.get("EIRENE_REDUCE_MOTION"):
             self.config.set("reduce_motion", True)
         art.set_accessible(bool(self.config.get("accessible_icons", False)))
+        self._companion_renderer = prepare_renderer(self.config)
         self.runtime_logger = runtime_logging.configure(self.config)
         self.session = Session.create(self.sandbox.root, resume or None)
         self._resume_id = resume
@@ -130,6 +132,7 @@ class Eirene(App):
         yield AsidePanel()
         yield Composer(Picker(), PermissionBar(), SlashMenu(), StatusLine(),
                        TaskList(self.sandbox.root, self.session.id))
+        yield Companion(self._companion_renderer)
         yield StartupSplash()
 
     @property
@@ -409,6 +412,7 @@ class Eirene(App):
 
     def on_prompt_draft(self, message: Prompt.Draft) -> None:
         """Keep the slash menu in step with the draft."""
+        self.query_one(Companion).wake()
         if message.text:
             self.clear_prompt_suggestion()
         if not message.suggest:
@@ -438,6 +442,7 @@ class Eirene(App):
 
     def on_key(self, event: events.Key) -> None:
         """Any printable key types into the input."""
+        self.query_one(Companion).wake()
         if event.key != "escape":
             self._idle_escape_at = 0.0
         if self.picker.waiting or self.permission.waiting:
@@ -587,9 +592,12 @@ class Eirene(App):
         rows = [(str(option), str(option), "") for option in options]
         rows.append((tool_registry.CHAT_OPTION, "chat about this",
                      "type an answer instead"))
+        companion = self.query_one(Companion)
+        companion.begin_question()
         try:
             return await self.picker.choose(question, rows)
         finally:
+            companion.end_question()
             self.prompt.focus()
 
     async def _approve(self, name: str, label: str, preview: str,
@@ -607,10 +615,13 @@ class Eirene(App):
         title = f"run {label}" if name == "run_command" else f"{name} {label}"
         if name == "request_full_access":
             title = "allow full host access for this response"
+        companion = self.query_one(Companion)
+        companion.begin_question()
         try:
             return await self.permission.ask(
                 title, reason, edits=name in agent_mod.CHANGE_TOOLS)
         finally:
+            companion.end_question()
             self.prompt.focus()
 
     # the turn
@@ -620,6 +631,7 @@ class Eirene(App):
                         files: list[dict] | None = None) -> None:
         self.clear_prompt_suggestion()
         self.status.start()
+        self.query_one(Companion).start_turn()
         self.mark_busy(True)
         answer: AnswerBlock | None = None
         reply_text = ""
@@ -679,7 +691,8 @@ class Eirene(App):
                         ChangeBlock(event.label, event.diff,
                                     self._change_action(event.label)), live=True)
                 elif isinstance(event, agent_mod.ToolStarted):
-                    self.status.start_tool(event.id)
+                    self.status.start_tool(event.id, event.kind)
+                    self.query_one(Companion).refresh_companion()
                     self.clear_prompt_suggestion()
                     suggestion_started = False
                     answer = None
@@ -742,6 +755,8 @@ class Eirene(App):
                 elif isinstance(event, agent_mod.TurnDone):
                     self.transcript.settle()
                     self.status.stop(self._turn_note(event))
+                    self.query_one(Companion).finish_turn(
+                        event.status == "completed" and questions.wants_an_answer(reply_text))
                     self._announce_done(event, answer)
                     self._name_the_session(record_text or text, answer)
                     self._offer_choices(answer)
@@ -755,6 +770,7 @@ class Eirene(App):
             try:
                 self.transcript.settle()
                 self.status.stop("stopped")
+                self.query_one(Companion).finish_turn(False)
                 await self.push(NoticeBlock("stopped", "warn"))
             except NoMatches:
                 pass
@@ -1034,6 +1050,12 @@ class Eirene(App):
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
         """Right click copies the selection."""
+        companion = self.query_one(Companion)
+        if event.button == 1 and companion.poke_at(event.screen_x, event.screen_y):
+            event.stop()
+            event.prevent_default()
+            return
+        companion.wake()
         if event.button != 3:
             return
         event.stop()

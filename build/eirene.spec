@@ -12,9 +12,15 @@ datas += extra_datas
 binaries += extra_binaries
 hiddenimports += extra_hidden
 
+image_datas, image_binaries, image_hidden = collect_all("textual_image")
+datas += image_datas
+binaries += image_binaries
+hiddenimports += image_hidden
+
 datas += [(str(ROOT / "pyproject.toml"), ".")]
 datas += [(str(ROOT / "img" / "Eirene.png"), "img")]
 datas += [(str(ROOT / "eirene" / "ui" / "logo.gray.zlib"), "eirene/ui")]
+datas += [(str(ROOT / "eirene" / "ui" / "companion_assets"), "eirene/ui/companion_assets")]
 
 hiddenimports += [
     "eirene.commands.agents",
@@ -51,7 +57,7 @@ hiddenimports += collect_submodules("keyring.backends")
 # Python 3.12+ gets distutils from setuptools. PyInstaller aliases those modules
 # while analyzing Windows dependencies, so neither package can be excluded.
 excludes = ["tkinter", "unittest", "pydoc_data", "test",
-            "pip", "PIL", "numpy", "pytest"]
+            "pip", "numpy", "pytest"]
 
 analysis = Analysis(
     [str(ROOT / "build" / "entry.py")],

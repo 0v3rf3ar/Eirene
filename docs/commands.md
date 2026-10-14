@@ -65,6 +65,7 @@ when a short alias is ambiguous. Built-in names always take precedence.
 | `/schedule [prompt]` | Create a task through an interactive schedule and confirmation flow. | [Scheduling](scheduling.md) |
 | `/tasks` | List tasks, run one now, toggle it, inspect history, or remove it. | [Scheduling](scheduling.md) |
 | `/theme [name]` | Pick or apply an interface theme. | [Appearance](appearance.md) |
+| `/companion [on\|off]` | Toggle the optional animated companion. Listed only in image-capable terminals. | [Appearance](appearance.md) |
 | `/notification [on\|off\|test]` | Toggle, set, or test desktop notifications. | [Notifications](notifications.md) |
 | `/prompt-suggest [on\|off]` | Show controls or set optional follow-up suggestions. | [Suggestions](prompt-suggestions.md) |
 | `/keybindings` | Show keyboard shortcuts. | [Terminal interface](terminal-interface.md) |

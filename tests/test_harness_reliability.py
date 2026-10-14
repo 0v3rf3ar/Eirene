@@ -197,7 +197,8 @@ async def test_sandbox_command_is_status_only(workdir):
 def test_old_configs_migrate_to_isolation():
     from eirene.core.config import _merge_defaults
     config = _merge_defaults({"version": 2, "execution_isolation": "none", "isolate_network": False})
-    assert config["version"] == 3 and config["execution_isolation"] == "auto"
+    from eirene.core.config import CONFIG_VERSION
+    assert config["version"] == CONFIG_VERSION and config["execution_isolation"] == "auto"
     assert config["isolate_network"] and config["auto_compact"]
 
 

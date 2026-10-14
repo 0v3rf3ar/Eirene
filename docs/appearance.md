@@ -49,6 +49,12 @@ can also set `EIRENE_REDUCE_MOTION` before launching. Reduced motion uses a stat
 activity marker rather than the animated turn indicator; waiting and work status
 are still displayed.
 
+The Eirene companion above the input also stays still with reduced motion,
+while her expression continues to follow thinking, writing, and idle activity.
+The companion is disabled by default. Use `/companion on` to enable her or
+`/companion off` to hide her. The command is listed only in image-capable
+terminals, and the preference is saved in configuration.
+
 `accessible_icons: true` is another configuration preference for accessible icon
 presentation. See [configuration](configuration.md) for editing these settings.
 

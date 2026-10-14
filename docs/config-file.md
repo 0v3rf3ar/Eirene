@@ -70,7 +70,7 @@ model identifiers, or every nested Eirene field.
    The next save can replace it; preserve both files before recovery.
 3. Old versions are migrated in memory, then built-in defaults are copied and
    top-level saved keys are overlaid. Nested objects are not recursively merged.
-4. Selected types and ranges are normalized. The resulting schema version is `4`.
+4. Selected types and ranges are normalized. The resulting schema version is `5`.
 5. A save writes indented JSON to a temporary `.config-*.tmp` file beside the
    destination, flushes and syncs it, then replaces the destination atomically.
    On POSIX, the saved config is mode `0600` and its parent is tightened to `0700`.
@@ -80,7 +80,7 @@ Migration does not rewrite the file until a save occurs. Version 1/2 migrations
 restore automatic isolation, network isolation, and automatic compaction defaults.
 Version 4 replaces the old 60000-token default threshold with model-aware
 budgeting (`context_warning: 0`), preserving other custom thresholds. To keep
-60000 intentionally, set that value with `version: 4`.
+60000 intentionally, set that value with `version: 5`.
 Setting `version` to an older number can therefore change those values on load.
 Do not use this field to select a program release.
 
@@ -92,12 +92,15 @@ empty objects if their top-level value is not an object.
 
 ## Complete default file
 
-These are the defaults for a new configuration at schema version 4. Runtime
+Version 5 disables the previously automatic companion on migration; use
+`/companion on` to opt in again. Later launches retain that explicit choice.
+
+These are the defaults for a new configuration at schema version 5. Runtime
 choices, platform behavior, and provider-specific limits can narrow them.
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "provider": null,
   "model": null,
   "mode": "manual",
@@ -129,6 +132,7 @@ choices, platform behavior, and provider-specific limits can narrow them.
   "model_context_limits": {},
   "model_costs": {},
   "reduce_motion": false,
+  "companion": false,
   "accessible_icons": false,
   "credential_store": "file",
   "search_api": {},
@@ -211,10 +215,11 @@ layers are independent: changing one does not replace credentials for another.
 | `notifications` | `false` | Desktop notifications; `/notification` controls it. |
 | `prompt_suggest` | `false` | Additional model requests for follow-up drafts; `/prompt-suggest` controls it. |
 | `reduce_motion` | `false` | Static activity markers. `--reduce-motion` or a nonempty `EIRENE_REDUCE_MOTION` also enables it. |
+| `companion` | `false` | Optional animated companion above the input. `/companion [on|off]` toggles and saves this preference in graphics-capable terminals. Hidden in small windows and when graphics are unavailable. |
 | `accessible_icons` | `false` | Alternative icon presentation. |
 | `check_updates` | `true` | Startup release checks. A nonempty `EIRENE_NO_UPDATE_CHECK` skips these checks; `/update check` remains explicit. |
 
-`isolate_network`, `auto_compact`, `reduce_motion`, `seasonal_effects`, and `accessible_icons` are
+`isolate_network`, `auto_compact`, `reduce_motion`, `companion`, `seasonal_effects`, and `accessible_icons` are
 converted with Python boolean truthiness on load. Other boolean preferences are
 not all normalized; consistently use JSON booleans. For the actual execution
 boundary and temporary host grants, see [permissions](harness.md).

@@ -34,6 +34,10 @@ Up and Down recall previous prompts when you are at the corresponding edge of
 the input. In a multiline draft, they first move through its lines. Secret input
 is masked and excluded from ordinary prompt history.
 
+The terminal controls the font for the entire interface. To use Courier New,
+select it in your terminal's font settings; Eirene cannot set a separate font
+for the input field.
+
 Type `/` to browse commands. Up and Down select a menu item, Tab completes it
 without running it, and Enter accepts it. A command that needs arguments lets you
 supply them before submitting the task. Escape closes the active popup.
@@ -77,6 +81,28 @@ See [running commands](processes.md).
 The live status indicator can show model reasoning or waiting activity without
 adding that text to the saved conversation. Reduced-motion settings keep the
 status readable with a static marker.
+
+The optional Eirene companion starts disabled. `/companion` toggles her silently;
+`/companion on` and `/companion off` set and save the preference explicitly.
+The command appears in the slash menu and help only in image-capable terminals.
+When enabled, she sits on the right above the input. She uses her laptop
+while thinking, working, or writing files. The question pose appears when she
+asks you something or needs confirmation. Otherwise she rests with a neutral
+expression. Her picture overlays the right edge of the interface, anchored to
+the input border, so the composer and status keep their usual positions.
+After a minute without attention while idle or waiting for you,
+she falls asleep;
+typing or clicking wakes her. She stays anchored to the input border and blinks
+occasionally in terminals supporting
+Kitty graphics or Sixel. On other terminals the companion is hidden. The companion
+hides in windows smaller than 48 columns or 20 rows to leave room for input.
+Set `companion` to `false` in configuration to hide her. `--reduce-motion`
+keeps the current expression still; `--no-color` and accessible icons hide her.
+
+Click her to get an annoyed reaction. Three clicks close together make her
+furious. Angry lasts one second and furious lasts 1.3 seconds after the latest
+click, then she returns to her current activity.
+Clicks outside the character keep their usual behavior.
 
 ## Steer or stop an active task
 

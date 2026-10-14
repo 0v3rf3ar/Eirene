@@ -39,11 +39,12 @@ class Script:
         return ["test-model"]
 
 
-async def start(workdir, provider=None, size=(100, 32), resume=""):
+async def start(workdir, provider=None, size=(100, 32), resume="", companion=False):
     app = Eirene(workdir, resume)
     # Keep general UI expectations independent of the machine's calendar.
     # Snowfall and its hidden control are exercised in test_snow.py.
     app.config.set("seasonal_effects", False)
+    app.config.set("companion", companion)
     context = app.run_test(size=size)
     pilot = await context.__aenter__()
     await pilot.pause()
@@ -3791,7 +3792,8 @@ async def test_quick_menu_shortcuts_preserve_the_draft(workdir):
         await pilot.press("escape")
         await pilot.press("f1")
         await pilot.pause()
-        menu = "".join(content(b) for b in app.transcript.children)
+        assert app.aside.open
+        menu = content(app.aside.body)
         assert "/keybindings" in menu and "tips" in menu
         assert app.prompt.value == "unfinished draft"
         await pilot.press("ctrl+p")

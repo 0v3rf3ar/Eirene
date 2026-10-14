@@ -12,7 +12,7 @@ from typing import Any
 from .errors import ConfigError
 from . import paths
 
-CONFIG_VERSION = 4
+CONFIG_VERSION = 5
 
 DEFAULTS: dict[str, Any] = {
     "version": CONFIG_VERSION,
@@ -47,6 +47,7 @@ DEFAULTS: dict[str, Any] = {
     "model_context_limits": {},
     "model_costs": {},
     "reduce_motion": False,
+    "companion": False,
     "accessible_icons": False,
     "credential_store": "file",
     "search_api": {},
@@ -268,6 +269,7 @@ def _merge_defaults(data: dict[str, Any]) -> dict[str, Any]:
             merged[key] = {}
     merged["auto_compact"] = bool(merged.get("auto_compact", False))
     merged["reduce_motion"] = bool(merged.get("reduce_motion", False))
+    merged["companion"] = bool(merged.get("companion", False))
     merged["accessible_icons"] = bool(merged.get("accessible_icons", False))
     merged["seasonal_effects"] = bool(merged.get("seasonal_effects", True))
     if merged.get("mode") not in VALID_MODES:
@@ -314,6 +316,10 @@ def _migrate(data: dict[str, Any]) -> dict[str, Any]:
         if migrated.get("context_warning") == 60000:
             migrated["context_warning"] = 0
         version = 4
+    if version < 5:
+        # Earlier builds enabled the companion implicitly. Require a fresh opt-in.
+        migrated["companion"] = False
+        version = 5
     migrated["version"] = min(max(version, 1), CONFIG_VERSION)
     return migrated
 

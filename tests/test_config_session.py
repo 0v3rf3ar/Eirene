@@ -9,6 +9,15 @@ import pytest
 
 from eirene.core import paths
 from eirene.core.config import CONFIG_VERSION, Config
+
+
+def test_companion_requires_opt_in_after_migrating_automatic_default():
+    paths.config_file().write_text(json.dumps({"version": 4, "companion": True}))
+    config = Config.load()
+    assert config.get("companion") is False
+    config.set("companion", True)
+    config.save()
+    assert Config.load().get("companion") is True
 from eirene.core.errors import SessionError
 from eirene.core.session import Session, list_sessions, read_records, replay
 

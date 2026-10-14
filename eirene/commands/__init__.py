@@ -43,7 +43,7 @@ def lookup(name: str, app=None) -> Command | None:
 
 
 def _load() -> None:
-    from . import (agents, btw, clear, compact, connect, exit as exit_cmd, plan, plugins,
+    from . import (agents, btw, clear, compact, companion, connect, exit as exit_cmd, plan, plugins,
                    help as help_cmd, keybindings, mcp, model, notification, schedule, sessions, skills,
                    permissions, review, sandbox, search_api, snow, prompt_suggest, tasks, theme, think, update, usage)  # noqa: F401
 
@@ -84,5 +84,7 @@ def commands(app=None) -> list[Command]:
     visible = sorted(name for name, command in REGISTRY.items() if not command.hidden)
     if app is None or getattr(app.config, "provider", None) != "ollama-local":
         visible = [name for name in visible if name != "think"]
+    if getattr(app, "_companion_renderer", None) is None:
+        visible = [name for name in visible if name != "companion"]
     from .plugin_commands import commands as plugin_commands
     return [REGISTRY[name] for name in visible] + plugin_commands(getattr(app, "config", None))

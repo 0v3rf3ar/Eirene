@@ -469,6 +469,11 @@ class Composer(Container):
         from .processes import ProcessBar
         yield ProcessBar()
 
+    def on_resize(self):
+        from .companion import Companion
+        for companion in self.app.query(Companion):
+            companion.call_after_refresh(companion.position_portrait)
+
     @property
     def prompt(self) -> Prompt:
         return self.query_one(Prompt)

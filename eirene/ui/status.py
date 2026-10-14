@@ -75,6 +75,7 @@ class StatusLine(Static):
         self._last_activity = 0.0
         self._connection_wait = False
         self._active_tools: set[str] = set()
+        self._writing_tools: set[str] = set()
 
     def on_mount(self) -> None:
         self._timer = self.set_interval(TICK, self._refresh)
@@ -85,6 +86,7 @@ class StatusLine(Static):
         self._last_activity = self.started
         self._connection_wait = False
         self._active_tools.clear()
+        self._writing_tools.clear()
         self.thinking = 0.0
         self.input_tokens = 0
         self.output_tokens = 0
@@ -99,6 +101,7 @@ class StatusLine(Static):
         self.phase = ""
         self._connection_wait = False
         self._active_tools.clear()
+        self._writing_tools.clear()
         self.note = note
         self._refresh()
 
@@ -122,13 +125,24 @@ class StatusLine(Static):
         self._connection_wait = True
         self._refresh()
 
-    def start_tool(self, tool_id: str) -> None:
+    def start_tool(self, tool_id: str, kind: str = "") -> None:
         self._active_tools.add(tool_id)
+        if kind == "write":
+            self._writing_tools.add(tool_id)
         self.mark_activity()
 
     def finish_tool(self, tool_id: str) -> None:
         self._active_tools.discard(tool_id)
+        self._writing_tools.discard(tool_id)
         self.mark_activity()
+
+    @property
+    def writing_files(self) -> bool:
+        return bool(self._writing_tools)
+
+    @property
+    def running_tools(self) -> bool:
+        return bool(self._active_tools)
 
     @property
     def shade_level(self) -> int:
