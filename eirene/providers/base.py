@@ -27,7 +27,7 @@ def transient_tls_error(detail: str) -> bool:
         "bad record mac", "bad_record_mac", "bad decrypt", "bad_decrypt",
         "decryption failed", "decrypt_error", "unexpected eof", "unexpected_eof",
         "tls handshake eof", "ssl_error_syscall", "tls alert internal error",
-        "tlsv1 alert internal error"))
+        "tlsv1 alert internal error", "ssl: bad_value"))
 
 
 @dataclass

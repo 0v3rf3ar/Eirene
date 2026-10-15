@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import os
+import ssl
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -562,14 +563,19 @@ def test_previous_empty_response_items_do_not_discard_visible_history():
 
 
 @pytest.mark.parametrize("recover", [True, False])
-async def test_tls_handshake_failure_retries_once(recover):
+@pytest.mark.parametrize("error_type,detail", [
+    (httpx.ConnectError, "[SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC]"),
+    (httpx.ConnectError, "[SSL: BAD_VALUE] bad value (_ssl.c:2580)"),
+    (ssl.SSLError, "[SSL: BAD_VALUE] bad value (_ssl.c:2580)"),
+])
+async def test_tls_handshake_failure_retries_once(recover, error_type, detail):
     provider = ChatGPTPlan()
     save_account(provider.auth)
     requests = []
     def handler(req):
         requests.append(req)
         if len(requests) == 1 or not recover:
-            raise httpx.ConnectError("[SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC]", request=req)
+            raise error_type(detail)
         return httpx.Response(200, text=sse(
             {"type": "response.output_text.delta", "delta": "Recovered"},
             {"type": "response.completed", "response": {"status": "completed", "output": []}}))
@@ -583,14 +589,19 @@ async def test_tls_handshake_failure_retries_once(recover):
     assert len(requests) == 2
 
 
-async def test_tls_failure_after_text_does_not_replay_answer():
+@pytest.mark.parametrize("error_type,detail", [
+    (httpx.ReadError, "SSL: BAD_RECORD_MAC"),
+    (httpx.ReadError, "[SSL: BAD_VALUE] bad value (_ssl.c:2580)"),
+    (ssl.SSLError, "[SSL: BAD_VALUE] bad value (_ssl.c:2580)"),
+])
+async def test_tls_failure_after_text_does_not_replay_answer(error_type, detail):
     provider = ChatGPTPlan()
     save_account(provider.auth)
     requests = []
     class BrokenStream(httpx.AsyncByteStream):
         async def __aiter__(self):
             yield sse({"type": "response.output_text.delta", "delta": "Partial"}).encode()
-            raise httpx.ReadError("SSL: BAD_RECORD_MAC")
+            raise error_type(detail)
     def handler(req):
         requests.append(req)
         return httpx.Response(200, stream=BrokenStream())
@@ -601,3 +612,24 @@ async def test_tls_failure_after_text_does_not_replay_answer():
             events.append(event)
     assert len(requests) == 1
     assert [e.text for e in events if isinstance(e, base.TextDelta)] == ["Partial"]
+
+
+async def test_raw_ssl_error_in_catalog_is_a_provider_error():
+    provider = ChatGPTPlan()
+    save_account(provider.auth)
+    def handler(req):
+        raise ssl.SSLError("[SSL: BAD_VALUE] bad value (_ssl.c:2580)")
+    base.set_transport(httpx.MockTransport(handler))
+    with pytest.raises(ProviderError, match="BAD_VALUE"):
+        await provider.models()
+
+
+async def test_raw_ssl_error_during_refresh_preserves_credentials():
+    auth = ChatGPTAuth()
+    record = save_account(auth, expired=True)
+    def handler(req):
+        raise ssl.SSLError("[SSL: BAD_VALUE] bad value (_ssl.c:2580)")
+    base.set_transport(httpx.MockTransport(handler))
+    with pytest.raises(ProviderError, match="BAD_VALUE"):
+        await auth.access_token()
+    assert auth.account() == record

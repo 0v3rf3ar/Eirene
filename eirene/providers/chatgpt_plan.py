@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 
 import httpx
 
@@ -49,7 +50,7 @@ class ChatGPTPlan(Provider):
                 if not names:
                     raise ProviderError("no models available for this ChatGPT account")
                 return list(dict.fromkeys(names))
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, ssl.SSLError) as exc:
             raise wrap_transport_error(exc, "ChatGPT") from exc
         except (ValueError, AttributeError) as exc:
             raise ProviderError("ChatGPT returned an invalid model catalog") from exc
@@ -187,7 +188,7 @@ class ChatGPTPlan(Provider):
                         elif kind in {"error", "response.failed", "response.incomplete"}:
                             # Do not treat a partial tool call as executable.
                             raise ProviderError("ChatGPT did not complete the response; try again or check your plan usage")
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, ssl.SSLError) as exc:
             raise wrap_transport_error(exc, "ChatGPT") from exc
         if not isinstance(completed, dict) or completed.get("status") != "completed":
             raise ProviderError("ChatGPT response stream ended before completion")

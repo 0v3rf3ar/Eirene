@@ -330,6 +330,10 @@ async def test_retry_notification_does_not_abort_turn(workdir, tmp_path, monkeyp
     ("SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC", None, False),
     ("SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC", "text", True),
     ("SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC", "tool", True),
+    ("SSL: BAD_VALUE", None, True),
+    ("SSL: BAD_VALUE", None, False),
+    ("SSL: BAD_VALUE", "text", True),
+    ("SSL: BAD_VALUE", "tool", True),
     ("certificate verify failed", None, True),
     ("plan usage exceeded", None, True),
 ])
@@ -375,7 +379,8 @@ async def test_terminal_tls_retry_is_silent_bounded_and_preserves_work(
     provider._rpc = server
     provider._thread_id = "thread"
     events = []
-    succeeds = "BAD_RECORD_MAC" in failure and progress is None and recover
+    tls_failure = "BAD_RECORD_MAC" in failure or "SSL: BAD_VALUE" in failure
+    succeeds = tls_failure and progress is None and recover
     async def collect():
         async for event in provider.stream([{"role": "user", "content": "fix it"}], "model"):
             events.append(event)
@@ -386,7 +391,7 @@ async def test_terminal_tls_retry_is_silent_bounded_and_preserves_work(
     else:
         with pytest.raises(ProviderError, match=failure):
             await collect()
-    expected = 2 if "BAD_RECORD_MAC" in failure and progress is None else 1
+    expected = 2 if tls_failure and progress is None else 1
     assert len(server.starts) == expected
     if expected == 2:
         assert server.starts[1]["input"] == server.starts[0]["input"]

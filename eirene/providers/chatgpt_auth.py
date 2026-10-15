@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import secrets
+import ssl
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 import uuid
@@ -222,7 +223,7 @@ class ChatGPTAuth(Provider):
                         or not secrets.compare_digest(str(identity["nonce"]), nonce)):
                     raise AuthError("ChatGPT identity did not match this sign-in")
                 return identity
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, ssl.SSLError) as exc:
             raise AuthError("could not verify ChatGPT identity; try signing in again") from exc
         except (jwt.PyJWTError, ValueError, KeyError, StopIteration, TypeError) as exc:
             raise AuthError("ChatGPT ID-token verification failed") from exc
@@ -240,7 +241,7 @@ class ChatGPTAuth(Provider):
                 if not isinstance(value, dict):
                     raise ValueError()
                 return value
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, ssl.SSLError) as exc:
             raise wrap_transport_error(exc, "ChatGPT sign-in") from exc
         except ValueError as exc:
             raise AuthError("ChatGPT returned an invalid token response") from exc
@@ -297,7 +298,7 @@ class ChatGPTAuth(Provider):
                         response = await client.post(endpoint, data={"token": record["refresh_token"],
                             "token_type_hint": "refresh_token", "client_id": record["client_id"]})
                         confirmed = response.status_code == 200
-                except (httpx.HTTPError, ValueError, KeyError):
+                except (httpx.HTTPError, ssl.SSLError, ValueError, KeyError):
                     confirmed = False
             for field in ("access_token", "refresh_token", "id_token", "scopes", "expires_at"):
                 record.pop(field, None)
