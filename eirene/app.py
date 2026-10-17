@@ -53,6 +53,7 @@ from .ui.status import ContextIndicator, StatusLine
 from .ui.compaction import CompactionProgress
 from .ui.splash import StartupSplash
 from .ui.tasks import TaskList
+from .ui.copy_notice import CopyNotice
 
 TAB_TICK = 0.25
 IDLE_ESCAPE_WINDOW = 2.0
@@ -77,7 +78,7 @@ class Eirene(App):
     CSS = """
     Screen {
         background: $background;
-        layers: base overlay splash;
+        layers: base overlay notification splash;
     }
     """
 
@@ -147,6 +148,7 @@ class Eirene(App):
         yield Composer(Picker(), PermissionBar(), SlashMenu(), StatusLine(),
                        TaskList(self.sandbox.root, self.session.id))
         yield Companion(self._companion_renderer)
+        yield CopyNotice()
         yield StartupSplash()
 
     @property
@@ -192,6 +194,8 @@ class Eirene(App):
     # lifecycle
 
     def on_mount(self) -> None:
+        self._auto_copy_timer = None
+        self.watch(self.screen, "selections", self._queue_auto_copy, init=False)
         for theme in THEMES.values():
             self.register_theme(theme)
         selected = str(self.config.get("theme", "default"))
@@ -235,6 +239,7 @@ class Eirene(App):
     def on_resize(self, event: events.Resize) -> None:
         """Keep the floating window inside a smaller terminal."""
         try:
+            self.query_one(CopyNotice).place(event.size)
             if self.aside.open:
                 self.aside._place(event.size)
                 self.call_after_refresh(self.aside.refresh_body)
@@ -577,7 +582,7 @@ class Eirene(App):
 
     async def ask_choice(self, title: str, options: list[tuple], *,
                          on_highlight=None, selected: str = "",
-                         skill_popup: bool = False) -> str | None:
+                         skill_popup: bool = False, right_hint: bool = False) -> str | None:
         """Pick one option from a list, opening on the one already in use."""
         try:
             if skill_popup:
@@ -595,6 +600,7 @@ class Eirene(App):
                 finally:
                     if self.screen is screen:
                         self.pop_screen()
+            self.picker.right_hint = right_hint
             return await self.picker.choose(title, options,
                                             on_highlight=on_highlight,
                                             selected=selected)
@@ -1043,8 +1049,28 @@ class Eirene(App):
         else:
             self.prompt.focus()
 
-    def action_copy_selection(self, quiet: bool = False) -> None:
+    def _queue_auto_copy(self) -> None:
+        """Wait for a selection to settle before updating the clipboard."""
+        if self._auto_copy_timer is not None:
+            self._auto_copy_timer.stop()
+        self._auto_copy_timer = self.set_timer(
+            0.15, self._auto_copy_selection)
+
+    def _auto_copy_selection(self) -> None:
+        try:
+            self.action_copy_selection(quiet=True, automatic=True)
+        except NoMatches:
+            # A pending selection callback may run while widgets are unmounting.
+            return
+
+    def on_text_area_selection_changed(self, event) -> None:
+        if event.text_area is self.prompt:
+            self._queue_auto_copy()
+
+    def action_copy_selection(self, quiet: bool = False, *, automatic: bool = False) -> None:
         """Copy the editor selection or selected transcript text."""
+        if automatic and self.prompt.has_focus and self.prompt.secret:
+            return
         text = self.prompt.selected_text if self.prompt.has_focus else ""
         if not text:
             try:
@@ -1055,10 +1081,14 @@ class Eirene(App):
             if not quiet:
                 self.say("nothing selected - drag over the text first", "warn")
             return
+        if automatic and text == self.clipboard:
+            return
         self.copy_to_clipboard(text)
         tool = copy_to_system(text)
-        self.screen.clear_selection()
-        if not tool:
+        self.query_one(CopyNotice).show_count(len(text))
+        if not automatic:
+            self.screen.clear_selection()
+        if not tool and not automatic:
             self.say("copied, but no clipboard tool was found - "
                      "install wl-clipboard or xclip", "warn")
 
@@ -1239,6 +1269,9 @@ class Eirene(App):
         self.session.close()
 
     async def on_unmount(self) -> None:
+        timer = getattr(self, "_auto_copy_timer", None)
+        if timer is not None:
+            timer.stop()
         self.shutdown()
         await processes.stop_all()
         await self.agent.close()

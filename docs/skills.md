@@ -25,7 +25,7 @@ work, particularly with a small local model.
 
 ## Add your own guidance
 
-Place a Markdown file in `~/.local/eirene/skills`, or the corresponding directory
+Place a Markdown file in `~/.local/share/eirene/skills`, or the corresponding directory
 under `EIRENE_HOME`. Both flat `.md` files and a directory containing `SKILL.md`
 are discovered.
 

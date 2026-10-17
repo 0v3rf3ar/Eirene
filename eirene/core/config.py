@@ -1,4 +1,4 @@
-"""Persistent config at ~/.local/eirene/config.json."""
+"""Persistent config at ~/.local/share/eirene/config.json."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ DEFAULTS: dict[str, Any] = {
     "theme": "default",
     "seasonal_effects": True,
     "providers": {},
+    "trusted_workspaces": [],
     "skills": {},
     "shell_timeout": 120,
     "max_iterations": 0,

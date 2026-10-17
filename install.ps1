@@ -3,7 +3,8 @@
 param(
     [string]$Version = $(if ($env:EIRENE_VERSION) { $env:EIRENE_VERSION } else { 'latest' }),
     [string]$InstallDir = $env:EIRENE_INSTALL_DIR,
-    [switch]$NoPathUpdate
+    [switch]$NoPathUpdate,
+    [switch]$Edge
 )
 $ErrorActionPreference = 'Stop'
 function Write-Step([int]$Number, [string]$Text) {
@@ -95,8 +96,8 @@ if ($InstallDir.IndexOfAny(@([char]10, [char]13, [IO.Path]::PathSeparator)) -ge 
 
 function Open-ReleaseDownload([string]$Uri) {
     $request = [Net.WebRequest]::Create($Uri)
-    $request.Timeout = 15000
-    $request.ReadWriteTimeout = 300000
+    $request.Timeout = 30000
+    $request.ReadWriteTimeout = 600000
     $request.UserAgent = 'Eirene-installer'
     $response = $request.GetResponse()
     if ($response.ResponseUri.Scheme -ne 'https') {
@@ -108,9 +109,9 @@ function Open-ReleaseDownload([string]$Uri) {
 
 function Install-StagedExecutable([string]$Source, [string]$Destination) {
     # PyInstaller cleanup and antivirus scans can briefly retain a handle after
-    # --version/--help return. Retry sharing/lock violations for at most 5 seconds;
+    # --version/--help return. Retry sharing/lock violations for at most 10 seconds;
     # permission failures and other errors remain immediate failures.
-    for ($attempt = 0; $attempt -lt 26; $attempt++) {
+    for ($attempt = 0; $attempt -lt 51; $attempt++) {
         try {
             if (Test-Path -LiteralPath $Destination) {
                 [IO.File]::Replace($Source, $Destination, [NullString]::Value)
@@ -123,8 +124,8 @@ function Install-StagedExecutable([string]$Source, [string]$Destination) {
             while ($cause.InnerException) { $cause = $cause.InnerException }
             $code = $cause.HResult -band 0xffff
             if (-not $onWindows -or -not ($cause -is [IO.IOException]) -or
-                $code -notin @(32, 33) -or $attempt -eq 25) { throw }
-            if ($attempt -eq 0) { Write-Host 'Executable is briefly locked; waiting up to 5 seconds before retrying...' }
+                $code -notin @(32, 33) -or $attempt -eq 50) { throw }
+            if ($attempt -eq 0) { Write-Host 'Executable is briefly locked; waiting up to 10 seconds before retrying...' }
             Start-Sleep -Milliseconds 200
         }
     }
@@ -136,7 +137,7 @@ function Get-ReleaseFile([string]$Uri, [string]$Destination, [switch]$ShowProgre
         $output = $null
         try {
             if (-not $ShowProgress) {
-                Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $Destination -TimeoutSec 300
+                Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $Destination -TimeoutSec 600
             } else {
                 $download = Open-ReleaseDownload $Uri
                 $output = [IO.File]::Create($Destination)
@@ -148,7 +149,7 @@ function Get-ReleaseFile([string]$Uri, [string]$Destination, [switch]$ShowProgre
                     $output.Write($buffer, 0, $count)
                     $received += $count
                     $elapsed = $timer.Elapsed.TotalSeconds
-                    if ($elapsed -gt 300) { throw 'Download exceeded five minutes.' }
+                    if ($elapsed -gt 600) { throw 'Download exceeded ten minutes.' }
                     if ($elapsed - $lastUpdate -lt 0.12) { continue }
                     $lastUpdate = $elapsed
                     $speed = $received / [Math]::Max($elapsed, 0.001)
@@ -187,7 +188,25 @@ Write-Step 2 'Find the release'
 
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('eirene-install-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $temporary | Out-Null
-    if ($Version -eq 'latest') {
+    if ($Edge -or $Version -eq 'edge') {
+        $phase = 'finding the latest unstable release'
+        $metadata = Join-Path $temporary 'releases.json'
+        $candidate = $null
+        $page = 1
+        do {
+            Get-ReleaseFile "https://api.github.com/repos/$repo/releases?per_page=100&page=$page" $metadata
+            $releases = @(Get-Content -Raw -LiteralPath $metadata | ConvertFrom-Json)
+            foreach ($release in $releases) {
+                if ($release.prerelease -eq $true -and $release.draft -eq $false -and
+                    (-not $candidate -or $release.published_at -gt $candidate.published_at)) {
+                    $candidate = $release
+                }
+            }
+            $page++
+        } while ($releases.Count -eq 100)
+        if (-not $candidate) { throw 'No published unstable release is available.' }
+        $Version = $candidate.tag_name
+    } elseif ($Version -eq 'latest') {
         $phase = 'finding the latest release'
         $metadata = Join-Path $temporary 'release.json'
         Get-ReleaseFile "https://api.github.com/repos/$repo/releases/latest" $metadata

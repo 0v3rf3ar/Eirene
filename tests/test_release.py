@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import importlib.util
 import os
 import subprocess
@@ -62,12 +63,17 @@ def installer(tmp_path):
     (fixture / 'SHA256SUMS').write_text(''.join(checksum_entry(p) for p in sorted(fixture.glob('*.tar.gz'))))
     (tools / 'uname').write_text('#!/bin/sh\nif [ "$1" = -s ]; then echo "$TEST_OS"; else echo "$TEST_CPU"; fi\n')
     (tools / 'sysctl').write_text('#!/bin/sh\necho "${TEST_SILICON:-0}"\n')
-    (tools / 'curl').write_text(f'#!{sys.executable}\n' + '''import os, sys, shutil
+    (tools / 'curl').write_text(f'#!{sys.executable}\n' + '''import os, sys, shutil, json
+from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
 args = sys.argv[1:]
 url = args[-1]
 with open(os.environ['TEST_LOG'], 'a') as stream: stream.write(url + '\\n' + ' '.join(args) + '\\n')
-if url.endswith('/releases/latest'):
+if '/releases?per_page=' in url:
+    pages = json.loads(os.environ.get('TEST_RELEASE_PAGES', '{}'))
+    page = parse_qs(urlsplit(url).query)['page'][0]
+    print(pages.get(page, os.environ.get('TEST_RELEASES', '[]')))
+elif url.endswith('/releases/latest'):
     print('https://github.com/0v3rf3ar/Eirene/releases/tag/v1.2.3', end='')
 else:
     if os.environ.get('TEST_FAIL_DOWNLOAD'): sys.exit(22)
@@ -81,8 +87,8 @@ else:
            'TEST_OS': 'Linux', 'TEST_CPU': 'x86_64', 'TEST_FIXTURE': str(fixture),
            'TEST_LOG': str(tmp_path / 'requests.log'), 'EIRENE_NO_PATH': '1',
            'EIRENE_VERSION': 'latest', 'EIRENE_INSTALL_DIR': str(home / 'path with spaces')}
-    def run(**overrides):
-        return subprocess.run(['bash', str(ROOT / 'install.sh')], env={**env, **overrides},
+    def run(*arguments, **overrides):
+        return subprocess.run(['bash', str(ROOT / 'install.sh'), *arguments], env={**env, **overrides},
                               text=True, capture_output=True, timeout=15)
     return run, env, fixture
 
@@ -351,10 +357,10 @@ def test_slow_bash_profile_has_portable_deadline_and_stops_children(installer, s
     timeout.chmod(0o755)
     started = time.monotonic()
     result = run(EIRENE_NO_PATH='0', TEST_OS=system, TEST_CPU='arm64')
-    assert time.monotonic() - started < 6
+    assert time.monotonic() - started < 8
     assert result.returncode == 0, result.stderr
-    assert 'Bash startup exceeded 2 seconds' in result.stderr
-    assert 'Checking .bashrc (up to 2 seconds)' in result.stdout
+    assert 'Bash startup exceeded 4 seconds' in result.stderr
+    assert 'Checking .bashrc (up to 4 seconds)' in result.stdout
     assert 'Start now:' in result.stdout
     assert 'Open a new terminal and run: eirene' not in result.stdout
     pid = (Path(env['HOME']) / 'profile-child.pid').read_text().strip()
@@ -391,9 +397,9 @@ kill() {
     try:
         started = time.monotonic()
         result = run(EIRENE_NO_PATH='0', BASH_ENV=str(environment))
-        assert time.monotonic() - started < 6
+        assert time.monotonic() - started < 8
         assert result.returncode == 0, result.stderr
-        assert 'Bash startup exceeded 2 seconds' in result.stderr
+        assert 'Bash startup exceeded 4 seconds' in result.stderr
         pid = (home / 'profile-child.pid').read_text().strip()
         state = subprocess.run(['ps', '-o', 'stat=', '-p', pid], capture_output=True, text=True)
         assert not state.stdout.strip() or state.stdout.strip().startswith('Z')
@@ -459,3 +465,52 @@ def test_terminal_installer_displays_portrait_and_requests_live_progress(install
     assert '⠻⣷' in text
     assert '[3/7] Download' in text
     assert '--progress-bar' in Path(env['TEST_LOG']).read_text()
+
+
+@pytest.mark.parametrize('arguments,version', [(['edge'], 'latest'), (['--edge'], 'v1.2.3'), ([], 'edge')])
+def test_edge_installs_newest_published_prerelease(installer, arguments, version):
+    run, env, _ = installer
+    releases = [
+        dict(tag_name='v2.3.4', prerelease=False, draft=False, published_at='2026-10-17T00:00:00Z'),
+        dict(tag_name='v99b1', prerelease=True, draft=True, published_at='2026-10-18T00:00:00Z'),
+        dict(tag_name='v1.0b1', prerelease=True, draft=False, published_at='2026-10-14T00:00:00Z',
+             assets=[dict(name='nested {asset}', published_at='2026-10-19T00:00:00Z')]),
+        dict(tag_name='v0.1.7b1', prerelease=True, draft=False, published_at='2026-10-16T00:00:00Z',
+             body='A quote " and a brace } should not affect parsing.'),
+    ]
+    result = run(*arguments, EIRENE_VERSION=version, TEST_RELEASES=json.dumps(releases))
+    assert result.returncode == 0, result.stderr
+    requests = Path(env['TEST_LOG']).read_text()
+    assert '/v0.1.7b1/eirene-Linux-amd64-0.1.7b1.tar.gz' in requests
+    assert '--connect-timeout 30 --max-time 600' in requests
+    assert '/releases/latest' not in requests
+
+
+def test_edge_without_prereleases_preserves_existing_install(installer):
+    run, env, _ = installer
+    assert run().returncode == 0
+    binary = Path(env['EIRENE_INSTALL_DIR']) / 'eirene'
+    original = binary.read_bytes()
+    result = run('edge', TEST_RELEASES='[]')
+    assert result.returncode != 0
+    assert 'no published unstable release' in result.stderr
+    assert binary.read_bytes() == original
+
+
+def test_installer_rejects_unknown_arguments(installer):
+    result = installer[0]('--typo')
+    assert result.returncode != 0
+    assert 'unknown argument' in result.stderr
+
+
+def test_edge_checks_later_release_pages(installer):
+    run, env, _ = installer
+    first_page = [dict(tag_name=f'v1.0.{i}', prerelease=False, draft=False) for i in range(100)]
+    second_page = [dict(tag_name='v0.1.7b1', prerelease=True, draft=False,
+                        published_at='2026-10-16T00:00:00Z')]
+    pages = {'1': json.dumps(first_page, indent=2), '2': json.dumps(second_page, indent=2)}
+    result = run('edge', TEST_RELEASE_PAGES=json.dumps(pages))
+    assert result.returncode == 0, result.stderr
+    requests = Path(env['TEST_LOG']).read_text()
+    assert 'per_page=100&page=2' in requests
+    assert '/v0.1.7b1/eirene-Linux-amd64-0.1.7b1.tar.gz' in requests

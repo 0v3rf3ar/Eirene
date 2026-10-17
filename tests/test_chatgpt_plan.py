@@ -430,15 +430,16 @@ async def test_sign_in_opens_browser_and_keeps_clickable_fallback(monkeypatch, r
         if isinstance(result, Exception):
             raise result
         return result
+    monkeypatch.setattr("eirene.commands.connect.sys.platform", "win32")
     monkeypatch.setattr("eirene.commands.connect.webbrowser.open", open_browser)
     app = SimpleNamespace(say=lambda text, kind="info", **kwargs: notices.append((text, kind, kwargs)))
     await _open_sign_in(app, url)
     assert opened == [(url, {"new": 2})]
     message, _, options = notices[0]
-    assert message == f"[Sign in to ChatGPT]({url})" and options == {"markdown": True}
+    assert message == url and options == {"markdown": True}
     block = NoticeBlock(message, markdown=True)
     body = block.content
-    assert "Sign in to ChatGPT" in body.plain and "https://" not in body.plain
+    assert body.plain.endswith(url)
     assert any(span.style.meta.get("@click") == f"open_link({url!r})" for span in body.spans
                if hasattr(span.style, "meta"))
     assert len(notices) == (1 if result is True else 2)
@@ -451,11 +452,12 @@ async def test_sign_in_fallback_click_opens_full_url():
     opened = []
     class LinkApp(App):
         def compose(self):
-            yield NoticeBlock(f"[Sign in to ChatGPT]({url})", markdown=True)
+            yield NoticeBlock(url, markdown=True)
         def open_url(self, target, **kwargs):
             opened.append(target)
     async with LinkApp().run_test(size=(50, 10)) as pilot:
-        await pilot.click(NoticeBlock, offset=(8, 0))
+        # A long bare URL wraps below the notice icon in a narrow terminal.
+        await pilot.click(NoticeBlock, offset=(8, 1))
         await pilot.pause()
     assert opened == [url]
 
@@ -633,3 +635,23 @@ async def test_raw_ssl_error_during_refresh_preserves_credentials():
     with pytest.raises(ProviderError, match="BAD_VALUE"):
         await auth.access_token()
     assert auth.account() == record
+
+
+@pytest.mark.parametrize("successful", [0, 1, 2, 3, None])
+def test_linux_browser_desktop_fallbacks(monkeypatch, successful):
+    from types import SimpleNamespace
+    from eirene.commands.connect import _open_browser
+    monkeypatch.setattr("eirene.commands.connect.sys.platform", "linux")
+    calls = []
+    url = "https://example.com/login?state=a&next=b"
+    def launch(command, **kwargs):
+        calls.append(command)
+        assert command[-1] == url
+        return SimpleNamespace(returncode=0 if len(calls) - 1 == successful else 1)
+    monkeypatch.setattr("eirene.commands.connect.subprocess.run", launch)
+    fallback = []
+    monkeypatch.setattr("eirene.commands.connect.webbrowser.open",
+                        lambda *args, **kwargs: fallback.append(args) or False)
+    assert _open_browser(url) is (successful is not None)
+    assert len(calls) == (successful + 1 if successful is not None else 4)
+    assert bool(fallback) is (successful is None)

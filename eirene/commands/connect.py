@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
 import webbrowser
 
 from ..core.errors import CommandError, EireneError, ProviderError
@@ -88,13 +90,14 @@ async def _pick(app, args: str) -> str:
             continue
         spec = providers.SPECS[key]
         marks = []
-        if app.config.api_key(key) or not spec.needs_key:
+        saved = app.config.get("providers", {}).get(key, {})
+        if app.config.api_key(key) or (not spec.needs_key and saved.get("model")):
             marks.append("configured")
         if key == app.config.provider:
             marks.append("active")
         options.append((key, spec.label, ", ".join(marks)))
     return await app.ask_choice("connect to which provider?", options,
-                                selected=app.config.provider or "") or ""
+                                selected=app.config.provider or "", right_hint=True) or ""
 
 
 async def _switch(app, key: str) -> bool:
@@ -186,16 +189,31 @@ async def _choose_model(app, provider, key: str) -> str:
                                 selected=str(saved or "")) or ""
 
 
+def _open_browser(url: str) -> bool:
+    """Use desktop URL handlers even when Python cannot detect a browser."""
+    if sys.platform.startswith("linux"):
+        for command in (("xdg-open", url), ("gio", "open", url),
+                        ("kde-open", url), ("exo-open", "--launch", "WebBrowser", url)):
+            try:
+                result = subprocess.run(command, stdin=subprocess.DEVNULL,
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                        timeout=10, check=False)
+                if result.returncode == 0:
+                    return True
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+    try:
+        return webbrowser.open(url, new=2)
+    except (webbrowser.Error, OSError):
+        return False
+
+
 async def _open_sign_in(app, url: str) -> None:
     """Open the host browser independently of provider/model execution."""
-    target = url.replace("(", "%28").replace(")", "%29")
-    app.say(f"[Sign in to ChatGPT]({target})", markdown=True)
-    try:
-        opened = await asyncio.to_thread(webbrowser.open, url, new=2)
-    except (webbrowser.Error, OSError):
-        opened = False
+    app.say(url, markdown=True)
+    opened = await asyncio.to_thread(_open_browser, url)
     if not opened:
-        app.say("Could not open your browser automatically; click the sign-in link above.", "warn")
+        app.say("Could not open your browser automatically; click the URL above or copy it into your browser.", "warn")
 
 
 async def _choose_reasoning(app, provider, key: str, model: str) -> bool:

@@ -3,7 +3,14 @@
 set -Eeuo pipefail
 
 path_only=0
-if [[ "${1:-}" == --configure-shells ]]; then path_only=1; fi
+edge=0
+for argument in "$@"; do
+    case "$argument" in
+        --configure-shells) path_only=1 ;;
+        edge|--edge) edge=1 ;;
+        *) printf 'error: unknown argument: %s\n' "$argument" >&2; exit 1 ;;
+    esac
+done
 # Keep logs readable when redirected; respect NO_COLOR and small terminals.
 accent='' green='' dim='' reset=''
 if [[ -t 1 && "${TERM:-dumb}" != dumb && -z "${NO_COLOR+x}" ]]; then
@@ -51,6 +58,7 @@ installed=0
 trap 'status=$?; printf "error: failed while %s (exit %s).\n" "$step" "$status" >&2; if [[ "$installed" == 0 ]]; then printf "The existing executable has not been replaced. Fix the error above and rerun the installer.\n" >&2; fi; exit "$status"' ERR
 repo='0v3rf3ar/Eirene'
 version=${EIRENE_VERSION:-latest}
+if [[ "$edge" == 1 ]]; then version=edge; fi
 install_dir=${EIRENE_INSTALL_DIR:-"$HOME/.local/bin"}
 case "$install_dir" in /*) ;; *) install_dir="$PWD/$install_dir" ;; esac
 for tool in curl tar uname mktemp grep cp chmod mv mkdir cat sleep ps awk; do
@@ -77,12 +85,63 @@ case "$os_name" in
 esac
 fetch() {
     curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
-        --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 "$@"
+        --retry 3 --retry-delay 2 --connect-timeout 30 --max-time 600 "$@"
+}
+# Extract only top-level release fields, ignoring nested assets and JSON strings.
+# This keeps installation independent of Python and jq.
+edge_metadata() {
+    awk '
+    function field(name, value) {
+        value = object
+        if (!match(value, "\"" name "\"[[:space:]]*:[[:space:]]*\"[^\"]*\"")) return ""
+        value = substr(value, RSTART, RLENGTH)
+        sub(/^[^:]*:[[:space:]]*"/, "", value)
+        sub(/"$/, "", value)
+        return value
+    }
+    {
+        for (i = 1; i <= length($0); i++) {
+            c = substr($0, i, 1)
+            if (depth == 1) object = object c
+            if (quoted) {
+                if (escaped) escaped = 0
+                else if (c == "\\") escaped = 1
+                else if (c == "\"") quoted = 0
+                continue
+            }
+            if (c == "\"") { quoted = 1; continue }
+            if (c == "{") { depth++; if (depth == 1) object = "" }
+            if (c == "}") {
+                depth--
+                if (depth == 0) {
+                    count++
+                    if (object ~ /"prerelease"[[:space:]]*:[[:space:]]*true/ &&
+                        object ~ /"draft"[[:space:]]*:[[:space:]]*false/) {
+                        date = field("published_at")
+                        if (date > newest) { newest = date; tag = field("tag_name") }
+                    }
+                }
+            }
+        }
+    }
+    END { print count+0, newest, tag }'
 }
 if [[ "$path_only" == 0 ]]; then ok "$target · $install_dir"; fi
 if [[ "$path_only" == 0 ]]; then
 heading 2 'Find the release'
-if [[ "$version" == latest ]]; then
+if [[ "$version" == edge ]]; then
+    step='finding the latest unstable release'
+    page=1 newest='' candidate=''
+    while :; do
+        metadata=$(fetch "https://api.github.com/repos/$repo/releases?per_page=100&page=$page")
+        read -r count published tag <<< "$(printf '%s\n' "$metadata" | edge_metadata)"
+        if [[ -n "$tag" && "$published" > "$newest" ]]; then newest=$published; candidate=$tag; fi
+        [[ "$count" == 100 ]] || break
+        page=$((page + 1))
+    done
+    [[ -n "$candidate" ]] || fail 'no published unstable release is available'
+    version=$candidate
+elif [[ "$version" == latest ]]; then
     step='finding the latest release; check your connection to github.com'
     # Resolve the latest tag once before choosing the platform archive.
     resolved=$(fetch --head --output /dev/null --write-out '%{url_effective}' "https://github.com/$repo/releases/latest")
@@ -109,7 +168,7 @@ step="downloading $asset; check your connection and that release $version has an
 # Curl owns a single live progress line below the portrait, including retries.
 if [[ -t 2 && "${TERM:-dumb}" != dumb ]]; then
     curl --fail --show-error --location --proto '=https' --proto-redir '=https' \
-        --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 \
+        --retry 3 --retry-delay 2 --connect-timeout 30 --max-time 600 \
         --progress-bar --output "$temporary/$asset" "$base/$asset"
 else
     fetch --output "$temporary/$asset" "$base/$asset"
@@ -257,7 +316,7 @@ if [[ "${EIRENE_NO_PATH:-0}" != 1 ]]; then
         ok 'eirene resolves on PATH and runs'
     fi
     if [[ -f "$HOME/.bashrc" ]] && command -v bash >/dev/null 2>&1; then
-        printf 'Checking .bashrc (up to 2 seconds)…\n'
+        printf 'Checking .bashrc (up to 4 seconds)…\n'
         # Job control gives the check its own process group. Interactive startup
         # and profiles can create additional groups, so snapshot descendants
         # before signalling the shell; their parent links disappear on exit.
@@ -271,7 +330,7 @@ if [[ "${EIRENE_NO_PATH:-0}" != 1 ]]; then
                 > "$temporary/shell-check.txt" 2>&1 &
             shell_pid=$!
             (
-                sleep 2
+                sleep 4
                 printf 'timeout\n' > "$temporary/shell-timeout"
                 ps -axo pid=,ppid= | awk -v root="$shell_pid" '
                     { parent[$1] = $2 }
@@ -317,7 +376,7 @@ if [[ "${EIRENE_NO_PATH:-0}" != 1 ]]; then
         else
             path_ready=0
             if [[ -f "$temporary/shell-timeout" ]]; then
-                warn 'Bash startup exceeded 2 seconds; verification stopped. PATH is saved. Use the full launch command below.'
+                warn 'Bash startup exceeded 4 seconds; verification stopped. PATH is saved. Use the full launch command below.'
             else
                 warn 'Bash startup verification failed; inspect .bashrc and use the full launch command below.'
             fi

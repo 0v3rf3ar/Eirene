@@ -4,7 +4,7 @@ from __future__ import annotations
 
 TOOL_APPROVAL_GUIDANCE = (
     "Call file/command tools directly; approval UI shows the diff/command. "
-    "Never ask permission via ask_user or prose."
+    "Never ask permission through a question or prose."
 )
 
 SYSTEM_PROMPT = """\

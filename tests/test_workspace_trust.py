@@ -59,7 +59,7 @@ def test_decline_never_initializes_session_or_agent(workdir, monkeypatch, resume
 
 
 @pytest.mark.parametrize("resume", ["", "saved-session-id"])
-def test_acceptance_precedes_initialization_and_repeats_each_launch(
+def test_trust_check_precedes_initialization_each_launch(
         workdir, monkeypatch, resume):
     from eirene import app
 
@@ -80,3 +80,35 @@ def test_acceptance_precedes_initialization_and_repeats_each_launch(
         assert app.run(workdir, resume) == 0
     assert seen == [("trust", workdir.resolve()),
                     ("initialize", workdir.resolve(), resume), "run"] * 2
+
+
+def test_accepted_path_is_remembered_across_launches(workdir, monkeypatch):
+    from eirene.core.config import Config
+
+    asked = []
+    monkeypatch.setattr(WorkspaceTrust, "run", lambda self: asked.append(self.workspace) or True)
+    assert confirm_workspace_trust(workdir)
+    assert confirm_workspace_trust(workdir / ".." / workdir.name)
+    assert asked == [workdir.resolve()]
+    assert Config.load().get("trusted_workspaces") == [str(workdir.resolve())]
+
+
+def test_trust_does_not_extend_to_other_paths(workdir, monkeypatch):
+    asked = []
+    monkeypatch.setattr(WorkspaceTrust, "run", lambda self: asked.append(self.workspace) or True)
+    child = workdir / "child"
+    child.mkdir()
+    assert confirm_workspace_trust(workdir)
+    assert confirm_workspace_trust(child)
+    assert asked == [workdir.resolve(), child.resolve()]
+
+
+@pytest.mark.parametrize("answer", [False, None])
+def test_declined_path_is_not_remembered(workdir, monkeypatch, answer):
+    from eirene.core.config import Config
+
+    monkeypatch.setattr(WorkspaceTrust, "run", lambda self: answer)
+    assert not confirm_workspace_trust(workdir)
+    assert Config.load().get("trusted_workspaces") == []
+    monkeypatch.setattr(WorkspaceTrust, "run", lambda self: True)
+    assert confirm_workspace_trust(workdir)

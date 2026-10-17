@@ -13,7 +13,7 @@ def home() -> Path:
     override = os.environ.get(ENV_HOME)
     if override:
         return Path(override).expanduser()
-    return Path.home() / ".local" / "eirene"
+    return Path.home() / ".local" / "share" / "eirene"
 
 
 def config_file() -> Path:
@@ -62,6 +62,11 @@ def task_locks_dir() -> Path:
 
 def ensure_tree() -> None:
     """Create data dirs if missing."""
+    root = home()
+    legacy = Path.home() / ".local" / "eirene"
+    if not os.environ.get(ENV_HOME) and not root.exists() and legacy.is_dir():
+        root.parent.mkdir(parents=True, exist_ok=True)
+        legacy.rename(root)
     for path in (home(), sessions_dir(), skills_dir(), logs_dir(),
                  projects_dir(), plugins_dir(), plans_dir(), task_runs_dir(),
                  task_locks_dir()):

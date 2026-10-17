@@ -135,6 +135,13 @@ Answering an ordinary task question does not grant execution access. Read
 
 ## Clipboard and display
 
+Selecting input or transcript text automatically copies it after the selection
+settles, while keeping it highlighted. This works with mouse selection and
+keyboard selection in the input. Empty selections leave the clipboard unchanged;
+masked API-key inputs do not copy automatically. The copy shortcuts and right
+click remain available.
+Each copy shows `copied N characters` in the bottom-right corner for two seconds.
+
 Linux may need `wl-clipboard` or `xclip` for system clipboard copying. Terminal
 clipboard integration and host utilities affect whether the copy reaches your
 desktop clipboard. `/theme`, `--no-color`, and `--reduce-motion` control display;

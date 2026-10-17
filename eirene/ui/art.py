@@ -109,7 +109,7 @@ VERBS = [
 TIPS = [
     "Press shift + tab to change mode (manual, auto, or plan).",
     "Use /btw for a quick side question without changing the main conversation.",
-    "Drag over any transcript text, then press ctrl+shift+c to copy it.",
+    "Select input or transcript text to copy it automatically; the character count appears for two seconds.",
     "Click the running-command bar to inspect or stop active commands.",
     "Use /review for a read-only review of the current working-tree changes.",
     "Use /sessions to search, resume, export, or import earlier conversations.",
@@ -126,10 +126,19 @@ TIPS = [
     "Click command output to expand it; click again to collapse.",
     "Send a follow-up while working to queue the next step.",
     "End a line with a backslash, then Enter, for multiline input.",
-    "Use /sandbox to inspect your current execution permissions.",
+    "Use /sandbox to inspect kernel sandbox support and /permissions to change execution restrictions.",
     "Use /usage to check token counts and session timing.",
-    "Name a file or function in your request for a focused search.",
-    "Include the error and expected behavior when reporting a bug.",
+    "Use /prompt-suggest on to enable AI follow-up suggestions, or /prompt-suggest off to disable them.",
+    "Prompt suggestions use an extra model request; /prompt-suggest shows their current status.",
+    "Use /connect to configure a provider and /model to choose one of its models.",
+    "Use /sessions search TEXT to find saved conversations in the current workspace.",
+    "Use /sessions export ID chat.md to export a saved conversation as Markdown.",
+    "Use /compact after a turn finishes to summarize the conversation and reduce context usage.",
+    "Use /plugins browse to discover plugins, then /plugins install NAME to install one.",
+    "Use /mcp to enable or disable available MCP servers.",
+    "Use /search-api to configure the optional Tavily web-search fallback.",
+    "Use /update check to check stable releases, or /update edge check to check prereleases.",
+    "Press Up or Down in the input to recall earlier prompts.",
 ]
 
 

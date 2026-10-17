@@ -9,6 +9,8 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Static
 
+from ..core import paths
+from ..core.config import Config
 from ..core.text import safe_text
 from .backdrop import LogoBackdrop as TrustBackdrop
 from .picker import Picker
@@ -16,7 +18,7 @@ from .theme import PLAIN
 
 
 class WorkspaceTrust(App[bool]):
-    """Require an explicit choice to trust the workspace for this process."""
+    """Ask for permission to remember trust for this workspace path."""
 
     ENABLE_COMMAND_PALETTE = False
     TITLE = "eirene — workspace trust"
@@ -39,7 +41,8 @@ class WorkspaceTrust(App[bool]):
         body.append(safe_text(str(self.workspace)) + "\n\n", style="bold")
         body.append(
             "Eirene can read and edit files and run commands here. "
-            "Only continue if you trust this workspace.", style="dim")
+            "Only continue if you trust this workspace. "
+            "Your choice is remembered for this path on future launches.", style="dim")
         yield Static(body, id="trust-explanation")
         yield Picker(show_detail=False)
 
@@ -61,5 +64,18 @@ class WorkspaceTrust(App[bool]):
 
 
 def confirm_workspace_trust(workspace: Path) -> bool:
-    """Only an explicit trust choice permits startup; cancellation denies it."""
-    return WorkspaceTrust(workspace).run() is True
+    """Remember explicit trust for an exact resolved workspace path."""
+    workspace = workspace.expanduser().resolve()
+    paths.ensure_tree()
+    config = Config.load()
+    trusted = config.get("trusted_workspaces", [])
+    if not isinstance(trusted, list):
+        trusted = []
+    identity = str(workspace)
+    if identity in trusted:
+        return True
+    if WorkspaceTrust(workspace).run() is not True:
+        return False
+    config.set("trusted_workspaces", [*trusted, identity])
+    config.save()
+    return True

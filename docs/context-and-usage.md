@@ -39,8 +39,8 @@ and limits behave.
 ### Configure any provider and model
 
 Merge settings into your existing configuration, then restart Eirene. The file
-is `~/.local/eirene/config.json` by default on Linux/macOS, and
-`%USERPROFILE%\.local\eirene\config.json` on Windows. If `EIRENE_HOME` is set,
+is `~/.local/share/eirene/config.json` by default on Linux/macOS, and
+`%USERPROFILE%\.local\share\eirene\config.json` on Windows. If `EIRENE_HOME` is set,
 edit `config.json` inside that directory instead. Keep existing credentials and
 provider entries; the examples below are partial configurations.
 

@@ -72,7 +72,15 @@ function Open-FixtureDownload([string]$Uri) {
 function Invoke-WebRequest {
     param([switch]$UseBasicParsing, [string]$Uri, [string]$OutFile, [int]$TimeoutSec)
     $requests.Add($Uri)
-    if ($Uri.EndsWith('/releases/latest')) {
+    if ($TimeoutSec -ne 600) { throw 'Expected doubled download timeout.' }
+    if ($Uri.Contains('/releases?per_page=')) {
+        $releases = @(
+            @{ tag_name = 'v99.0.0'; prerelease = $false; draft = $false; published_at = '2026-10-17T00:00:00Z' },
+            @{ tag_name = "v$fixtureVersion"; prerelease = $true; draft = $false; published_at = '2026-10-16T00:00:00Z' },
+            @{ tag_name = 'v99.0.0b1'; prerelease = $true; draft = $true; published_at = '2026-10-18T00:00:00Z' }
+        )
+        [IO.File]::WriteAllText($OutFile, (ConvertTo-Json -InputObject $releases))
+    } elseif ($Uri.EndsWith('/releases/latest')) {
         [IO.File]::WriteAllText($OutFile, ('{"tag_name":"v' + $fixtureVersion + '"}'))
     } elseif ($Uri -ceq "https://github.com/0v3rf3ar/Eirene/releases/download/v$fixtureVersion/SHA256SUMS") {
         $hash = if ($corrupt) { '0' * 64 } else { $checksumFixture }
@@ -89,6 +97,7 @@ function Invoke-WebRequest {
 
 try {
     # First install and an atomic upgrade into a path with spaces.
+    & $installer -Edge -InstallDir $installDirectory -NoPathUpdate
     & $installer -Version latest -InstallDir $installDirectory -NoPathUpdate
     & $installer -Version "v$fixtureVersion" -InstallDir $installDirectory -NoPathUpdate
     $name = if ($Target -eq 'windows-amd64') { 'eirene.exe' } else { 'eirene' }
@@ -156,7 +165,7 @@ try {
             if ($_.Exception.Message -notmatch 'executable is locked') { throw }
             $failed = $true
         } finally { $locked.Dispose() }
-        if (-not $failed -or $replaceAttempts -ne 26) { throw 'A persistent lock must fail after 26 bounded attempts.' }
+        if (-not $failed -or $replaceAttempts -ne 51) { throw 'A persistent lock must fail after 51 bounded attempts.' }
         if ((Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash -ne $originalHash) {
             throw 'Locked-executable failure modified the existing installation.'
         }

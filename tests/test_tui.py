@@ -372,9 +372,8 @@ async def test_task_list_uses_the_active_theme(workdir, key):
         await pilot.pause()
 
         accent = theme.accents(app.theme)
-        assert app.tasks.styles.background.hex.lower() == accent.surface.lower()
-        assert app.tasks.styles.color.hex.lower() == accent.on_surface.lower()
-        assert app.tasks.styles.border_top[1].hex.lower() == accent.rule.lower()
+        assert app.tasks.styles.background.a == 0
+        assert app.tasks.styles.border_top == app.picker.styles.border_top
         styles = {str(span.style) for span in app.tasks._Static__content.spans}
         assert any(accent.marker in style for style in styles)
     finally:
@@ -3915,5 +3914,71 @@ async def test_session_edit_permission_is_cleared_with_session(workdir, action):
             await app.switch_session(other.id)
         await pilot.pause()
         assert "session_edits" not in app.agent.always
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_selecting_transcript_automatically_copies_without_clearing(workdir, monkeypatch):
+    copied = []
+    monkeypatch.setattr("eirene.app.copy_to_system", lambda text: copied.append(text) or "test")
+    app, pilot, context = await start(workdir)
+    try:
+        await pilot.mouse_down(app.transcript, offset=(2, 1))
+        await pilot.hover(app.transcript, offset=(2, 1))
+        await pilot.mouse_up(app.transcript, offset=(12, 1))
+        await pilot.pause(0.25)
+        selected = app.screen.get_selected_text()
+        assert selected
+        assert app.clipboard == selected
+        assert copied == [selected]
+        app.screen.clear_selection()
+        await pilot.pause(0.25)
+        assert app.clipboard == selected
+        assert copied == [selected]
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("automatic", [False, True])
+async def test_copy_shows_character_count_in_bottom_right(workdir, monkeypatch, automatic):
+    from textual.document._document import Selection
+    from eirene.ui.copy_notice import CopyNotice
+
+    monkeypatch.setattr("eirene.app.copy_to_system", lambda text: "test")
+    app, pilot, context = await start(workdir, size=(100, 40))
+    try:
+        app.prompt.value = "aé\n🦊"
+        app.prompt.selection = Selection((0, 0), (1, 1))
+        if not automatic:
+            app.action_copy_selection()
+        await pilot.pause(0.25)
+        notice = app.query_one(CopyNotice)
+        assert notice.display
+        assert content(notice) == "copied 4 characters"
+        assert notice.region.right == app.screen.size.width
+        assert notice.region.bottom == app.screen.size.height
+        await pilot.pause(2.1)
+        assert not notice.display
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_copy_notice_restarts_deadline_and_follows_resize(workdir):
+    from eirene.ui.copy_notice import CopyNotice
+
+    app, pilot, context = await start(workdir, size=(100, 40))
+    try:
+        notice = app.query_one(CopyNotice)
+        notice.show_count(12)
+        await pilot.pause(1.1)
+        notice.show_count(25)
+        await pilot.resize_terminal(80, 30)
+        await pilot.pause(1.1)
+        assert notice.display
+        assert content(notice) == "copied 25 characters"
+        assert notice.region.right == 80
+        assert notice.region.bottom == 30
+        await pilot.pause(1)
+        assert not notice.display
     finally:
         await context.__aexit__(None, None, None)

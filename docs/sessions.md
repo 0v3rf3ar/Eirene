@@ -6,15 +6,18 @@ A session keeps the conversation for a workspace so you can return to a task.
 Messages are saved as you work. Session history is context, not a snapshot of the
 project: loading a session does not restore files to their earlier state.
 
-Every interactive launch first asks whether you trust the files in the selected
-workspace, including when resuming a session. The prompt shows the resolved
+The first interactive launch in a workspace asks whether you trust its files,
+including when resuming a session. The prompt shows the resolved
 workspace path before creating a session or initializing the agent, project
 instructions, skills, or providers. Choose **Yes, trust this workspace** to
-continue; this option is selected by default. Choose **No, exit Eirene** to
+continue and remember this path; this option is selected by default. Choose **No, exit Eirene** to
 decline. Escape, Ctrl+C, and Ctrl+D also leave without starting the agent.
 
-Trust lasts for that interactive launch and does not grant full access or bypass
-tool approvals. One-shot `-p` runs and scheduled tasks remain noninteractive and
+Trust is saved in `trusted_workspaces` in `config.json`, so future launches at
+the same resolved path skip the question. Other paths, including subdirectories,
+require their own approval. Remove a path from that list to ask again.
+Workspace trust does not grant full access or bypass tool approvals.
+One-shot `-p` runs and scheduled tasks remain noninteractive and
 use their existing permission settings.
 
 ## Resume from the terminal
@@ -84,7 +87,7 @@ keep working with, use [`/compact`](context-and-usage.md) rather than clearing i
 
 ## Storage and exit
 
-Session files live under `~/.local/eirene/sessions` by default, or beneath
+Session files live under `~/.local/share/eirene/sessions` by default, or beneath
 `EIRENE_HOME` when you select another data directory. `/exit` and Ctrl+D leave the
 application and stop its managed processes. See [configuration](configuration.md)
 for data backup locations.

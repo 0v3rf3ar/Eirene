@@ -35,6 +35,9 @@ class Block(Static):
         padding: 0;
         margin-bottom: 1;
         background: transparent;
+        link-background-hover: transparent;
+        link-color-hover: auto;
+        link-style-hover: underline;
     }
     """
 
@@ -171,8 +174,8 @@ class NoticeBlock(Block):
         body = Text()
         body.append(f"{art.icon(kind)} ", style="dim")
         if markdown:
-            # Parse before clipping: long OAuth targets must stay intact in link metadata.
-            body.append_text(markup.inline(strip_escapes(text), show_link_urls=False)[:400])
+            # Sign-in URLs must remain complete for copying as well as clicking.
+            body.append_text(markup.inline(strip_escapes(text), show_link_urls=False))
         else:
             body.append(safe_notice(text), style="dim" if kind == "info" else "bold")
         super().__init__(body)

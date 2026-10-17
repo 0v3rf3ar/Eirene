@@ -1,4 +1,4 @@
-"""Markdown skills from ~/.local/eirene/skills."""
+"""Markdown skills from ~/.local/share/eirene/skills."""
 
 from __future__ import annotations
 

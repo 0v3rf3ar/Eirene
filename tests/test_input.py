@@ -787,7 +787,7 @@ async def test_copy_prompt_selection(workdir, monkeypatch, shortcut):
             await pilot.press(shortcut)
         await pilot.pause()
         assert app.clipboard == "line\nsecond"
-        assert copied == ["line\nsecond"]
+        assert copied and all(text == "line\nsecond" for text in copied)
         assert app.prompt.text == "first line\nsecond line"
         assert app.prompt.selection == selection
     finally:
@@ -833,5 +833,38 @@ async def test_deleting_next_to_folded_paste_preserves_it(workdir):
         await pilot.press("ctrl+z")
         assert app.prompt.text == pasted_label(pasted)
         assert app.prompt.unfold(app.prompt.text) == pasted
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_keyboard_selection_automatically_copies_prompt(workdir, monkeypatch):
+    copied = []
+    monkeypatch.setattr("eirene.app.copy_to_system", lambda text: copied.append(text) or "test")
+    app, pilot, context = await start(workdir)
+    try:
+        app.prompt.value = "copy this text"
+        app.prompt.move_cursor((0, 0))
+        await pilot.press("shift+right", "shift+right", "shift+right", "shift+right")
+        await pilot.pause(0.25)
+        assert app.clipboard == "copy"
+        assert copied[-1] == "copy"
+        assert app.prompt.selected_text == "copy"
+        assert app.prompt.text == "copy this text"
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_secret_prompt_selection_does_not_automatically_copy(workdir, monkeypatch):
+    from textual.document._document import Selection
+
+    copied = []
+    monkeypatch.setattr("eirene.app.copy_to_system", lambda text: copied.append(text) or "test")
+    app, pilot, context = await start(workdir)
+    try:
+        app.prompt.secret = True
+        app.prompt.value = "secret-key"
+        app.prompt.selection = Selection((0, 0), (0, 10))
+        await pilot.pause(0.25)
+        assert copied == []
     finally:
         await context.__aexit__(None, None, None)

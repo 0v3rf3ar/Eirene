@@ -9,12 +9,17 @@ directory. Moving the executable does not move either of the other two.
 
 ## Application data tree
 
-The default root is `~/.local/eirene` on all platforms. `EIRENE_HOME` overrides it
+The default root is `~/.local/share/eirene` on all platforms. `EIRENE_HOME` overrides it
 before launch. Some directories are created at startup; feature-specific files
 and caches appear only when used. Identifiers below are placeholders.
 
+At startup, an existing `~/.local/eirene` directory is moved to the new root
+when the new root does not exist. If both directories exist, Eirene uses the new
+root without merging or overwriting either directory. Setting `EIRENE_HOME`
+disables this automatic migration.
+
 ```text
-~/.local/eirene/
+~/.local/share/eirene/
 ├── config.json                         saved preferences and connection settings
 ├── config.json.bak                     best-effort copy after malformed config
 ├── sessions/

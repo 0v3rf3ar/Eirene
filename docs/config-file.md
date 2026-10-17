@@ -23,7 +23,7 @@ claims. For the files surrounding this configuration, see [data layout](data-lay
 
 ## Locate and edit the file
 
-The path is `~/.local/eirene/config.json` on Linux, macOS, and Windows. Windows
+The path is `~/.local/share/eirene/config.json` on Linux, macOS, and Windows. Windows
 uses the user's home directory rather than `%LOCALAPPDATA%` for application data.
 Setting `EIRENE_HOME` before launch changes the directory containing the file:
 

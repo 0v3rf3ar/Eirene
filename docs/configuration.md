@@ -9,7 +9,7 @@ JSON.
 
 ## Data directory
 
-The default data directory is `~/.local/eirene` on every platform. On Windows,
+The default data directory is `~/.local/share/eirene` on every platform. On Windows,
 `~` means your user home directory. `EIRENE_HOME` chooses a different directory
 when set before launch.
 

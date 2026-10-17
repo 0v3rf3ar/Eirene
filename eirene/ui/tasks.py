@@ -20,11 +20,11 @@ class TaskList(Static):
     TaskList {
         width: 1fr;
         height: auto;
-        max-height: 8;
+        max-height: 10;
+        margin: 1 0 0 0;
         padding: 0 1;
-        background: #3b4149;
-        color: #f8f8f2;
-        border: round ansi_default;
+        background: transparent;
+        border: round $primary;
         display: none;
     }
     """
@@ -38,16 +38,7 @@ class TaskList(Static):
         self.restyle()
 
     def restyle(self) -> None:
-        """Use the active theme for the checklist surface and text."""
-        accent = theme.for_widget(self)
-        if accent is None:
-            self.styles.background = "#3b4149"
-            self.styles.color = "#f8f8f2"
-            self.styles.border = ("round", "ansi_default")
-        else:
-            self.styles.background = accent.surface
-            self.styles.color = accent.on_surface
-            self.styles.border = ("round", accent.rule)
+        """Refresh step colours; the box follows the shared menu styling."""
         self.refresh_plan()
 
     def refresh_plan(self) -> None:

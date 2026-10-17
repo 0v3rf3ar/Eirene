@@ -40,6 +40,20 @@ Windows (AMD64), in PowerShell:
 irm https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.ps1 | iex
 ```
 
+To install the latest unstable (beta) release, add `edge` in Bash or `-Edge`
+in PowerShell:
+
+```sh
+bash <(curl -fsSL https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.sh) edge
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.ps1))) -Edge
+```
+
+Without this option, the installers use the latest stable release. Downloads
+allow up to 10 minutes per attempt, with a 30-second connection timeout.
+
 The releases are standalone binaries and do not require Python. Open a new
 terminal after installation, run `eirene` from your project directory, and use
 `/connect` to set up your provider.
