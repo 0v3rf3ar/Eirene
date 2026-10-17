@@ -2594,6 +2594,31 @@ async def test_the_picker_shows_the_highlighted_description(workdir):
         await context.__aexit__(None, None, None)
 
 
+@pytest.mark.parametrize("mode", list(Mode))
+async def test_agents_picker_uses_single_cell_symbols(workdir, mode):
+    from rich.cells import cell_len
+
+    app, pilot, context = await start(workdir)
+    try:
+        app.agent.mode = mode
+        app.prompt.value = "/agents"
+        await pilot.press("enter")
+        await pilot.pause()
+        picker = app.picker
+        assert picker.waiting
+        assert len(picker.options) == 3
+        assert picker.options[picker.index][0] == mode.value
+        for _, label, _ in picker.options:
+            symbol = label.split()[0]
+            assert cell_len(symbol) == 1
+        body = picker._Static__content
+        span = next(span for span in body.spans if "reverse" in str(span.style))
+        assert cell_len(body.plain[span.start:span.end]) == picker.content_size.width
+        await pilot.press("escape")
+    finally:
+        await context.__aexit__(None, None, None)
+
+
 async def test_picker_highlight_fills_the_whole_row(workdir):
     app, pilot, context = await start(workdir, size=(100, 32))
     try:

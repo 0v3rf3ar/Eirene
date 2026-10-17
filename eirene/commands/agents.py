@@ -29,7 +29,9 @@ async def run(app, args: str) -> None:
         app.say(f"no mode called '{wanted}'; try auto, manual or plan", "warn")
         return
 
-    options = [(mode.value, f"{mode.icon} {mode.label}",
+    # Avoid emoji/trigram width differences shifting the right border.
+    icons = {Mode.AUTO: "↯", Mode.MANUAL: "‖", Mode.PLAN: "≡"}
+    options = [(mode.value, f"{icons[mode]} {mode.label}",
                 mode.blurb + (" (current)" if mode is app.agent.mode else ""))
                for mode in Mode]
     chosen = await app.ask_choice("which mode?", options,
