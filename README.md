@@ -28,31 +28,40 @@ manageable within smaller context windows.
 
 ## Installation
 
-Linux (AMD64/ARM64) and macOS (Apple Silicon):
+**Linux & macOS** · Linux AMD64/ARM64 · macOS Apple Silicon
 
 ```sh
 bash <(curl -fsSL https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.sh)
 ```
 
-Windows (AMD64), in PowerShell:
+**Windows** · AMD64 · PowerShell
 
 ```powershell
 irm https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.ps1 | iex
 ```
 
-To install the latest unstable (beta) release, add `edge` in Bash or `-Edge`
-in PowerShell:
+<details>
+<summary><strong>Edge / beta</strong> — try the latest prerelease</summary>
+
+Get the newest changes before the next stable release. Edge builds may be less
+stable; the commands above always install the latest stable release.
+
+**Linux & macOS**
 
 ```sh
 bash <(curl -fsSL https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.sh) edge
 ```
 
+**Windows · PowerShell**
+
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.ps1))) -Edge
+$installer = irm https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.ps1
+& ([scriptblock]::Create($installer)) -Edge
 ```
 
-Without this option, the installers use the latest stable release. Downloads
-allow up to 10 minutes per attempt, with a 30-second connection timeout.
+Already installed? Run `/update edge` inside Eirene.
+
+</details>
 
 The releases are standalone binaries and do not require Python. Open a new
 terminal after installation, run `eirene` from your project directory, and use

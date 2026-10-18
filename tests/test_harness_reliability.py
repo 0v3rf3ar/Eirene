@@ -138,17 +138,16 @@ async def test_context_compaction_runs_inside_native_agent(workdir):
     assert "summary: preserve requirements" in calls[1][1][0]["content"]
 
 
-async def test_external_patch_approval_scopes_permission(workdir, outside):
+async def test_external_edit_approval_scopes_permission(workdir, outside):
     target = outside / "secret.txt"
-    patch = f"--- {target}\n+++ {target}\n@@ -1 +1 @@\n-do not read\n+approved\n"
-    agent = build(workdir, Script([ToolCall("p", "apply_patch", {"patch": patch})], [TextDelta("done")]))
+    agent = build(workdir, Script([ToolCall("e", "edit_file", {"path": str(target), "old_string": "do not read", "new_string": "approved"})], [TextDelta("done")]))
     approvals = []
     async def approve(*args):
         approvals.append(args)
         return "yes"
     agent.approve = approve
     await drive(agent)
-    assert approvals and target.read_text() == "approved\n"
+    assert approvals and target.read_text() == "approved"
     assert not agent.sandbox.contains(target)
 
 
@@ -323,7 +322,7 @@ async def test_native_approval_does_not_duplicate_highlighted_diff(workdir, monk
     patch = "--- a/demo.py\n+++ b/demo.py\n@@ -1 +1 @@\n-old\n+new\n"
     try:
         await app.push(ChangeBlock("demo.py", patch))
-        assert await app._approve("native_apply_patch", "demo.py", patch, "edit") == "yes"
+        assert await app._approve("native_edit_file", "demo.py", patch, "edit") == "yes"
         assert len(app.transcript.query(ChangeBlock)) == 1
         assert not list(app.transcript.query(DiffBlock))
     finally:

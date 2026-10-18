@@ -42,8 +42,10 @@ def _silhouette(width: int, height: int, pixels: bytes) -> bytes:
     return bytes(mask)
 
 
-def pixel_logo(width: int, height: int, *, transparent: bool = False) -> Text:
+def pixel_logo(width: int, height: int, *, transparent: bool = False,
+               remove_black: bool = False) -> Text:
     """Fit the logo while accounting for two pixels per terminal cell."""
+    # Trust-screen watermarks can also leave the portrait's black ink empty.
     source_width, source_height, pixels = _logo()
     mask = _silhouette(source_width, source_height, pixels) if transparent else b""
     columns = max(1, min(width, height * 2))
@@ -59,8 +61,8 @@ def pixel_logo(width: int, height: int, *, transparent: bool = False) -> Text:
             top = pixels[top_row * source_width + source_x]
             bottom = pixels[bottom_row * source_width + source_x]
             if transparent:
-                top_inside = mask[top_row * source_width + source_x]
-                bottom_inside = mask[bottom_row * source_width + source_x]
+                top_inside = bool(top) if remove_black else mask[top_row * source_width + source_x]
+                bottom_inside = bool(bottom) if remove_black else mask[bottom_row * source_width + source_x]
                 # Terminal opacity can affect ANSI background colors but leave
                 # foreground ink opaque. Draw both halves using foreground ink
                 # so the desktop never changes the portrait's internal shading.

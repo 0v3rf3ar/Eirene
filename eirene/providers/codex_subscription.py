@@ -383,7 +383,7 @@ class CodexSubscription(Provider):
                     break
                 await asyncio.sleep(0.01)
             label, preview = _file_change_preview(changes, self.root)
-            answer = await self.approve("native_apply_patch", label, preview,
+            answer = await self.approve("native_edit_file", label, preview,
                                         str(params.get("reason") or "Codex file change"))
         else:
             return {"decision": "decline"}

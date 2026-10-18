@@ -181,7 +181,7 @@ async def test_manual_edits_need_approval_until_session_edits_allowed(workdir, p
     provider = Script(
         [ToolCall("create", "write_file", {"path": "a.txt", "content": "a"}), Done("tool_calls")],
         [ToolCall("edit", "edit_file", {"path": "a.txt", "old_string": "a", "new_string": "b"}), Done("tool_calls")],
-        [ToolCall("patch", "apply_patch", {"patch": "--- /dev/null\n+++ b.txt\n@@ -0,0 +1 @@\n+new\n"}), Done("tool_calls")],
+        [ToolCall("create2", "write_file", {"path": "b.txt", "content": "new\n"}), Done("tool_calls")],
         [Done("stop")],
         [ToolCall("next", "write_file", {"path": "c.txt", "content": "c"}), Done("tool_calls")],
         [Done("stop")])
@@ -231,7 +231,7 @@ async def test_session_edit_permission_does_not_approve_commands(workdir):
     assert not (workdir / "unapproved.txt").exists()
 
 
-@pytest.mark.parametrize("answer,expected", [("yes", 3), ("always", 1)])
+@pytest.mark.parametrize("answer,expected", [("yes", 2), ("always", 1)])
 async def test_native_manual_file_approvals_share_session_edit_permission(workdir, answer, expected):
     runner = build(workdir, Script([]), mode=Mode.MANUAL, permissions="full-access")
     asked = []
@@ -241,7 +241,7 @@ async def test_native_manual_file_approvals_share_session_edit_permission(workdi
         return answer
 
     runner.approve = approve
-    for name in ("native_write_file", "native_edit_file", "native_apply_patch"):
+    for name in ("native_write_file", "native_edit_file"):
         assert await runner._approve_native(name, "file.txt", "diff", "edit") == "yes"
     assert len(asked) == expected
     runner.mode = Mode.PLAN

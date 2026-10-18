@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..core.errors import SandboxError, ToolError
-from . import browser, files, language, shell, processes, patches, native
+from . import browser, files, language, shell, processes, native
 from ..core import project as project_ops
 from ..core import skills as skill_ops
 from ..core import plans as plan_ops
@@ -95,7 +95,7 @@ TOOLS: list[Tool] = [
              },
              "required": ["path"],
          }, ""),
-    Tool("write_file", WRITE, "Create or overwrite a file.", {
+    Tool("write_file", WRITE, "Create or fully rewrite a file. Use edit_file for focused changes.", {
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "File path, relative to the sandbox."},
@@ -103,7 +103,7 @@ TOOLS: list[Tool] = [
         },
         "required": ["path", "content"],
     }, ""),
-    Tool("edit_file", WRITE, "Replace exact text in an existing file.", {
+    Tool("edit_file", WRITE, "Replace exact text in an existing file. Read first; include unique context, without line numbers.", {
         "type": "object",
         "properties": {
             "path": {"type": "string"},
@@ -301,12 +301,7 @@ TOOLS: list[Tool] = [
     Tool("plan_clear", READ, "Clear the durable session plan metadata.", {
         "type": "object", "properties": {},
     }),
-    Tool("apply_patch", WRITE,
-         "Atomically validate and apply a unified patch, including multiple files.", {
-             "type": "object", "properties": {
-                 "patch": {"type": "string"},
-             }, "required": ["patch"],
-         }),
+
 ]
 
 BY_NAME = {tool.name: tool for tool in TOOLS}
@@ -618,8 +613,6 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
                                    _text(args, "status"), plan_scope)
     if name == "plan_clear":
         return plan_ops.clear(box.root, plan_scope)
-    if name == "apply_patch":
-        return patches.apply(box, _text(args, "patch"))
 
     return _run_file_tool(name, args, box, max_chars=min(24000, max_bytes))
 
@@ -646,9 +639,11 @@ def _run_file_tool(name: str, args: dict[str, Any], box: Sandbox, *, max_chars: 
             raise ToolError("content is required")
         return files.write_file(box, _text(args, "path"), str(content))
     if name == "edit_file":
+        if not isinstance(args.get("old_string"), str) or not isinstance(args.get("new_string"), str):
+            raise ToolError("old_string and new_string must be strings; use an empty new_string to delete text")
         return files.edit_file(box, _text(args, "path"), str(args.get("old_string", "")),
                                str(args.get("new_string", "")),
-                               bool(args.get("replace_all")))
+                               args.get("replace_all", False))
     if name == "list_dir":
         return files.list_dir(box, str(args.get("path") or "."))
     if name == "glob":
@@ -684,9 +679,6 @@ def escape_paths(name: str, args: dict[str, Any]) -> list[str]:
     """Paths a call needs outside the root, mirroring sandbox_escape."""
     if name in ("run_command", "start_process"):
         return [str(p) for key in ("read_paths", "write_paths") for p in args.get(key, [])]
-    if name == "apply_patch":
-        return [patches._name(c.new if c.new != "/dev/null" else c.old)
-                for c in patches.parse(str(args.get("patch", "")))]
     value = args.get("path")
     return [str(value)] if value else []
 
@@ -704,14 +696,11 @@ def preview(name: str, args: dict[str, Any], box: Sandbox) -> str:
             return files.edit_preview(box, str(args.get("path", "")),
                                       str(args.get("old_string", "")),
                                       str(args.get("new_string", "")),
-                                      bool(args.get("replace_all")))
+                                      args.get("replace_all", False))
         except Exception:  # noqa: BLE001
             return ""
     if name == "run_command":
         return str(args.get("command", ""))
-    if name == "apply_patch":
-        patch = str(args.get("patch", ""))
-        return patch[:200_000] + ("\n… patch preview truncated" if len(patch) > 200_000 else "")
     return ""
 
 
@@ -734,10 +723,6 @@ def sandbox_escape(name: str, args: dict[str, Any], box: Sandbox) -> str:
             requests.append("network access")
         if requests:
             return "requesting " + "; ".join(requests)
-    if name == "apply_patch":
-        outside = [p for p in escape_paths(name, args) if not box.contains(p)]
-        if outside:
-            return "patch outside workspace: " + ", ".join(outside)
     for key in ("path", "cwd"):
         value = args.get(key)
         if value and not box.contains(str(value)):

@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import difflib
+import errno
+import os
+import stat
+import tempfile
 from pathlib import Path
 
 from ..core.errors import ToolError
@@ -42,31 +46,103 @@ def write_file(box: Sandbox, path: str, content: str) -> str:
     return f"{verb} {box.relative(resolved)} ({len(content.splitlines())} lines)"
 
 
-def edit_file(box: Sandbox, path: str, old: str, new: str, replace_all: bool = False) -> str:
-    """Replace exact text in a file."""
-    resolved = box.resolve(path)
-    if not resolved.exists():
-        raise ToolError(f"{box.relative(resolved)} does not exist")
+def _edit_text(text: str, old: str, new: str, replace_all: bool, name: str) -> tuple[str, int]:
+    if not isinstance(old, str) or not isinstance(new, str):
+        raise ToolError("old_string and new_string must be strings")
+    if not isinstance(replace_all, bool):
+        raise ToolError("replace_all must be a boolean")
+    if not old:
+        raise ToolError("old_string must not be empty; use write_file for a complete file")
+    old, new = _edit_newlines(text, old, new)
     if old == new:
         raise ToolError("old_string and new_string are identical")
-    try:
-        text = resolved.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        raise ToolError(f"cannot read {box.relative(resolved)}: {exc}") from exc
     count = text.count(old)
-    if count == 0:
-        raise ToolError(f"old_string not found in {box.relative(resolved)}")
+    if not count:
+        raise ToolError(f"no match in {name}; reread the target and copy exact text without line numbers")
     if count > 1 and not replace_all:
-        raise ToolError(f"old_string appears {count} times in "
-                        f"{box.relative(resolved)}; pass replace_all or add context")
-    updated = text.replace(old, new) if replace_all else text.replace(old, new, 1)
+        raise ToolError(f"{count} matches in {name}; add unique context or set replace_all=true")
+    return text.replace(old, new, -1 if replace_all else 1), count if replace_all else 1
+
+
+def _edit_error(name: str, exc: OSError) -> ToolError:
+    reasons = {
+        errno.ENOSPC: "disk full; free space and retry",
+        errno.EDQUOT: "disk quota exceeded; free space or increase quota",
+        errno.EACCES: "permission denied; check file and parent directory permissions",
+        errno.EPERM: "operation denied; check permissions or file protection",
+        errno.EROFS: "read-only filesystem; use a writable location",
+        errno.ENOENT: "file or parent missing; reread the target path",
+        errno.ENOTDIR: "a path component is not a directory",
+        errno.EISDIR: "target is a directory; select a text file",
+        errno.EIO: "filesystem I/O error; check storage before retrying",
+        errno.EMFILE: "too many open files; close handles and retry",
+        errno.ENFILE: "system file-handle limit reached; retry later",
+    }
+    return ToolError(f"cannot edit {name}: {reasons.get(exc.errno, exc.strerror or str(exc))}; edit not committed")
+
+
+def _snapshot(info: os.stat_result) -> tuple:
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
+            info.st_ctime_ns, info.st_mode, info.st_uid, info.st_gid, info.st_nlink)
+
+
+def edit_file(box: Sandbox, path: str, old: str, new: str, replace_all: bool = False) -> str:
+    """Validate exact replacements and commit using a sibling atomic replacement."""
+    resolved = box.check_write_target(path)
+    name = box.relative(resolved)
+    temporary = None
     try:
-        resolved.write_text(updated, encoding="utf-8", newline="")
+        if not stat.S_ISREG(resolved.stat().st_mode):
+            raise ToolError(f"cannot edit {name}: target must be a regular text file")
+        # Opening for update checks file write permission without truncating it.
+        with resolved.open("r+b") as source:
+            before = os.fstat(source.fileno())
+            if not stat.S_ISREG(before.st_mode):
+                raise ToolError(f"cannot edit {name}: target must be a regular text file")
+            if before.st_nlink > 1:
+                raise ToolError(f"cannot edit {name}: hard-linked file; atomic replacement would break links")
+            original = source.read()
+        try:
+            text = original.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ToolError(f"cannot edit {name}: invalid UTF-8; use a tool for its encoding") from exc
+        if b"\0" in original:
+            raise ToolError(f"cannot edit {name}: binary file; select a text file")
+        updated, replaced = _edit_text(text, old, new, replace_all, name)
+        try:
+            encoded = updated.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ToolError(f"cannot edit {name}: replacement contains invalid Unicode") from exc
+        with tempfile.NamedTemporaryFile(mode="wb", dir=resolved.parent,
+                                         prefix=".eirene-edit-", delete=False) as target:
+            temporary = Path(target.name)
+            target.write(encoded)
+            target.flush()
+            # Preserve ownership before mode (chown can reset mode bits).
+            created = os.fstat(target.fileno())
+            if (created.st_uid, created.st_gid) != (before.st_uid, before.st_gid):
+                os.chown(temporary, before.st_uid, before.st_gid)
+            if hasattr(os, "listxattr"):
+                for key in os.listxattr(resolved):
+                    os.setxattr(temporary, key, os.getxattr(resolved, key))
+            os.chmod(temporary, stat.S_IMODE(before.st_mode))
+            os.fsync(target.fileno())
+        if _snapshot(resolved.stat()) != _snapshot(before) or resolved.read_bytes() != original:
+            raise ToolError(f"cannot edit {name}: file changed during edit; reread and retry")
+        os.replace(temporary, resolved)
+        temporary = None
     except OSError as exc:
-        raise ToolError(f"cannot write {box.relative(resolved)}: {exc}") from exc
-    replaced = count if replace_all else 1
-    return f"edited {box.relative(resolved)} ({replaced} replacement"\
-           f"{'s' if replaced != 1 else ''})"
+        raise _edit_error(name, exc) from exc
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError as cleanup:
+                # Report residue as well as the original error, without its contents.
+                prior = cleanup.__context__
+                raise ToolError(f"{prior or 'edit failed'}; temporary cleanup failed: "
+                                f"{temporary.name}: {cleanup.strerror}") from cleanup
+    return f"edited {name} ({replaced} replacement{'s' if replaced != 1 else ''})"
 
 
 def list_dir(box: Sandbox, path: str = ".") -> str:
@@ -91,20 +167,31 @@ def find_symbol(box: Sandbox, name: str, path: str = ".", limit: int = 100) -> s
     return native.sync(native.find_symbol(box, name, path, limit))
 
 
+def _edit_newlines(text: str, old: str, new: str) -> tuple[str, str]:
+    # Readers display normalized newlines; preserve CRLF when applying their text.
+    if "\r\n" in text and "\n" not in text.replace("\r\n", ""):
+        old = old.replace("\r\n", "\n").replace("\n", "\r\n")
+        new = new.replace("\r\n", "\n").replace("\n", "\r\n")
+    return old, new
+
+
 def edit_preview(box: Sandbox, path: str, old: str, new: str,
                  replace_all: bool = False) -> str:
     """Unified diff of a pending edit."""
+    resolved = box.resolve(path)
+    name = box.relative(resolved)
     try:
-        resolved = box.resolve(path)
-        current = resolved.read_text(encoding="utf-8")
-    except Exception:  # noqa: BLE001
-        return "\n".join([f"- {line}" for line in old.splitlines()[:40]]
-                         + [f"+ {line}" for line in new.splitlines()[:40]])
-    if old not in current:
-        return "\n".join([f"- {line}" for line in old.splitlines()[:40]]
-                         + [f"+ {line}" for line in new.splitlines()[:40]])
-    updated = current.replace(old, new) if replace_all else current.replace(old, new, 1)
-    return _unified(box.relative(resolved), current, updated)
+        current = resolved.read_bytes().decode("utf-8")
+    except OSError as exc:
+        return str(_edit_error(name, exc))
+    except UnicodeDecodeError:
+        return f"cannot edit {name}: invalid UTF-8"
+    try:
+        updated, _ = _edit_text(current, old, new, replace_all, name)
+    except ToolError as exc:
+        return str(exc)
+    return _unified(name, current, updated)
+
 
 
 def diff_preview(box: Sandbox, path: str, content: str) -> str:

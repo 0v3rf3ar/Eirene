@@ -230,7 +230,7 @@ async def test_manual_file_change_shows_native_diff_before_approval(workdir):
         "params": {"itemId": "edit-1", "reason": "apply the fix"},
     })
     assert result == {"decision": "accept"}
-    assert seen == [("native_apply_patch", "main.py",
+    assert seen == [("native_edit_file", "main.py",
                      "--- main.py\n+++ main.py\n@@ -1 +1 @@\n-old\n+new",
                      "apply the fix")]
 

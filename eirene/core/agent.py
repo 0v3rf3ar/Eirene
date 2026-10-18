@@ -30,7 +30,7 @@ from . import artifacts
 from .tool_memory import compact_output, fingerprint
 from .logging import get as get_logger
 
-CHANGE_TOOLS = ("write_file", "edit_file", "apply_patch")
+CHANGE_TOOLS = ("write_file", "edit_file")
 CONTEXT_WARNING = 60_000
 ASIDE_HISTORY = 40
 # Reasoning models spend tokens thinking before they answer.
@@ -478,7 +478,7 @@ class Agent:
         from .permissions import full_access
         if self.mode is Mode.PLAN:
             return NO
-        edit = name in {"native_write_file", "native_edit_file", "native_apply_patch"}
+        edit = name in {"native_write_file", "native_edit_file"}
         approval_key = "session_edits" if edit else name
         if (self.mode is Mode.AUTO and full_access(self.config)) or approval_key in self.always:
             return YES
@@ -999,7 +999,7 @@ class Agent:
         # invalidate local observations; a new user turn starts a fresh ledger.
         cacheable = call.name in {
             "read_file", "list_dir", "glob", "search_text", "read_output",
-            "write_file", "edit_file", "apply_patch", "run_command", "start_process",
+            "write_file", "edit_file", "run_command", "start_process",
         }
         from ..tools import processes
         if (cacheable and cached and cached[3] == self._work_revision

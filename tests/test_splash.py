@@ -107,6 +107,16 @@ def test_transparent_logo_preserves_black_inside_the_portrait(monkeypatch):
     assert all(span.style.bgcolor is None for span in picture.spans)
 
 
+def test_logo_can_remove_black_inside_the_portrait(monkeypatch):
+    from eirene.ui import splash
+    pixels = bytes([255, 0, 0, 255, 255, 0, 255, 0] * 2)
+    monkeypatch.setattr(splash, "_logo", lambda: (4, 4, pixels))
+    picture = pixel_logo(4, 2, transparent=True, remove_black=True)
+    assert picture.plain.splitlines() == ["█ ▄▀", "█ ▄▀"]
+    assert all(span.style.bgcolor is None and span.style.color.name != "#000000"
+               for span in picture.spans)
+
+
 async def test_startup_picture_uses_transparent_background(workdir):
     app = Eirene(workdir)
     async with app.run_test(size=(60, 24)):

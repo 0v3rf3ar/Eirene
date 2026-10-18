@@ -230,3 +230,191 @@ def test_tail_retains_end_when_requested_lines_exceed_budget(box, workdir):
     assert len(body) <= 700
     assert "100\trow 99" in body
     assert "earlier lines omitted" in body
+
+
+def test_patch_tool_is_removed():
+    assert "apply_patch" not in registry.BY_NAME
+    assert all(tool.name != "apply_patch" for tool in registry.TOOLS)
+
+
+async def test_removed_patch_cannot_execute(box):
+    with pytest.raises(ToolError):
+        await registry.execute("apply_patch", {"patch": "anything"}, box)
+
+
+def test_edit_empty_search_cannot_insert_everywhere(box, workdir):
+    files.write_file(box, "a.txt", "hello")
+    with pytest.raises(ToolError, match="must not be empty"):
+        files.edit_file(box, "a.txt", "", "bad")
+    assert (workdir / "a.txt").read_text() == "hello"
+
+
+async def test_edit_requires_explicit_replacement(box, workdir):
+    files.write_file(box, "a.txt", "hello")
+    with pytest.raises(ToolError, match="must be strings"):
+        await registry.execute("edit_file", {"path": "a.txt", "old_string": "hello"}, box)
+    assert (workdir / "a.txt").read_text() == "hello"
+
+
+def test_edit_preserves_crlf_from_normalized_reader_text(box, workdir):
+    target = workdir / "a.txt"
+    target.write_bytes(b"one\r\ntwo\r\nthree\r\n")
+    files.edit_file(box, "a.txt", "one\ntwo", "one\nchanged")
+    assert target.read_bytes() == b"one\r\nchanged\r\nthree\r\n"
+
+
+@pytest.mark.parametrize("operation,code,message", [
+    ("fsync", 28, "disk full"),
+    ("replace", 13, "permission denied"),
+    ("replace", 30, "read-only filesystem"),
+    ("replace", 5, "I/O error"),
+])
+def test_edit_os_failures_preserve_original(box, workdir, monkeypatch, operation, code, message):
+    import os
+    target = workdir / "a.txt"
+    target.write_bytes(b"hello\n")
+    def fail(*args, **kwargs):
+        raise OSError(code, os.strerror(code))
+    monkeypatch.setattr(files.os, operation, fail)
+    with pytest.raises(ToolError, match=message):
+        files.edit_file(box, "a.txt", "hello", "updated")
+    assert target.read_bytes() == b"hello\n"
+    assert not list(workdir.glob(".eirene-edit-*"))
+
+
+def test_edit_partial_write_failure_preserves_original(box, workdir, monkeypatch):
+    import errno
+    target = workdir / "a.txt"
+    target.write_bytes(b"hello")
+    original_factory = files.tempfile.NamedTemporaryFile
+    class BrokenWriter:
+        def __init__(self, wrapped):
+            self.wrapped = wrapped
+            self.name = wrapped.name
+        def __enter__(self):
+            self.wrapped.__enter__()
+            return self
+        def __exit__(self, *args):
+            return self.wrapped.__exit__(*args)
+        def write(self, data):
+            self.wrapped.write(data[:2])
+            raise OSError(errno.ENOSPC, "No space left on device")
+    monkeypatch.setattr(files.tempfile, "NamedTemporaryFile",
+                        lambda **kwargs: BrokenWriter(original_factory(**kwargs)))
+    with pytest.raises(ToolError, match="disk full"):
+        files.edit_file(box, "a.txt", "hello", "updated")
+    assert target.read_bytes() == b"hello"
+    assert not list(workdir.glob(".eirene-edit-*"))
+
+
+def test_edit_detects_concurrent_change(box, workdir, monkeypatch):
+    target = workdir / "a.txt"
+    target.write_text("hello")
+    fsync = files.os.fsync
+    def concurrent_write(fd):
+        fsync(fd)
+        target.write_text("someone else's change")
+    monkeypatch.setattr(files.os, "fsync", concurrent_write)
+    with pytest.raises(ToolError, match="file changed"):
+        files.edit_file(box, "a.txt", "hello", "updated")
+    assert target.read_text() == "someone else's change"
+    assert not list(workdir.glob(".eirene-edit-*"))
+
+
+def test_edit_preserves_executable_mode(box, workdir):
+    import stat
+    target = workdir / "a.sh"
+    target.write_text("hello")
+    target.chmod(0o751)
+    files.edit_file(box, "a.sh", "hello", "updated")
+    assert stat.S_IMODE(target.stat().st_mode) == 0o751
+
+
+@pytest.mark.parametrize("body,message", [(b"hello\xff", "invalid UTF-8"),
+                                           (b"hello\x00", "binary file")])
+def test_edit_rejects_non_text(box, workdir, body, message):
+    target = workdir / "a.txt"
+    target.write_bytes(body)
+    with pytest.raises(ToolError, match=message):
+        files.edit_file(box, "a.txt", "hello", "updated")
+    assert target.read_bytes() == body
+
+
+def test_edit_rejects_non_boolean_replace_all(box, workdir):
+    files.write_file(box, "a.txt", "hello hello")
+    with pytest.raises(ToolError, match="boolean"):
+        files.edit_file(box, "a.txt", "hello", "updated", "false")
+    assert (workdir / "a.txt").read_text() == "hello hello"
+
+
+def test_preview_does_not_claim_ambiguous_edit(box):
+    files.write_file(box, "a.txt", "hello hello")
+    assert "2 matches" in files.edit_preview(box, "a.txt", "hello", "updated")
+
+
+def test_preview_matches_crlf_edit(box, workdir):
+    (workdir / "a.txt").write_bytes(b"one\r\ntwo\r\n")
+    preview = files.edit_preview(box, "a.txt", "one\ntwo", "one\nchanged")
+    assert "-two" in preview and "+changed" in preview
+    files.edit_file(box, "a.txt", "one\ntwo", "one\nchanged")
+    assert (workdir / "a.txt").read_bytes() == b"one\r\nchanged\r\n"
+
+
+@pytest.mark.parametrize("code,message", [(13, "permission denied"), (122, "quota exceeded")])
+def test_edit_temp_creation_failure_preserves_original(box, workdir, monkeypatch, code, message):
+    import errno
+    if code == 122:
+        code = errno.EDQUOT
+    target = workdir / "a.txt"
+    target.write_text("hello")
+    def fail(**kwargs):
+        raise OSError(code, "storage failure")
+    monkeypatch.setattr(files.tempfile, "NamedTemporaryFile", fail)
+    with pytest.raises(ToolError, match=message):
+        files.edit_file(box, "a.txt", "hello", "updated")
+    assert target.read_text() == "hello"
+
+
+def test_edit_cleanup_failure_reports_both_errors(box, workdir, monkeypatch):
+    import errno
+    target = workdir / "a.txt"
+    target.write_text("hello")
+    def full(*args):
+        raise OSError(errno.ENOSPC, "No space left on device")
+    unlink = type(target).unlink
+    def denied(path, *args, **kwargs):
+        if path.name.startswith(".eirene-edit-"):
+            raise PermissionError(errno.EACCES, "Permission denied")
+        return unlink(path, *args, **kwargs)
+    monkeypatch.setattr(files.os, "fsync", full)
+    monkeypatch.setattr(type(target), "unlink", denied)
+    with pytest.raises(ToolError, match="disk full.*temporary cleanup failed"):
+        files.edit_file(box, "a.txt", "hello", "updated")
+    assert target.read_text() == "hello"
+    for temporary in workdir.glob(".eirene-edit-*"):
+        unlink(temporary)
+
+
+def test_edit_missing_and_directory_targets(box, workdir):
+    with pytest.raises(ToolError, match="missing"):
+        files.edit_file(box, "missing.txt", "hello", "updated")
+    with pytest.raises(ToolError, match="regular text file"):
+        files.edit_file(box, ".", "hello", "updated")
+
+
+def test_edit_hard_link_is_not_silently_broken(box, workdir):
+    target = workdir / "a.txt"
+    target.write_text("hello")
+    (workdir / "alias.txt").hardlink_to(target)
+    with pytest.raises(ToolError, match="hard-linked"):
+        files.edit_file(box, "a.txt", "hello", "updated")
+    assert target.read_text() == "hello"
+    assert (workdir / "alias.txt").read_text() == "hello"
+
+
+def test_edit_surrogate_replacement_leaves_original(box, workdir):
+    target = workdir / "a.txt"
+    target.write_text("hello")
+    with pytest.raises(ToolError, match="invalid Unicode"):
+        files.edit_file(box, "a.txt", "hello", "\ud800")
+    assert target.read_text() == "hello"

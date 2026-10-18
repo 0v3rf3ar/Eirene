@@ -14,7 +14,7 @@ from ..core.prompt import TOOL_APPROVAL_GUIDANCE
 COMPACT_TOOLS = {
     "request_full_access",
     "ask_user", "read_file", "list_dir", "glob", "search_text",
-    "write_file", "edit_file", "apply_patch", "run_command", "web_search", "web_fetch",
+    "write_file", "edit_file", "run_command", "web_search", "web_fetch",
     "read_output", "read_attachment", "start_process", "poll_process", "stop_process", "list_processes",
 }
 PLUGIN_TOOLS = {"load_skill", "load_plugin_resource", "delegate_tasks", "plan_show", "plan_update", "plan_set_status"}
@@ -115,6 +115,7 @@ Mode: {mode}
 {TOOL_APPROVAL_GUIDANCE}
 Use preflight facts first; check unknown tools with bounded read-only probes. Never guess a package manager.
 Use focused file/search tools; don't repeat calls.
+Edits: any size needed; exact unique context, no line numbers. Use write_file for full rewrites.
 Reads: pattern/context, tail, offset/limit, byte_offset.
 Quote paths; retain errors and exit status.
 Set timeout: 30 reads, 300 tests, 600 builds; no interactive commands.

@@ -59,4 +59,5 @@ class LogoBackdrop(Static):
 
     def on_resize(self, event: events.Resize) -> None:
         self.update(pixel_logo(max(1, event.size.width - 4),
-                               max(1, event.size.height - 2), transparent=True))
+                               max(1, event.size.height - 2),
+                               transparent=True, remove_black=True))
