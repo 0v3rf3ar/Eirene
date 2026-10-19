@@ -425,7 +425,7 @@ class Eirene(App):
     def refresh_mode_line(self) -> None:
         detail = ""
         if self.agent.provider_key:
-            detail = f"{self.agent.provider_key} {self.agent.model}"
+            detail = f"{providers.display_name(self.agent.provider_key, compact=True)}({self.agent.model})"
         self.mode_line.show(self.agent.mode, detail)
 
     # input

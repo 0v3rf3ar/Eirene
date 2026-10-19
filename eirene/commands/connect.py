@@ -81,23 +81,47 @@ async def _pick(app, args: str) -> str:
             key = providers.resolve_alias(name)
             if not providers.available(key):
                 raise CommandError("install the provider plugin first: /plugins install omniroute")
+            if name.lower() == "ollama":
+                return await _pick_ollama(app)
             return key
         except ProviderError as exc:
             raise CommandError(str(exc)) from exc
     options = []
     for key in providers.ORDER:
+        if key == "ollama-local":
+            continue
         if not providers.available(key):
             continue
         spec = providers.SPECS[key]
-        marks = []
+        keys = ("ollama", "ollama-local") if key == "ollama" else (key,)
+        options.append((key, spec.label, _connection_marks(app, keys)))
+    selected = "ollama" if app.config.provider == "ollama-local" else app.config.provider
+    chosen = await app.ask_choice("connect to which provider?", options,
+                                  selected=selected or "", right_hint=True) or ""
+    return await _pick_ollama(app) if chosen == "ollama" else chosen
+
+
+def _connection_marks(app, keys: tuple[str, ...]) -> str:
+    marks = []
+    for key in keys:
+        spec = providers.spec(key)
         saved = app.config.get("providers", {}).get(key, {})
         if app.config.api_key(key) or (not spec.needs_key and saved.get("model")):
             marks.append("configured")
-        if key == app.config.provider:
-            marks.append("active")
-        options.append((key, spec.label, ", ".join(marks)))
-    return await app.ask_choice("connect to which provider?", options,
-                                selected=app.config.provider or "", right_hint=True) or ""
+            break
+    if app.config.provider in keys:
+        marks.append("active")
+    return ", ".join(marks)
+
+
+async def _pick_ollama(app) -> str:
+    selected = app.config.provider if app.config.provider in {"ollama", "ollama-local"} else ""
+    if not selected:
+        selected = "ollama-local" if app.config.provider_config("ollama-local").get("model") else "ollama"
+    return await app.ask_choice("Ollama connection", [
+        ("ollama", "Cloud", _connection_marks(app, ("ollama",)) or "Ollama account and API key"),
+        ("ollama-local", "Local", _connection_marks(app, ("ollama-local",)) or "running Ollama service"),
+    ], selected=selected, right_hint=True) or ""
 
 
 async def _switch(app, key: str) -> bool:

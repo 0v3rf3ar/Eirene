@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -539,6 +540,29 @@ async def test_connect_rejects_an_unknown_provider(workdir):
         await dispatch(app, "/connect nonsense")
         await settle(pilot)
         assert any("unknown provider" in text for text in texts(app))
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("key,label,compact", [
+    ("chatgpt-plan", "ChatGPT", "ChatGPT"),
+    ("claude-code", "Claude Code (headless)", "Claude Code"),
+    ("chatgpt", "OpenAI (API)", "OpenAI"),
+    ("ollama", "Ollama", "Ollama"), ("ollama-local", "Ollama", "Ollama"),
+    ("gemini", "Google (aistudio)", "Google"),
+    ("groq", "Groq (API)", "Groq"), ("deepseek", "Deepseek (API)", "Deepseek"),
+])
+async def test_bottom_line_uses_compact_provider_names(workdir, key, label, compact):
+    app, pilot, context = await start(workdir, Script())
+    try:
+        app.agent.use(Script(), key, "model-a")
+        app.refresh_mode_line()
+        assert app.mode_line.detail == f"{compact}(model-a)"
+        app.ask_choice = AsyncMock(return_value=None)
+        from eirene.commands.connect import _pick
+        await _pick(app, "")
+        rows = {row[0]: row[1] for row in app.ask_choice.call_args.args[1]}
+        assert rows["ollama" if key == "ollama-local" else key] == label
     finally:
         await context.__aexit__(None, None, None)
 

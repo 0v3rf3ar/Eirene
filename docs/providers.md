@@ -39,21 +39,29 @@ account login.
 
 | Name for `/connect` | Connection | What you need |
 | --- | --- | --- |
-| `chatgpt` | OpenAI API | API key with access to the selected model. |
-| `chatgpt-plan` | Direct ChatGPT subscription | Browser sign-in and authorization to use an eligible ChatGPT plan. Eirene runs the tools. |
+| `chatgpt` | OpenAI (API) | API key with access to the selected model. |
+| `chatgpt-plan` | ChatGPT | Browser sign-in and authorization to use an eligible ChatGPT plan. Eirene runs the tools. |
 | `anthropic` | Anthropic API | Anthropic API key. |
-| `gemini` | Google Gemini API | Google AI Studio API key. |
-| `groq` | Groq API | Groq API key. |
-| `deepseek` | DeepSeek API | DeepSeek API key. |
+| `gemini` | Google (aistudio) | Google AI Studio API key. |
+| `groq` | Groq (API) | Groq API key. |
+| `deepseek` | Deepseek (API) | DeepSeek API key. |
 | `kimi` | Moonshot API | Moonshot API key. |
-| `ollama` | Ollama hosted API | Ollama API key. |
-| `ollama-local` | Local Ollama | Running Ollama service and a downloaded model. |
+| `ollama` | Ollama | Choose Cloud (API key) or Local (running service). |
+| `ollama-local` | Ollama, direct local connection | Running Ollama service and a downloaded model. |
 | `perplexity` | Perplexity search models | Perplexity API key; text responses only. |
 | `custom-openai` | OpenAI-compatible endpoint | Base URL and key accepted by that endpoint. |
 | `custom-anthropic` | Anthropic-compatible endpoint | Base URL and key accepted by that endpoint. |
 | `chatgpt-subscription` | Installed Codex CLI | `codex` on PATH and a supported ChatGPT account login. |
-| `claude-code` | Installed Claude Code CLI | `claude` on PATH with its own working login. |
+| `claude-code` | Claude Code (headless) | `claude` on PATH with its own working login. |
 | `omniroute` | OmniRoute gateway | Installed Eirene adapter and a running gateway. |
+
+The provider picker uses the connection names above. The bottom status bar shows
+short names without provider qualifiers in `provider(model)` format, such as
+`OpenAI(gpt-5)` or `Google(gemini-2.5-flash)`.
+Ollama has one picker entry with Cloud and Local choices; their saved settings
+remain separate. Use `/connect ollama-cloud` to connect directly to the cloud
+service or `/connect ollama-local` for the local service. Existing provider keys
+in configuration files and commands retain their meanings.
 
 Common aliases include `openai` or `gpt` for `chatgpt`, `claude` for `anthropic`,
 `codex` for `chatgpt-subscription`, `claude-cli` for `claude-code`, `google` for

@@ -38,11 +38,11 @@ class Spec:
 
 SPECS: dict[str, Spec] = {
     "chatgpt-plan": Spec(
-        "chatgpt-plan", "ChatGPT subscription", "chatgpt-responses",
+        "chatgpt-plan", "ChatGPT", "chatgpt-responses",
         "https://api.openai.com/v1", needs_key=False,
         note="uses your authorized ChatGPT plan; Eirene runs the workspace tools"),
     "claude-code": Spec(
-        "claude-code", "Claude (headless)", "claude-code-cli",
+        "claude-code", "Claude Code (headless)", "claude-code-cli",
         needs_key=False, supports_tools=False,
         models=["sonnet", "opus", "haiku"],
         note="uses Claude Code tools and your Claude subscription limits"),
@@ -51,7 +51,7 @@ SPECS: dict[str, Spec] = {
         needs_key=False, supports_tools=False,
         note="uses Codex tools and your ChatGPT subscription limits"),
     "chatgpt": Spec(
-        "chatgpt", "OpenAI API", "openai", "https://api.openai.com/v1",
+        "chatgpt", "OpenAI (API)", "openai", "https://api.openai.com/v1",
         key_hint="starts with 'sk-'",
         models=["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4o",
                 "gpt-4o-mini", "o3", "o4-mini"]),
@@ -61,21 +61,21 @@ SPECS: dict[str, Spec] = {
         models=["claude-opus-4-1-20250805", "claude-sonnet-4-5-20250929",
                 "claude-haiku-4-5-20251001", "claude-3-7-sonnet-latest"]),
     "ollama": Spec(
-        "ollama", "Ollama (API)", "ollama", "https://ollama.com",
+        "ollama", "Ollama", "ollama", "https://ollama.com",
         key_hint="from ollama.com/settings/keys",
         models=["gpt-oss:120b", "gpt-oss:20b", "deepseek-v3.1:671b",
                 "qwen3-coder:480b", "kimi-k2:1t", "glm-4.6", "minimax-m2"]),
     "ollama-local": Spec(
-        "ollama-local", "Ollama (local)", "ollama", "http://localhost:11434",
+        "ollama-local", "Ollama", "ollama", "http://localhost:11434",
         needs_key=False),
     "gemini": Spec(
-        "gemini", "Gemini", "gemini",
+        "gemini", "Google (aistudio)", "gemini",
         "https://generativelanguage.googleapis.com/v1beta",
         key_hint="Google AI Studio key",
         models=["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
                 "gemini-2.0-flash"]),
     "groq": Spec(
-        "groq", "Groq", "openai", "https://api.groq.com/openai/v1",
+        "groq", "Groq (API)", "openai", "https://api.groq.com/openai/v1",
         key_hint="from console.groq.com/keys",
         models=["openai/gpt-oss-120b", "openai/gpt-oss-20b",
                 "llama-3.3-70b-versatile", "llama-3.1-8b-instant"]),
@@ -86,7 +86,7 @@ SPECS: dict[str, Spec] = {
         models=["auto/coding", "auto"],
         note="routing, providers, combos, and compression are configured in the OmniRoute dashboard"),
     "deepseek": Spec(
-        "deepseek", "DeepSeek", "openai", "https://api.deepseek.com/v1",
+        "deepseek", "Deepseek (API)", "openai", "https://api.deepseek.com/v1",
         key_hint="starts with 'sk-'",
         models=DEEPSEEK_MODELS),
     "kimi": Spec(
@@ -125,6 +125,13 @@ def spec(key: str) -> Spec:
     if not found:
         raise ProviderError(f"unknown provider '{key}'")
     return found
+
+
+def display_name(key: str, *, compact: bool = False) -> str:
+    """Use full names in menus and omit qualifiers in the bottom status line."""
+    info = SPECS.get(key)
+    label = info.label if info else key
+    return label.split(" (", 1)[0] if compact else label
 
 
 def resolve_alias(name: str) -> str:

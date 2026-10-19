@@ -429,14 +429,14 @@ def test_missing_key_is_reported():
 
 def test_hosted_and_local_ollama_specs():
     spec = registry.spec("ollama")
-    assert spec.label == "Ollama (API)"
+    assert spec.label == "Ollama"
     assert spec.needs_key is True
     assert spec.base_url == "https://ollama.com"
     assert spec.models
     assert "ollama-api" not in registry.SPECS
 
     local = registry.spec("ollama-local")
-    assert local.label == "Ollama (local)"
+    assert local.label == "Ollama"
     assert local.needs_key is False
     assert local.base_url == "http://localhost:11434"
 
@@ -653,7 +653,7 @@ async def test_groq_discovers_models_and_falls_back(workdir):
 def test_groq_requires_key_and_accepts_environment_key(workdir, monkeypatch):
     monkeypatch.delenv("EIRENE_GROQ_API_KEY", raising=False)
     config = Config.load()
-    with pytest.raises(ProviderError, match="Groq has no API key"):
+    with pytest.raises(ProviderError, match=r"Groq \(API\) has no API key"):
         registry.build("groq", config)
     monkeypatch.setenv("EIRENE_GROQ_API_KEY", "gsk-env-token")
     assert registry.build("groq", config).api_key == "gsk-env-token"
