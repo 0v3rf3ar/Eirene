@@ -9,6 +9,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -53,22 +54,35 @@ def test(python: Path) -> None:
 def freeze(python: Path, dist: Path | None = None, work: Path | None = None) -> Path:
     dist = dist or DIST
     work = work or WORK
-    shutil.rmtree(work, ignore_errors=True)
     dist.mkdir(parents=True, exist_ok=True)
+    work.mkdir(parents=True, exist_ok=True)
     print("\nbuilding the binary", flush=True)
-    code = run([python, "-m", "PyInstaller", "--noconfirm", "--clean",
-                "--log-level", "WARN", "--distpath", str(dist),
-                "--workpath", str(work), str(SPEC)])
-    if code != 0:
-        fail("pyinstaller failed")
-    binary = dist / ("eirene.exe" if os.name == "nt" else "eirene")
-    if not binary.exists():
-        fail(f"expected {binary} but it is not there")
+    name = "eirene.exe" if os.name == "nt" else "eirene"
+    # Build away from the published path. Failed builds and smoke checks leave
+    # the old executable intact; parallel builds get independent work folders.
+    with tempfile.TemporaryDirectory(prefix=".eirene-build-", dir=dist) as staging, \
+            tempfile.TemporaryDirectory(prefix="eirene-", dir=work) as scratch:
+        code = run([python, "-m", "PyInstaller", "--noconfirm", "--clean",
+                    "--log-level", "WARN", "--distpath", staging,
+                    "--workpath", scratch, str(SPEC)])
+        if code != 0:
+            fail("pyinstaller failed; existing executable was not changed")
+        built = Path(staging) / name
+        if not built.exists():
+            fail(f"expected {built} but it is not there")
+        smoke(built)
+        binary = dist / name
+        os.replace(built, binary)
     return binary
 
 
 def smoke(binary: Path) -> None:
     print("\nchecking the binary", flush=True)
+    from PyInstaller.archive.readers import CArchiveReader
+    archive = CArchiveReader(str(binary)).open_embedded_archive("PYZ.pyz")
+    for name in archive.toc:
+        archive.extract(name)
+    print(f"verified {len(archive.toc)} bundled Python modules", flush=True)
     for argv in ([binary, "--version"], [binary, "--help"]):
         result = subprocess.run([str(part) for part in argv], capture_output=True,
                                 text=True, timeout=180, stdin=subprocess.DEVNULL)
@@ -76,6 +90,11 @@ def smoke(binary: Path) -> None:
             fail(f"{' '.join(str(p) for p in argv)} exited {result.returncode}\n"
                  f"{result.stderr[:500]}")
     print("binary responds to --version and --help", flush=True)
+    if os.name != "nt":
+        # This must launch the frozen executable: source-only UI tests cannot
+        # detect missing or corrupted lazy-import archive entries.
+        if run([sys.executable, ROOT / "scripts" / "smoke_binary_ui.py", binary]) != 0:
+            fail("frozen popup smoke test failed; existing executable was not changed")
 
 
 def fail(message: str) -> None:
@@ -109,7 +128,6 @@ def main() -> int:
         return 0
 
     binary = freeze(python, args.dist_dir.expanduser().resolve(), args.work_dir.expanduser().resolve())
-    smoke(binary)
     size = binary.stat().st_size / 1_000_000
     print(f"\n{binary} ({size:.1f} MB)", flush=True)
     return 0

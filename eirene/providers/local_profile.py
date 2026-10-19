@@ -79,6 +79,23 @@ class LocalProfile:
             allowed.add("load_skill")
         selected = [spec for spec in specs if spec.get("name") in allowed
                     or str(spec.get("name", "")).startswith("mcp__")]
+        if self.tier == "compact":
+            # Keep the complete argument contract, but omit repetitive field prose.
+            # Do not rewrite external tool schemas or mutate the shared registry.
+            def compact_schema(value, property_map=False):
+                if isinstance(value, dict):
+                    if property_map:
+                        return {name: compact_schema(schema) for name, schema in value.items()}
+                    maps = {"properties", "patternProperties", "$defs", "definitions"}
+                    literals = {"enum", "const", "default", "examples"}
+                    return {key: item if key in literals else compact_schema(item, key in maps)
+                            for key, item in value.items() if key != "description"}
+                if isinstance(value, list):
+                    return [compact_schema(item) for item in value]
+                return value
+            selected = [dict(spec, parameters=compact_schema(spec["parameters"]))
+                        if "parameters" in spec and not str(spec.get("name", "")).startswith("mcp__")
+                        else spec for spec in selected]
         return selected or None
 
     def system(self, original: str) -> str:
@@ -113,16 +130,16 @@ OS: {host}
 Mode: {mode}
 {facts}{policy}
 {TOOL_APPROVAL_GUIDANCE}
-Use preflight facts first; check unknown tools with bounded read-only probes. Never guess a package manager.
-Use focused file/search tools; don't repeat calls.
-Edits: any size needed; exact unique context, no line numbers. Use write_file for full rewrites.
+Use preflight; probe unknown tools read-only. Never guess package managers.
+Focus tools; don't repeat calls.
+Edits: any size; exact unique text, no line numbers. write_file for rewrites.
 Reads: pattern/context, tail, offset/limit, byte_offset.
-Quote paths; retain errors and exit status.
+Quote paths; keep errors/exit status.
 Set timeout: 30 reads, 300 tests, 600 builds; no interactive commands.
 {commands}
-Partial output is incomplete. read_output limit=1024; next_offset as offset.
-Search literal text or filenames; batch reads.
-poll_process wait=true when idle; never restart a running command.
+Partial output: read_output limit=1024; next_offset as offset.
+Search literals/filenames; batch reads.
+poll_process wait=true when idle; never restart running work.
 Research: web_search; use passages; cite URLs.
 """
         if self.tier == "balanced":

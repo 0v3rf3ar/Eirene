@@ -22,6 +22,7 @@ disables this automatic migration.
 ~/.local/share/eirene/
 ├── config.json                         saved preferences and connection settings
 ├── config.json.bak                     best-effort copy after malformed config
+├── session-index.sqlite3               derived session metadata and parent links
 ├── sessions/
 │   └── <session-uuid>.jsonl             event log for one conversation
 ├── outputs/

@@ -49,6 +49,23 @@ cannot delegate again.
 
 ## Provider and runtime limits
 
+Use `/subagents` to open a draggable popup tree with the mother session and its
+subagents. Up/Down browses nodes; Left/Right collapses or expands branches; Enter
+opens the selected conversation's transcript, including saved prompts, replies,
+tool calls, and results. Press M to open the mother session or Esc to close the
+popup. Reopen `/subagents` from a child to browse its siblings or return to its
+mother. While work is running, the tree permits inspection but blocks switching.
+From a child, use `/subagents parent` to return to its immediate parent or
+`/subagents root` to return to the top-level session. You can also open a listed
+session directly with `/subagents SESSION_ID`. Finish the active turn before
+switching sessions; the hierarchy can still be displayed while work is running.
+
+Parent links and completion status are saved for managed delegated tasks. Older
+sessions can be linked when their saved delegation results contain child session
+IDs. Native CLI subagents are visible only if exposed as separate linked Eirene
+sessions. Opening a saved session uses the normal session viewer and allows you
+to continue that conversation.
+
 Codex and Claude Code use their native delegation when available. If the CLI does
 not offer it, specialist passes can run sequentially with that limitation stated.
 Upstream references to particular Claude model tiers do not automatically route

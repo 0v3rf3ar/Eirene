@@ -74,8 +74,15 @@ def estimate_tokens(text: str) -> int:
 def estimate_messages(messages: list[dict]) -> int:
     total = 0
     for message in messages:
+        if message.get("anthropic_blocks") is not None:
+            total += estimate_tokens(str(message["anthropic_blocks"]))
+            continue
+        total += estimate_tokens(str(message.get("reasoning_content") or ""))
         if message.get("response_items") is not None:
             total += estimate_tokens(str(message["response_items"]))
+            continue
+        if message.get("gemini_parts") is not None:
+            total += estimate_tokens(str(message["gemini_parts"]))
             continue
         total += estimate_tokens(str(message.get("content") or ""))
         for call in message.get("tool_calls") or []:

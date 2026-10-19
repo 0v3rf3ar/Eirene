@@ -30,6 +30,7 @@ support dragging. Close a popup with Esc, or use `[x]` when shown.
 | `/plan` | Show the saved session plan. | [Plans](plans.md) |
 | `/plan clear` | Clear that plan after confirmation. | [Plans](plans.md) |
 | `/sessions` | Pick a session in the current workspace. | [Sessions](sessions.md) |
+| `/subagents [parent\|root\|SESSION_ID]` | Show the current session's delegation hierarchy and pick a saved conversation to open. | [Specialists](specialists.md) |
 | `/sessions search TEXT` | Find sessions matching text. | [Sessions](sessions.md) |
 | `/sessions export ID PATH` | Export to Markdown, or JSON when the path ends in `.json`. | [Sessions](sessions.md) |
 | `/sessions import PATH` | Import an exported JSON session. | [Sessions](sessions.md) |
@@ -43,7 +44,7 @@ support dragging. Close a popup with Esc, or use `[x]` when shown.
 | Command | Action | Guide |
 | --- | --- | --- |
 | `/skills` | Enable or disable individual Markdown skills. | [Skills](skills.md) |
-| `/plugins` | Enable or disable installed bundles. | [Plugins](plugins.md) |
+| `/plugins` | Open a floating catalog to install predefined bundles and manage installed plugins. | [Plugins](plugins.md) |
 | `/plugins browse` | List named installation shortcuts. | [Catalog](plugin-catalog.md) |
 | `/plugins install SOURCE` | Install a shortcut, GitHub bundle, or local directory. | [Plugins](plugins.md) |
 | `/plugins inspect NAME` | Show imported commands, dependencies, and compatibility notes. | [Plugins](plugins.md) |

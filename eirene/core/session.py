@@ -220,10 +220,20 @@ class Session:
         return msg
 
     def add_assistant(self, text: str, tool_calls: list[dict] | None = None,
-                      thinking: str = "", *, response_items: list[dict] | None = None) -> Message:
+                      thinking: str = "", *, response_items: list[dict] | None = None,
+                      gemini_parts: list[dict] | None = None,
+                      reasoning_content: str | None = None,
+                      anthropic_blocks: list[dict] | None = None) -> Message:
         msg = Message.assistant(text, tool_calls)
         self.messages.append(msg)
         record: dict[str, Any] = {"t": "assistant", "content": text}
+        for key, value in (("reasoning_content", reasoning_content), ("anthropic_blocks", anthropic_blocks)):
+            if value is not None:
+                msg[key] = value
+                record[key] = value
+        if gemini_parts is not None:
+            msg["gemini_parts"] = gemini_parts
+            record["gemini_parts"] = gemini_parts
         if response_items is not None:
             msg["response_items"] = response_items
             record["response_items"] = response_items
@@ -307,6 +317,11 @@ def replay(records: list[dict[str, Any]], *, apply_compaction: bool = True) -> l
                                               record.get("tool_calls")))
             if record.get("response_items") is not None:
                 messages[-1]["response_items"] = record["response_items"]
+            if record.get("gemini_parts") is not None:
+                messages[-1]["gemini_parts"] = record["gemini_parts"]
+            for key in ("reasoning_content", "anthropic_blocks"):
+                if record.get(key) is not None:
+                    messages[-1][key] = record[key]
         elif kind == "tool_result":
             messages.append(Message.tool(record.get("tool_call_id", ""),
                                          record.get("name", ""),
@@ -332,36 +347,10 @@ def replay(records: list[dict[str, Any]], *, apply_compaction: bool = True) -> l
 
 def list_sessions(limit: int = 50, sandbox: Path | str | None = None) -> list[dict[str, Any]]:
     """Recent sessions, newest first."""
-    directory = paths.sessions_dir()
-    if not directory.exists():
-        return []
+    from .session_index import metadata
     wanted = str(Path(sandbox).expanduser().resolve()) if sandbox else ""
-    files = sorted(directory.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
-    out = []
-    for path in files:
-        if len(out) >= limit:
-            break
-        info = {"id": path.stem, "path": str(path), "mtime": path.stat().st_mtime,
-                "sandbox": "", "name": "", "turns": 0}
-        try:
-            for record in read_records(path):
-                if record.get("t") == "meta":
-                    info["sandbox"] = record.get("sandbox", "")
-                    info["name"] = record.get("name") or ""
-                elif record.get("t") == "rename" and record.get("name"):
-                    info["name"] = str(record["name"])
-                elif record.get("t") == "user":
-                    info["turns"] += 1
-                    if not info["name"]:
-                        info["name"] = name_from(str(record.get("content", "")))
-        except SessionError:
-            continue
-        if not info["name"]:
-            info["name"] = "untitled"
-        if wanted and info["sandbox"] != wanted:
-            continue
-        out.append(info)
-    return out
+    rows = metadata()
+    return [info for info in rows if not wanted or info["sandbox"] == wanted][:limit]
 
 
 def search_sessions(query: str, *, sandbox: Path | str | None = None,
@@ -437,7 +426,11 @@ def import_session(source: Path, sandbox: Path) -> "Session":
         if role == "user":
             session.add_user(str(raw.get("content") or ""), raw.get("attachments"), raw.get("files"))
         elif role == "assistant":
-            session.add_assistant(str(raw.get("content") or ""), raw.get("tool_calls"))
+            session.add_assistant(str(raw.get("content") or ""), raw.get("tool_calls"),
+                                  gemini_parts=raw.get("gemini_parts"),
+                                  reasoning_content=raw.get("reasoning_content"),
+                                  anthropic_blocks=raw.get("anthropic_blocks"),
+                                  response_items=raw.get("response_items"))
         elif role == "tool":
             session.add_tool_result(str(raw.get("tool_call_id") or ""),
                                     str(raw.get("name") or ""),

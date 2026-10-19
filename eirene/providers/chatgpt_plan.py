@@ -112,6 +112,8 @@ class ChatGPTPlan(Provider):
                     raise
 
     async def _stream_once(self, messages, model, *, system="", tools=None, max_tokens=8192):
+        from .preflight import validate_history
+        validate_history(messages)
         body = {"model": model, "input": to_responses_input(messages),
                 "store": False, "stream": True, "include": ["reasoning.encrypted_content"]}
         if system:
@@ -235,6 +237,7 @@ class ChatGPTPlan(Provider):
 
     async def close(self):
         await self.auth.close()
+        await super().close()
 
 
 def to_responses_input(messages):

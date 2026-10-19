@@ -102,35 +102,54 @@ async def run(app, args: str) -> None:
                    if any(plugin.lifecycle.values()) else "")
                 + (" Use /mcp to enable its MCP servers." if plugin.mcp_servers else ""))
         return
-    found = plugins.discover()
-    if not found:
-        app.say(f"no plugins - add <name>/plugin.json under {plugins.paths.plugins_dir()}")
-        return
     while True:
+        found = plugins.discover()
         options = []
+        catalog_installed = set()
+        for slug, source, purpose in BUNDLES:
+            installed = next((p for p in found if slug in {p.name, p.catalog_shortcut}), None)
+            if installed:
+                catalog_installed.add(installed.name)
+                state = 'enabled' if app.config.plugin_enabled(installed.name) else 'disabled'
+                options.append(("installed:" + installed.name, slug, state,
+                                describe(installed, app.config)))
+            else:
+                options.append(("install:" + slug, slug, "available",
+                                purpose + "\nSource: " + source + "\nChoose to install this bundle."))
         for plugin in found:
-            enabled = app.config.plugin_enabled(plugin.name)
-            details = []
-            if plugin.skills:
-                details.append(f"{len(plugin.skills)} skills")
-            details.append(f"{len(plugin.commands)} commands")
-            if plugin.agents:
-                details.append(f"{len(plugin.agents)} specialist profiles")
-            if any(plugin.lifecycle.values()):
-                details.append("hooks trusted" if plugins.executable_enabled(plugin, app.config) else "hooks need trust")
-            if plugin.mcp_servers:
-                details.append(f"{len(plugin.mcp_servers)} MCP servers")
-            options.append((plugin.name, f"{'on' if enabled else 'off'}  {plugin.name}",
-                            ", ".join(details) or plugin.description))
-        options.append(("", "done", ""))
-        chosen = await app.ask_choice("toggle a plugin", options)
+            if plugin.name not in catalog_installed:
+                state = 'enabled' if app.config.plugin_enabled(plugin.name) else 'disabled'
+                options.append(("installed:" + plugin.name, plugin.name, state,
+                                describe(plugin, app.config)))
+        chosen = await app.ask_choice("Plugins — choose to install or manage", options, popup=True)
         if not chosen:
-            break
-        enabled = not app.config.plugin_enabled(chosen)
-        app.config.set_plugin(chosen, enabled)
-        app._save_config()
-        app.agent.reload_skills()
-        app.say(f"{chosen} {'enabled' if enabled else 'disabled'}; takes effect on the next turn")
+            return
+        turn = getattr(app, "turn", None)
+        if turn and not turn.done():
+            app.say("finish or stop the current turn before changing plugins")
+            continue
+        action, _, name = chosen.partition(":")
+        if action == "install":
+            await run(app, "install " + name)
+            continue
+        plugin = next((p for p in found if p.name == name), None)
+        if plugin is None:
+            continue
+        enabled = app.config.plugin_enabled(name)
+        operation = await app.ask_choice(plugin.name, [
+            ("toggle", "Disable" if enabled else "Enable", "takes effect on the next turn"),
+            ("inspect", "Inspect", "commands, dependencies, and compatibility"),
+            ("doctor", "Check prerequisites", "read-only diagnostics"),
+            ("trust", "Trust hooks", "review and confirm executable hook access"),
+            ("untrust", "Revoke hook trust", "also disables this plugin's MCP servers"),
+        ], popup=True)
+        if operation == "toggle":
+            app.config.set_plugin(name, not enabled)
+            app._save_config()
+            app.agent.reload_skills()
+            app.say(f"{name} {'disabled' if enabled else 'enabled'}; takes effect on the next turn")
+        elif operation:
+            await run(app, operation + " " + name)
 
 
 def describe(plugin, config) -> str:

@@ -42,7 +42,8 @@ events = [
         "content": [{{"type": "tool_result", "tool_use_id": "bash-1",
                      "content": "passed"}}]}}}},
     {{"type": "result", "subtype": "success", "is_error": False,
-      "session_id": "session-1", "result": "fixed"}},
+      "session_id": "session-1", "result": "fixed",
+      "usage": {{"input_tokens": 100, "output_tokens": 30}}}},
 ]
 for event in events:
     print(json.dumps(event), flush=True)
@@ -79,6 +80,7 @@ async def test_account_models_and_stream(workdir, tmp_path):
     assert [e.text for e in events if isinstance(e, ThinkingDelta)] == ["checking"]
     assert [e.text for e in events if isinstance(e, TextDelta)] == ["fixed"]
     assert next(e for e in events if isinstance(e, Usage)).total == 14
+    assert [e for e in events if isinstance(e, Usage)][-1].total == 130
     plan = next(e for e in events if isinstance(e, PlanUpdate))
     assert plan.steps[1] == {"text": "Verify", "status": "in_progress"}
     assert isinstance(events[-1], Done)
@@ -90,7 +92,7 @@ async def test_account_models_and_stream(workdir, tmp_path):
 def test_modes_and_mode_change_reset_session(workdir):
     provider = ClaudeCode()
     provider.set_context(workdir, "manual")
-    assert provider._permission_mode() == "manual"
+    assert provider._permission_mode() == "default"
     provider._session_id = "old"
     provider.set_context(workdir, "auto", approve=lambda *args: _approve_native())
     assert provider._permission_mode() == "auto"

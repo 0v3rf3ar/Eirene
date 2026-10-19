@@ -104,6 +104,31 @@ become empty maps. Nested fields are not all validated. The
 pitfalls. Use [data layout](data-layout.md) to recover individual state files
 without deleting unrelated history.
 
+## Frozen executable crashes with `zlib.error` after Esc or another command
+
+An error in `pyimod01_archive.extract` or `pyimod02_importers` means the frozen
+loader could not read a bundled Python module. Esc can expose this because it
+loads popup classes lazily; the key itself does not decompress application data.
+
+One confirmed cause is replacing the executable while an older Eirene process
+is still running. PyInstaller reopens the executable by filename for imports,
+so the old process can read the replacement with offsets from the old archive.
+Even atomic replacement can trigger this on older builds. Exit those processes
+before replacing an older binary, then restart using the newly built executable.
+Deleting sessions or plugin data does not repair a bundled archive.
+
+New builds retain a stable original archive for imports: Linux uses the running
+executable handle; other systems keep a private archive snapshot. Builds compile
+into separate staging directories, verify all bundled Python modules, and test
+the frozen plugin/Esc interaction on POSIX before publishing the executable.
+Build or validation failure preserves the previous published binary.
+
+To exercise a packaged build directly on POSIX:
+
+```sh
+python scripts/smoke_binary_ui.py dist/eirene
+```
+
 ## Runtime log format
 
 Each line in `logs/eirene.jsonl` has UTC `ts`, `level`, `event`, and `logger`, with

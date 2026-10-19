@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import re
 from dataclasses import dataclass, field
+from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 import httpx
@@ -91,6 +92,9 @@ class ProviderTool:
 class Done:
     reason: str = "stop"
     response_items: list[dict] | None = None
+    gemini_parts: list[dict] | None = None
+    reasoning_content: str | None = None
+    anthropic_blocks: list[dict] | None = None
 
 
 Event = (TextDelta | ThinkingDelta | ToolCall | Usage | PlanUpdate
@@ -115,11 +119,33 @@ class Provider:
     def headers(self) -> dict[str, str]:
         return {"Content-Type": "application/json"}
 
-    def _client(self) -> httpx.AsyncClient:
-        limits = httpx.Limits(max_connections=8, max_keepalive_connections=4)
-        return httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, connect=20.0),
-                                 limits=limits, follow_redirects=True,
-                                 transport=_TRANSPORT, trust_env=getattr(self, "trust_env", True))
+    @asynccontextmanager
+    async def _client(self):
+        """Borrow the provider's persistent pool; only close it at teardown."""
+        from .request_gate import gate_for
+        signature = (_TRANSPORT, self.timeout, getattr(self, "trust_env", True))
+        client = getattr(self, "_http_client", None)
+        if client is None or client.is_closed or getattr(self, "_http_signature", None) != signature:
+            if client is not None and not client.is_closed:
+                await client.aclose()
+            limits = httpx.Limits(max_connections=8, max_keepalive_connections=4)
+            client = httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, connect=20.0),
+                                       limits=limits, follow_redirects=True,
+                                       transport=_TRANSPORT, trust_env=signature[2])
+            self._http_client, self._http_signature = client, signature
+            async def observe(response):
+                gate_for(self).observe(response)
+            client.event_hooks["response"].append(observe)
+        gate = gate_for(self)
+        async with gate.slots:
+            await gate.wait()
+            yield client
+
+    async def close(self):
+        client = getattr(self, "_http_client", None)
+        if client is not None:
+            await client.aclose()
+            self._http_client = None
 
     async def stream(self, messages: list[dict], model: str, *, system: str = "",
                      tools: list[dict] | None = None,
@@ -270,9 +296,13 @@ def wrap_transport_error(exc: Exception, host: str) -> ProviderError:
 async def sse_lines(response: httpx.Response) -> AsyncIterator[tuple[str, str]]:
     """Yield (event, data) pairs from an SSE body."""
     event = ""
+    data = []
     async for raw in response.aiter_lines():
         line = raw.rstrip("\r")
         if not line:
+            if data:
+                yield event, "\n".join(data)
+                data = []
             event = ""
             continue
         if line.startswith(":"):
@@ -281,7 +311,10 @@ async def sse_lines(response: httpx.Response) -> AsyncIterator[tuple[str, str]]:
             event = line[6:].strip()
             continue
         if line.startswith("data:"):
-            yield event, line[5:].strip()
+            value = line[5:]
+            data.append(value[1:] if value.startswith(" ") else value)
+    if data:
+        yield event, "\n".join(data)
 
 
 def parse_json(text: str) -> Any:

@@ -6,6 +6,11 @@ A session keeps the conversation for a workspace so you can return to a task.
 Messages are saved as you work. Session history is context, not a snapshot of the
 project: loading a session does not restore files to their earlier state.
 
+Session lists and subagent relationships use a SQLite metadata cache. Changed
+logs are reindexed; unchanged logs are not reparsed. The JSONL logs remain the
+source of truth. If the cache is unavailable, browsing falls back to reading the
+logs. Deleting `session-index.sqlite3` rebuilds it on the next browse.
+
 The first interactive launch in a workspace asks whether you trust its files,
 including when resuming a session. The prompt shows the resolved
 workspace path before creating a session or initializing the agent, project

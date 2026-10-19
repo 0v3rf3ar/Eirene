@@ -17,7 +17,7 @@ from eirene.ui.chat import Block, NoticeBlock
 
 EXPECTED = {"mcp", "help", "connect", "model", "schedule", "tasks", "exit", "usage", "plan", "plugins", "sessions",
             "skills", "compact", "agents", "btw", "clear", "notification", "theme",
-            "review", "sandbox", "permissions", "prompt-suggest", "keybindings", "search-api", "update"}
+            "review", "sandbox", "permissions", "prompt-suggest", "keybindings", "search-api", "update", "subagents"}
 
 
 class Script:
@@ -119,11 +119,13 @@ async def test_search_api_secret_prompt_does_not_record_key(workdir, monkeypatch
 async def test_help_lists_every_command(workdir):
     app, pilot, context = await start(workdir)
     try:
+        await settle(pilot)
+        before = texts(app)
         await dispatch(app, "/help")
         await settle(pilot)
         assert app.aside.open
         body = app.aside._content.plain
-        assert not any("commands" in text and "/help" in text for text in texts(app))
+        assert texts(app) == before
         for name in EXPECTED:
             assert f"/{name}" in body
         assert "shift + tab" in body
@@ -916,5 +918,31 @@ async def test_a_picker_with_no_match_still_opens_on_the_first_row(workdir):
         await pilot.press("escape")
         await pilot.pause()
         assert await task is None
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_subagents_opens_saved_transcript_and_returns(workdir):
+    from eirene.core.session import Session
+    app, pilot, context = await start(workdir)
+    try:
+        parent = app.session
+        parent.add_user("Main task")
+        child = Session.create(workdir)
+        child.start()
+        child.add_note("delegation", parent_id=parent.id, agent="reviewer", status="running")
+        child.add_user("Inspect main.py")
+        child.add_assistant("Reviewed main.py", [{"id": "read", "name": "read_file",
+                                                "arguments": {"path": "main.py"}}])
+        child.add_tool_result("read", "read_file", "print('hello')")
+        child.add_note("delegation_status", status="completed")
+        child.close()
+        await dispatch(app, f"/subagents {child.id}")
+        await pilot.pause()
+        assert app.session.id == child.id
+        assert any("Reviewed main.py" in text for text in texts(app))
+        assert any(m.get("name") == "read_file" for m in app.session.messages)
+        await dispatch(app, "/subagents parent")
+        assert app.session.id == parent.id
     finally:
         await context.__aexit__(None, None, None)

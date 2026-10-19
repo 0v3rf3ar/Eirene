@@ -137,6 +137,10 @@ async def test_specialists_use_fresh_contexts_same_provider_and_model(tmp_path, 
         {"prompt": "Review error handling"},
     ]))
     assert all(r["status"] == "completed" for r in result)
+    from eirene.commands.subagents import session_tree
+    tree = session_tree(parent.session, box.root)
+    assert {node["id"] for node, depth in tree if depth == 1} == {r["session_id"] for r in result}
+    assert all(node["status"] == "completed" for node, depth in tree if depth == 1)
     assert len(providers) == 2 and all(p.closed for p in providers)
     assert len({r["session_id"] for r in result}) == 2
     assert parent._delegated_usage.input_tokens == 10

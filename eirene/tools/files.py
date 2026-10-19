@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 import errno
+from dataclasses import dataclass
 import os
 import stat
 import tempfile
@@ -33,17 +34,59 @@ def _decode_fragment(data: bytes, *, final: bool = False) -> tuple[str, int]:
     return text, len(data) - len(pending)
 
 
-def write_file(box: Sandbox, path: str, content: str) -> str:
-    """Create or overwrite a file."""
+@dataclass(frozen=True)
+class FileVersion:
+    path: Path
+    data: bytes
+    info: os.stat_result | None
+
+    def matches(self, other: "FileVersion") -> bool:
+        return (self.path == other.path and self.data == other.data
+                and (self.info is None and other.info is None
+                     or self.info is not None and other.info is not None
+                     and _snapshot(self.info) == _snapshot(other.info)))
+
+
+def file_version(box: Sandbox, path: str) -> FileVersion:
     resolved = box.check_write_target(path)
     try:
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        existed = resolved.exists()
-        resolved.write_text(content, encoding="utf-8", newline="")
+        if resolved.exists() and not stat.S_ISREG(resolved.stat().st_mode):
+            raise ToolError("target must be a regular text file")
+        with resolved.open("rb") as source:
+            info = os.fstat(source.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise ToolError("target must be a regular text file")
+            data = source.read()
+            if _snapshot(info) != _snapshot(os.fstat(source.fileno())):
+                raise ToolError("file changed while reading; reread and retry")
+        return FileVersion(resolved, data, info)
+    except FileNotFoundError:
+        return FileVersion(resolved, b"", None)
+
+
+def _checked_version(box: Sandbox, path: str, expected: FileVersion | None) -> FileVersion:
+    current = file_version(box, path)
+    if expected is not None and not expected.matches(current):
+        raise ToolError(f"{box.relative(current.path)} changed since the preview; reread and retry for a new preview")
+    return current
+
+
+def write_file(box: Sandbox, path: str, content: str, *, expected: FileVersion | None = None) -> str:
+    """Create or fully rewrite a file without truncating the original."""
+    name = path
+    try:
+        version = _checked_version(box, path, expected)
+        name = box.relative(version.path)
+        version.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            encoded = content.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ToolError(f"cannot write {name}: content contains invalid Unicode") from exc
+        _atomic_write(box, path, version, encoded)
     except OSError as exc:
-        raise ToolError(f"cannot write {box.relative(resolved)}: {exc}") from exc
-    verb = "updated" if existed else "created"
-    return f"{verb} {box.relative(resolved)} ({len(content.splitlines())} lines)"
+        raise _edit_error(name, exc) from exc
+    verb = "updated" if version.info is not None else "created"
+    return f"{verb} {name} ({len(content.splitlines())} lines)"
 
 
 def _edit_text(text: str, old: str, new: str, replace_all: bool, name: str) -> tuple[str, int]:
@@ -72,6 +115,7 @@ def _edit_error(name: str, exc: OSError) -> ToolError:
         errno.EPERM: "operation denied; check permissions or file protection",
         errno.EROFS: "read-only filesystem; use a writable location",
         errno.ENOENT: "file or parent missing; reread the target path",
+        errno.EEXIST: "target appeared during creation; reread and retry",
         errno.ENOTDIR: "a path component is not a directory",
         errno.EISDIR: "target is a directory; select a text file",
         errno.EIO: "filesystem I/O error; check storage before retrying",
@@ -86,51 +130,42 @@ def _snapshot(info: os.stat_result) -> tuple:
             info.st_ctime_ns, info.st_mode, info.st_uid, info.st_gid, info.st_nlink)
 
 
-def edit_file(box: Sandbox, path: str, old: str, new: str, replace_all: bool = False) -> str:
-    """Validate exact replacements and commit using a sibling atomic replacement."""
-    resolved = box.check_write_target(path)
+def _atomic_write(box: Sandbox, path: str, version: FileVersion, encoded: bytes) -> None:
+    resolved, before = version.path, version.info
     name = box.relative(resolved)
     temporary = None
+    committed = False
     try:
-        if not stat.S_ISREG(resolved.stat().st_mode):
-            raise ToolError(f"cannot edit {name}: target must be a regular text file")
-        # Opening for update checks file write permission without truncating it.
-        with resolved.open("r+b") as source:
-            before = os.fstat(source.fileno())
-            if not stat.S_ISREG(before.st_mode):
-                raise ToolError(f"cannot edit {name}: target must be a regular text file")
+        if before is not None:
             if before.st_nlink > 1:
                 raise ToolError(f"cannot edit {name}: hard-linked file; atomic replacement would break links")
-            original = source.read()
-        try:
-            text = original.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise ToolError(f"cannot edit {name}: invalid UTF-8; use a tool for its encoding") from exc
-        if b"\0" in original:
-            raise ToolError(f"cannot edit {name}: binary file; select a text file")
-        updated, replaced = _edit_text(text, old, new, replace_all, name)
-        try:
-            encoded = updated.encode("utf-8")
-        except UnicodeEncodeError as exc:
-            raise ToolError(f"cannot edit {name}: replacement contains invalid Unicode") from exc
+            # Check write permission without truncation, and verify the opened file.
+            with resolved.open("r+b") as source:
+                if _snapshot(os.fstat(source.fileno())) != _snapshot(before):
+                    raise ToolError(f"cannot edit {name}: file changed during edit; reread and retry")
         with tempfile.NamedTemporaryFile(mode="wb", dir=resolved.parent,
                                          prefix=".eirene-edit-", delete=False) as target:
             temporary = Path(target.name)
             target.write(encoded)
             target.flush()
-            # Preserve ownership before mode (chown can reset mode bits).
-            created = os.fstat(target.fileno())
-            if (created.st_uid, created.st_gid) != (before.st_uid, before.st_gid):
-                os.chown(temporary, before.st_uid, before.st_gid)
-            if hasattr(os, "listxattr"):
-                for key in os.listxattr(resolved):
-                    os.setxattr(temporary, key, os.getxattr(resolved, key))
-            os.chmod(temporary, stat.S_IMODE(before.st_mode))
+            if before is not None:
+                created = os.fstat(target.fileno())
+                if (created.st_uid, created.st_gid) != (before.st_uid, before.st_gid):
+                    os.chown(temporary, before.st_uid, before.st_gid)
+                if hasattr(os, "listxattr"):
+                    for key in os.listxattr(resolved):
+                        os.setxattr(temporary, key, os.getxattr(resolved, key))
+                os.chmod(temporary, stat.S_IMODE(before.st_mode))
             os.fsync(target.fileno())
-        if _snapshot(resolved.stat()) != _snapshot(before) or resolved.read_bytes() != original:
+        if not version.matches(file_version(box, path)):
             raise ToolError(f"cannot edit {name}: file changed during edit; reread and retry")
-        os.replace(temporary, resolved)
-        temporary = None
+        if before is None:
+            # Publish only if absent: never overwrite a concurrently created file.
+            os.link(temporary, resolved)
+        else:
+            os.replace(temporary, resolved)
+            temporary = None
+        committed = True
     except OSError as exc:
         raise _edit_error(name, exc) from exc
     finally:
@@ -138,10 +173,35 @@ def edit_file(box: Sandbox, path: str, old: str, new: str, replace_all: bool = F
             try:
                 temporary.unlink(missing_ok=True)
             except OSError as cleanup:
-                # Report residue as well as the original error, without its contents.
                 prior = cleanup.__context__
-                raise ToolError(f"{prior or 'edit failed'}; temporary cleanup failed: "
+                state = "file saved" if committed else str(prior or "edit failed")
+                raise ToolError(f"{state}; temporary cleanup failed: "
                                 f"{temporary.name}: {cleanup.strerror}") from cleanup
+
+
+def edit_file(box: Sandbox, path: str, old: str, new: str, replace_all: bool = False,
+              *, expected: FileVersion | None = None) -> str:
+    """Validate exact replacements and commit using a sibling atomic replacement."""
+    name = path
+    try:
+        version = _checked_version(box, path, expected)
+        name = box.relative(version.path)
+        if version.info is None:
+            raise ToolError(f"cannot edit {name}: file missing; reread the target path")
+        try:
+            text = version.data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ToolError(f"cannot edit {name}: invalid UTF-8; use a tool for its encoding") from exc
+        if b"\0" in version.data:
+            raise ToolError(f"cannot edit {name}: binary file; select a text file")
+        updated, replaced = _edit_text(text, old, new, replace_all, name)
+        try:
+            encoded = updated.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ToolError(f"cannot edit {name}: replacement contains invalid Unicode") from exc
+        _atomic_write(box, path, version, encoded)
+    except OSError as exc:
+        raise _edit_error(name, exc) from exc
     return f"edited {name} ({replaced} replacement{'s' if replaced != 1 else ''})"
 
 
@@ -176,12 +236,12 @@ def _edit_newlines(text: str, old: str, new: str) -> tuple[str, str]:
 
 
 def edit_preview(box: Sandbox, path: str, old: str, new: str,
-                 replace_all: bool = False) -> str:
+                 replace_all: bool = False, *, version: FileVersion | None = None) -> str:
     """Unified diff of a pending edit."""
     resolved = box.resolve(path)
     name = box.relative(resolved)
     try:
-        current = resolved.read_bytes().decode("utf-8")
+        current = (version.data if version is not None else resolved.read_bytes()).decode("utf-8")
     except OSError as exc:
         return str(_edit_error(name, exc))
     except UnicodeDecodeError:
@@ -194,12 +254,14 @@ def edit_preview(box: Sandbox, path: str, old: str, new: str,
 
 
 
-def diff_preview(box: Sandbox, path: str, content: str) -> str:
+def diff_preview(box: Sandbox, path: str, content: str, *, version: FileVersion | None = None) -> str:
     """Unified diff of a pending write."""
     try:
         resolved = box.resolve(path)
     except Exception:
         return content
+    if version is not None:
+        return _unified(box.relative(resolved), version.data.decode("utf-8", errors="replace"), content)
     old = ""
     if resolved.exists() and resolved.is_file() and not _is_binary(resolved):
         try:

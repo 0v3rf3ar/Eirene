@@ -582,12 +582,15 @@ class Eirene(App):
 
     async def ask_choice(self, title: str, options: list[tuple], *,
                          on_highlight=None, selected: str = "",
-                         skill_popup: bool = False, right_hint: bool = False) -> str | None:
+                         skill_popup: bool = False, right_hint: bool = False,
+                         popup: bool = False) -> str | None:
         """Pick one option from a list, opening on the one already in use."""
         try:
-            if skill_popup:
+            if skill_popup or popup:
                 from .ui.skill_picker import SkillPickerScreen
-                screen = SkillPickerScreen(options, selected)
+                from .ui.choice_popup import ChoicePopup
+                screen = (SkillPickerScreen(options, selected) if skill_popup else
+                          ChoicePopup(title, options, selected))
                 future = asyncio.get_running_loop().create_future()
 
                 def resolved(value):
@@ -605,6 +608,21 @@ class Eirene(App):
                                             on_highlight=on_highlight,
                                             selected=selected)
         finally:
+            self.prompt.focus()
+
+    async def ask_session_tree(self, rows, *, allow_switch=True):
+        from .ui.session_tree import SessionTreeScreen
+        screen = SessionTreeScreen(rows, self.session.id, allow_switch)
+        future = asyncio.get_running_loop().create_future()
+        def resolved(value):
+            if not future.done():
+                future.set_result(value)
+        await self.push_screen(screen, resolved)
+        try:
+            return await future
+        finally:
+            if self.screen is screen:
+                self.pop_screen()
             self.prompt.focus()
 
     async def _choose(self, question: str, options: list) -> str | None:
@@ -1001,7 +1019,9 @@ class Eirene(App):
         """Close an output viewer before interrupting work underneath it."""
         from .ui.output import OutputScreen
         from .ui.skill_picker import SkillPickerScreen
-        if isinstance(self.screen, (OutputScreen, SkillPickerScreen)):
+        from .ui.choice_popup import ChoicePopup
+        from .ui.session_tree import SessionTreeScreen
+        if isinstance(self.screen, (OutputScreen, SkillPickerScreen, ChoicePopup, SessionTreeScreen)):
             self.screen.dismiss()
             return
         if self.aside.open:

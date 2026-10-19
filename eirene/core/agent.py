@@ -265,10 +265,11 @@ class Agent:
             hard = await resolve(self.model)
         prepare = getattr(self.provider, "prepare_context", None)
         local = await prepare(self.model) if prepare else 0
+        profile = getattr(self.provider, "profile", None)
+        local = local or (profile.context_tokens if profile else 0)
         if local:
             hard = min(hard, local) if hard else local
         system, specs = self.system_prompt(), self.tool_specs()
-        profile = getattr(self.provider, "profile", None)
         if local and profile:
             system, specs = profile.system(system), profile.tools(specs)
         overhead = estimate_tokens(system) + estimate_tokens(json.dumps(specs))
@@ -302,7 +303,9 @@ class Agent:
         """True once the history is worth compacting."""
         model_limit = self.context_limit()
         limit = self._context_input_budget(model_limit, self.max_tokens + 2048)
-        return limit > 0 and self.context_size() > limit
+        # An output reserve larger than the window leaves no input room; it
+        # must not disable the warning by making the threshold negative.
+        return self.context_size() > max(1, limit)
 
     @property
     def retry_attempts(self) -> int:
@@ -590,6 +593,9 @@ class Agent:
                 thinking = ""
                 finish = ""
                 response_items = None
+                gemini_parts = None
+                reasoning_content = None
+                anthropic_blocks = None
 
                 async for event in self._budget_context():
                     yield event
@@ -643,6 +649,9 @@ class Agent:
                     elif isinstance(event, Done):
                         finish = event.reason
                         response_items = event.response_items
+                        gemini_parts = event.gemini_parts
+                        reasoning_content = event.reasoning_content
+                        anthropic_blocks = event.anthropic_blocks
 
                 turn_usage.input_tokens += usage_in
                 turn_usage.output_tokens += usage_out
@@ -651,7 +660,8 @@ class Agent:
 
                 serialised = [self._serialise_call(c) for c in calls]
                 self.session.add_assistant(reply, serialised, thinking,
-                                           response_items=response_items)
+                                           response_items=response_items, gemini_parts=gemini_parts,
+                                           reasoning_content=reasoning_content, anthropic_blocks=anthropic_blocks)
 
                 if finish in TRUNCATED:
                     note = ("the model ran out of room and was cut off; "
@@ -1060,9 +1070,16 @@ class Agent:
             reason = f"{reason}; no one is here to approve leaving it"
 
         preview = ""
-        if call.name in CHANGE_TOOLS:
-            with self.sandbox.permit(*outside):
-                preview = tools.preview(call.name, call.arguments, self.sandbox)
+        expected_file = None
+        if call.name in CHANGE_TOOLS and verdict != BLOCK:
+            try:
+                with self.sandbox.permit(*outside):
+                    preview, expected_file = tools.prepare_change(call.name, call.arguments, self.sandbox)
+            except EireneError as exc:
+                result = exc.user_message()
+                self.session.add_tool_result(call.id, call.name, result, True)
+                yield ToolFinished(call.id, call.name, label, result, True, 0.0)
+                return
             if preview:
                 yield ToolPreview(call.id, call.name, label, preview)
 
@@ -1126,7 +1143,7 @@ class Agent:
                         call.name, call.arguments, self.sandbox,
                         timeout=float(self.config.get("shell_timeout", 120) or 120),
                         max_bytes=min(result_limit, int(self.config.get("max_output_bytes", 200_000) or 200_000)),
-                        output=output,
+                        output=output, expected_file=expected_file,
                         isolation="none" if native_windows or unrestricted else str(self.config.get("execution_isolation", "auto")),
                         isolate_network=not unrestricted and bool(self.config.get("isolate_network", True)) and call.name not in network_tools,
                         plan_scope=self.session.id,
@@ -1174,7 +1191,7 @@ class Agent:
         if kind in (tools.WRITE, tools.EXEC):
             # Even failed commands can partially change state.
             self._work_revision += 1
-        if cacheable and not processes.running():
+        if cacheable and not processes.running() and not (call.name in CHANGE_TOOLS and is_error):
             self._tool_cache[key] = (result, is_error, output.id, self._work_revision)
             if len(self._tool_cache) > 128:
                 self._tool_cache.pop(next(iter(self._tool_cache)))
@@ -1219,6 +1236,8 @@ class Agent:
         prepare = getattr(self.provider, "prepare_context", None)
         if profile:
             local = await prepare(self.model) if prepare else profile.context_tokens
+            profile = getattr(self.provider, "profile", profile)
+            local = local or profile.context_tokens
             context = min(context, local) if context else local
             system = profile.system(self.system_prompt())
             specs = profile.tools(self.tool_specs())

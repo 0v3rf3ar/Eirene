@@ -628,3 +628,68 @@ def test_groq_requires_key_and_accepts_environment_key(workdir, monkeypatch):
         registry.build("groq", config)
     monkeypatch.setenv("EIRENE_GROQ_API_KEY", "gsk-env-token")
     assert registry.build("groq", config).api_key == "gsk-env-token"
+
+
+async def test_gemini_signed_parts_survive_tools_resume_and_export(workdir, config):
+    from eirene.core.agent import Agent, Failed, ToolFinished
+    from eirene.core.session import Session, export_session, import_session
+    from eirene.tools.sandbox import Sandbox
+
+    (workdir / "a.txt").write_text("hello", encoding="utf-8")
+    first = [
+        {"text": "Inspecting.", "thought": True, "thoughtSignature": "thinking-signature"},
+        {"text": "Reading files."},
+        {"functionCall": {"name": "read_file", "args": {"path": "a.txt"}},
+         "thoughtSignature": "first-signature"},
+        {"functionCall": {"name": "list_dir", "args": {"path": "."}}},
+    ]
+    second = [{"functionCall": {"name": "read_file", "args": {"path": "a.txt"}},
+               "thoughtSignature": "second-signature"}]
+    final = [{"text": "Finished."}, {"text": "", "thoughtSignature": "final-signature"}]
+    requests = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        parts = [first, second, final][min(len(requests) - 1, 2)]
+        chunks = [{"candidates": [{"content": {"parts": [part]}}]} for part in parts]
+        chunks.append({"candidates": [{"finishReason": "STOP"}]})
+        return httpx.Response(200, content=sse(*chunks), headers={"content-type": "text/event-stream"})
+
+    base.set_transport(httpx.MockTransport(handler))
+    config.set("mode", "auto")
+    config.set("execution_isolation", "none")
+    runner = Agent(Session.create(workdir), config, Sandbox(workdir))
+    runner.use(Gemini("key"), "gemini", "gemini-flash")
+    try:
+        events = [event async for event in runner.run("Inspect the files")]
+        assert not [event for event in events if isinstance(event, Failed)]
+        results = [event for event in events if isinstance(event, ToolFinished)]
+        assert len(results) == 3 and all(not event.is_error for event in results)
+        assert len(requests) == 3
+        models = lambda payload: [c["parts"] for c in payload["contents"] if c["role"] == "model"]
+        assert models(requests[1]) == [first]
+        assert models(requests[2]) == [first, second]
+        assert len([p for c in requests[1]["contents"] for p in c["parts"] if "functionResponse" in p]) == 2
+        session_id = runner.session.id
+    finally:
+        await runner.close()
+        runner.session.close()
+
+    resumed = Session.resume(session_id)
+    try:
+        assert models({"contents": to_gemini_contents(resumed.messages)}) == [first, second, final]
+        export = workdir / "session.json"
+        export_session(session_id, export, "json")
+        imported = import_session(export, workdir)
+        loaded = Session.resume(imported.id)
+        try:
+            assert to_gemini_contents(loaded.messages) == to_gemini_contents(resumed.messages)
+            _ = [event async for event in Gemini("key").stream(loaded.messages, "gemini-flash")]
+            assert models(requests[-1]) == [first, second, final]
+            await collect(Gemini("key"))  # unsigned legacy history remains supported
+            assert "gemini_parts" not in str(requests[-1])
+        finally:
+            loaded.close()
+    finally:
+        resumed.close()

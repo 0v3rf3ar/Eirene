@@ -23,7 +23,11 @@ async def test_plugin_command_reaches_each_api_provider(key, config, box, tmp_pa
     def respond(request):
         requests.append(json.loads(request.content))
         protocol = registry.SPECS[key].protocol
-        if protocol == "anthropic":
+        if protocol == "chatgpt-responses":
+            data = "data: " + json.dumps({"type": "response.completed", "response": {
+                "status": "completed", "output": [{"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "verified"}]}]}}) + "\n\n"
+        elif protocol == "anthropic":
             data = ("event: content_block_delta\ndata: " + json.dumps({"type": "content_block_delta",
                 "delta": {"type": "text_delta", "text": "verified"}}) +
                 "\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
@@ -36,6 +40,12 @@ async def test_plugin_command_reaches_each_api_provider(key, config, box, tmp_pa
         return httpx.Response(200, text=data)
     base.set_transport(httpx.MockTransport(respond))
     provider = registry.build(key, config)
+    if key == "chatgpt-plan":
+        async def access_token():
+            return "mock-oauth-token"
+        monkeypatch.setattr(provider.auth, "access_token", access_token)
+        # Catalog discovery is covered separately; this test checks inference.
+        provider._context_checked.add("chosen-model")
     if key == "ollama-local":
         provider.profile = LocalProfile("compact", 3, 16, 4, 0)
         async def prepare(model):

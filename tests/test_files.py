@@ -418,3 +418,72 @@ def test_edit_surrogate_replacement_leaves_original(box, workdir):
     with pytest.raises(ToolError, match="invalid Unicode"):
         files.edit_file(box, "a.txt", "hello", "\ud800")
     assert target.read_text() == "hello"
+
+
+@pytest.mark.parametrize("exists", [False, True])
+@pytest.mark.parametrize("operation,code", [("fsync", 28), ("replace", 13)])
+def test_write_failure_never_truncates_target(box, workdir, monkeypatch, exists, operation, code):
+    import os
+    if not exists and operation == "replace":
+        operation = "link"
+    target = workdir / "a.txt"
+    if exists:
+        target.write_bytes(b"original\r\n")
+    def fail(*args):
+        raise OSError(code, os.strerror(code))
+    monkeypatch.setattr(files.os, operation, fail)
+    with pytest.raises(ToolError, match="not committed"):
+        files.write_file(box, "a.txt", "replacement" * 1000)
+    if exists:
+        assert target.read_bytes() == b"original\r\n"
+    else:
+        assert not target.exists()
+    assert not list(workdir.glob(".eirene-edit-*"))
+
+
+def test_write_cannot_overwrite_concurrent_creation(box, workdir, monkeypatch):
+    target = workdir / "a.txt"
+    link = files.os.link
+    def create_then_link(source, destination):
+        target.write_text("concurrent")
+        return link(source, destination)
+    monkeypatch.setattr(files.os, "link", create_then_link)
+    with pytest.raises(ToolError, match="target appeared"):
+        files.write_file(box, "a.txt", "replacement")
+    assert target.read_text() == "concurrent"
+    assert not list(workdir.glob(".eirene-edit-*"))
+
+
+def test_write_preserves_existing_mode(box, workdir):
+    import stat
+    target = workdir / "a.sh"
+    target.write_text("original")
+    target.chmod(0o751)
+    files.write_file(box, "a.sh", "replacement")
+    assert target.read_text() == "replacement"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o751
+
+
+@pytest.mark.parametrize("tool,args", [
+    ("edit_file", {"old_string": "hello", "new_string": "updated"}),
+    ("write_file", {"content": "rewritten"}),
+])
+async def test_execution_rejects_stale_preview(box, workdir, tool, args):
+    target = workdir / "a.txt"
+    target.write_text("hello")
+    args = dict(args, path="a.txt")
+    preview, version = registry.prepare_change(tool, args, box)
+    assert "hello" in preview
+    target.write_text("hello from another editor")
+    with pytest.raises(ToolError, match="changed since the preview"):
+        await registry.execute(tool, args, box, expected_file=version)
+    assert target.read_text() == "hello from another editor"
+
+
+async def test_creation_preview_rejects_new_file(box, workdir):
+    args = {"path": "a.txt", "content": "new"}
+    _, version = registry.prepare_change("write_file", args, box)
+    (workdir / "a.txt").write_text("concurrent")
+    with pytest.raises(ToolError, match="changed since the preview"):
+        await registry.execute("write_file", args, box, expected_file=version)
+    assert (workdir / "a.txt").read_text() == "concurrent"

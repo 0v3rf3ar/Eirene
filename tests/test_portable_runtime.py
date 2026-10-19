@@ -199,6 +199,11 @@ def test_build_preserves_unrelated_dist_files(tmp_path, monkeypatch):
     binary.write_text("stub")
     monkeypatch.setattr(module, "DIST", dist)
     monkeypatch.setattr(module, "WORK", tmp_path / "work")
-    monkeypatch.setattr(module, "run", lambda *args: 0)
+    def assemble(argv):
+        output = Path(argv[argv.index("--distpath") + 1])
+        (output / binary.name).write_text("new stub")
+        return 0
+    monkeypatch.setattr(module, "run", assemble)
+    monkeypatch.setattr(module, "smoke", lambda path: None)
     assert module.freeze(Path(sys.executable)) == binary
     assert keep.read_text() == "keep"

@@ -41,11 +41,11 @@ class OpenAICompatible(Provider):
     def _body(self, messages, model, system, tools, max_tokens) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": model,
-            "messages": to_openai_messages(messages, system),
+            "messages": to_openai_messages(messages, system, include_reasoning=self.name in {"deepseek", "kimi", "omniroute", "custom-openai"}),
             "stream": True,
             "max_tokens": max_tokens,
         }
-        if self.name == "groq":
+        if self.name in {"groq", "chatgpt"} or self.host == "api.openai.com":
             payload["max_completion_tokens"] = payload.pop("max_tokens")
             payload["stream_options"] = {"include_usage": True}
         if self.name == "omniroute":
@@ -59,9 +59,14 @@ class OpenAICompatible(Provider):
 
     async def stream(self, messages, model, *, system="", tools=None,
                      max_tokens=8192) -> AsyncIterator:
+        from .preflight import validate_history
+        validate_history(messages)
         payload = self._body(messages, model, system, tools, max_tokens)
         url = f"{self.base_url}/chat/completions"
         pending: dict[int, dict[str, Any]] = {}
+        reasoning = ""
+        saw_reasoning = False
+        completed = False
         finish = "stop"
         try:
             async with self._client() as client:
@@ -72,23 +77,33 @@ class OpenAICompatible(Provider):
                         raise_for_status(response, self.host, model)
                     async for _, data in sse_lines(response):
                         if data == "[DONE]":
+                            completed = True
                             break
                         chunk = parse_json(data)
                         if not isinstance(chunk, dict):
                             continue
                         if chunk.get("error"):
                             raise ProviderError(str(chunk["error"])[:200])
+                        choices = chunk.get("choices") or []
+                        delta = (choices[0].get("delta") or {}) if choices else {}
+                        if isinstance(delta.get("reasoning_content"), str):
+                            saw_reasoning = True
+                            reasoning += delta["reasoning_content"]
                         for event in _consume(chunk, pending):
                             yield event
                         reason = _finish_reason(chunk)
                         if reason:
                             finish = reason
+                            completed = True
         except httpx.HTTPError as exc:
             raise wrap_transport_error(exc, self.host) from exc
 
-        for call in _flush(pending):
+        if not completed:
+            raise ProviderError("model response ended before completion; no tools were executed", retryable=True)
+        for call in ([] if finish == "content_filter" else _flush(pending)):
             yield call
-        yield Done("tool_use" if pending else finish)
+        yield Done("tool_use" if pending and finish not in {"length", "content_filter"} else finish,
+                   reasoning_content=reasoning if saw_reasoning else None)
 
     async def models(self) -> list[str]:
         if not self.static_models or self.api_key:
@@ -182,7 +197,7 @@ def _flush(pending: dict[int, dict]) -> list[ToolCall]:
     return calls
 
 
-def to_openai_messages(messages: list[dict], system: str) -> list[dict]:
+def to_openai_messages(messages: list[dict], system: str, *, include_reasoning=False) -> list[dict]:
     """Convert internal history to the OpenAI shape."""
     out: list[dict] = []
     if system:
@@ -203,6 +218,8 @@ def to_openai_messages(messages: list[dict], system: str) -> list[dict]:
         elif role == "assistant":
             entry: dict[str, Any] = {"role": "assistant",
                                      "content": message.get("content") or ""}
+            if include_reasoning and message.get("reasoning_content") is not None:
+                entry["reasoning_content"] = message["reasoning_content"]
             calls = message.get("tool_calls") or []
             if calls:
                 entry["tool_calls"] = [

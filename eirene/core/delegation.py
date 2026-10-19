@@ -63,6 +63,12 @@ async def run_tasks(parent, raw, on_output=None):
             config.set("mode", Mode.PLAN.value if task["read_only"] else parent.mode.value)
             config.set("max_iterations", min(parent.iteration_limit or 40, 40))
             session = Session.create(parent.sandbox.root)
+            session.start()
+            session.add_note("delegation", parent_id=parent.session.id, agent=label,
+                             read_only=task["read_only"], status="running")
+            parent.session.start()
+            parent.session.add_note("subagent", session_id=session.id, agent=label,
+                                    status="running")
             child = Agent(session, config, Sandbox(parent.sandbox.root))
             child._delegation_depth = parent._delegation_depth + 1
             child.approve = approve if parent.approve else None
@@ -99,9 +105,15 @@ async def run_tasks(parent, raw, on_output=None):
                             parent._delegated_usage.output_tokens += event.usage.output_tokens
             except TimeoutError:
                 failures.append("task timed out after 600 seconds; inspect any partial work before retrying")
+            except asyncio.CancelledError:
+                status = "interrupted"
+                raise
             except Exception as exc:
                 failures.append(str(exc))
             finally:
+                if failures:
+                    status = "failed"
+                session.add_note("delegation_status", status=status)
                 try:
                     await child.close()
                 finally:

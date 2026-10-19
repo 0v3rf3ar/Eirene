@@ -1214,3 +1214,73 @@ async def test_cancelling_background_wait_stops_session_command(workdir, python_
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         await processes.stop(result.process_id)
+
+
+@pytest.mark.parametrize("tool,args", [
+    ("edit_file", {"old_string": "hello", "new_string": "updated"}),
+    ("write_file", {"content": "rewritten"}),
+])
+async def test_approval_cannot_apply_a_stale_preview(workdir, tool, args):
+    target = workdir / "a.txt"
+    target.write_text("hello")
+    provider = Script([ToolCall("edit", tool, dict(args, path="a.txt")), Done("tool_use")],
+                      [TextDelta("file changed; edit rejected"), Done("stop")])
+    runner = build(workdir, provider, mode=Mode.MANUAL)
+    async def approve(name, label, preview, reason):
+        assert "hello" in preview
+        target.write_text("hello from another editor")
+        return YES
+    runner.approve = approve
+    events = await drive(runner)
+    result = next(e for e in events if isinstance(e, ToolFinished))
+    assert result.is_error and "changed since the preview" in result.result
+    assert target.read_text() == "hello from another editor"
+
+
+async def test_stale_edit_can_retry_with_fresh_preview_and_approval(workdir):
+    target = workdir / "a.txt"
+    target.write_text("hello")
+    args = {"path": "a.txt", "old_string": "hello", "new_string": "updated"}
+    provider = Script([ToolCall("first", "edit_file", args), Done("tool_use")],
+                      [ToolCall("retry", "edit_file", args), Done("tool_use")],
+                      [TextDelta("done"), Done("stop")])
+    runner = build(workdir, provider, mode=Mode.MANUAL)
+    previews = []
+    async def approve(name, label, preview, reason):
+        previews.append(preview)
+        if len(previews) == 1:
+            target.write_text("hello from another editor")
+        return YES
+    runner.approve = approve
+    results = [event for event in await drive(runner) if isinstance(event, ToolFinished)]
+    assert len(previews) == 2 and "from another editor" in previews[1]
+    assert results[0].is_error and not results[1].is_error and not results[1].reused
+    assert target.read_text() == "updated from another editor"
+
+
+async def test_local_profile_without_prepare_has_room_for_results(workdir):
+    from eirene.providers.local_profile import LocalProfile
+    provider = Script([TextDelta("done"), Done("stop")])
+    provider.profile = LocalProfile("compact", 3, 16, 8, 0)
+    runner = build(workdir, provider)
+    hard, budget = await runner.compaction_budget()
+    assert hard == 4096 and budget > 512
+    assert await runner._tool_output_limit() > 0
+
+
+async def test_context_budget_uses_profile_updated_during_prepare(workdir):
+    import json
+    from eirene.providers.local_profile import LocalProfile
+    from eirene.core.usage import estimate_tokens
+    provider = Script([TextDelta("done"), Done("stop")])
+    provider.profile = LocalProfile("compact", 3, 16, 8, 0)
+    async def prepare(model):
+        provider.profile = LocalProfile("balanced", 8, 16, 8, 0)
+        return 8192
+    provider.prepare_context = prepare
+    runner = build(workdir, provider)
+    hard, _ = await runner.compaction_budget()
+    assert hard == 8192
+    expected = estimate_tokens(provider.profile.system(runner.system_prompt()))
+    expected += estimate_tokens(json.dumps(provider.profile.tools(runner.tool_specs())))
+    assert runner._context_overhead == expected

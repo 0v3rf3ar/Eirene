@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any, AsyncIterator
 from urllib.parse import urlparse
@@ -41,12 +42,16 @@ class AnthropicCompatible(Provider):
 
     async def stream(self, messages, model, *, system="", tools=None,
                      max_tokens=8192) -> AsyncIterator:
+        from .preflight import validate_history
+        validate_history(messages)
         payload: dict[str, Any] = {
             "model": model,
             "messages": to_anthropic_messages(messages),
             "max_tokens": max_tokens,
             "stream": True,
         }
+        from .preflight import validate_anthropic
+        validate_anthropic(payload["messages"])
         if system:
             payload["system"] = system
         if tools:
@@ -56,6 +61,7 @@ class AnthropicCompatible(Provider):
                                 for spec in tools]
         blocks: dict[int, dict[str, Any]] = {}
         stop = "stop"
+        completed = False
         try:
             async with self._client() as client:
                 async with client.stream("POST", f"{self.base_url}/messages",
@@ -76,29 +82,48 @@ class AnthropicCompatible(Provider):
                         if kind == "message_delta":
                             stop = (chunk.get("delta") or {}).get("stop_reason") or stop
                         elif kind == "message_stop":
+                            completed = True
                             break
         except httpx.HTTPError as exc:
             raise wrap_transport_error(exc, self.host) from exc
 
+        if not completed:
+            raise ProviderError("model response ended before completion; no tools were executed", retryable=True)
         calls = _flush(blocks)
         for call in calls:
             yield call
-        yield Done("tool_use" if calls else stop)
+        content = []
+        for index in sorted(blocks):
+            slot = blocks[index]
+            block = copy.deepcopy(slot["block"])
+            if block.get("type") == "tool_use" and slot.get("json"):
+                block["input"] = loads_arguments(slot["json"])
+            content.append(block)
+        yield Done("tool_use" if calls and stop != "max_tokens" else stop,
+                   anthropic_blocks=content or None)
 
     async def models(self) -> list[str]:
         try:
             async with self._client() as client:
-                response = await client.get(f"{self.base_url}/models",
-                                            headers=self.headers(),
-                                            params={"limit": 100})
-                if response.status_code < 400:
+                names, seen = [], set()
+                params = {"limit": 100}
+                while True:
+                    response = await client.get(f"{self.base_url}/models",
+                                                headers=self.headers(), params=params)
+                    if response.status_code in (401, 403):
+                        raise_for_status(response, self.host)
+                    if response.status_code >= 400:
+                        break
                     body = response.json()
-                    names = [str(item.get("id")) for item in body.get("data", [])
-                             if isinstance(item, dict) and item.get("id")]
-                    if names:
-                        return sorted(set(names), reverse=True)
-                elif response.status_code in (401, 403):
-                    raise_for_status(response, self.host)
+                    names.extend(str(item["id"]) for item in body.get("data", [])
+                                 if isinstance(item, dict) and item.get("id"))
+                    token = body.get("last_id") if body.get("has_more") else None
+                    if not token or token in seen:
+                        break
+                    seen.add(token)
+                    params["after_id"] = token
+                if names:
+                    return sorted(set(names), reverse=True)
         except httpx.HTTPError as exc:
             if not self.static_models:
                 raise wrap_transport_error(exc, self.host) from exc
@@ -119,18 +144,25 @@ def _consume(kind: str, chunk: dict, blocks: dict[int, dict]) -> list:
         index = int(chunk.get("index") or 0)
         block = chunk.get("content_block") or {}
         blocks[index] = {"type": block.get("type", "text"), "id": block.get("id", ""),
-                         "name": block.get("name", ""), "json": ""}
+                         "name": block.get("name", ""), "json": "", "block": copy.deepcopy(block)}
+        if block.get("type") == "text" and block.get("text"):
+            events.append(TextDelta(block["text"]))
     elif kind == "content_block_delta":
         index = int(chunk.get("index") or 0)
         delta = chunk.get("delta") or {}
         dtype = delta.get("type")
+        slot = blocks.get(index)
+        field = {"text_delta": "text", "thinking_delta": "thinking", "signature_delta": "signature"}.get(dtype)
+        if slot and field:
+            block = slot["block"]
+            block[field] = block.get(field, "") + str(delta.get(field, ""))
         if dtype == "text_delta":
             events.append(TextDelta(str(delta.get("text", ""))))
         elif dtype == "thinking_delta":
             events.append(ThinkingDelta(str(delta.get("thinking", ""))))
         elif dtype == "input_json_delta":
             slot = blocks.setdefault(index, {"type": "tool_use", "id": "",
-                                             "name": "", "json": ""})
+                                             "name": "", "json": "", "block": {"type": "tool_use"}})
             slot["json"] += str(delta.get("partial_json", ""))
     elif kind == "message_delta":
         usage = chunk.get("usage") or {}
@@ -147,7 +179,8 @@ def _flush(blocks: dict[int, dict]) -> list[ToolCall]:
         if slot.get("type") != "tool_use" or not slot.get("name"):
             continue
         calls.append(ToolCall(slot.get("id") or f"call_{index}", slot["name"],
-                              loads_arguments(slot.get("json", ""))))
+                              loads_arguments(slot["json"]) if slot.get("json") else
+                              slot.get("block", {}).get("input", {})))
     return calls
 
 
@@ -164,6 +197,9 @@ def to_anthropic_messages(messages: list[dict]) -> list[dict]:
                               "data": item.get("data")}})
             _append(out, "user", blocks)
         elif role == "assistant":
+            if message.get("anthropic_blocks"):
+                out.append({"role": "assistant", "content": copy.deepcopy(message["anthropic_blocks"])})
+                continue
             content: list[dict] = []
             text = message.get("content") or ""
             if text:

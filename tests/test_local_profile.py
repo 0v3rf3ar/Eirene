@@ -46,3 +46,31 @@ def test_apple_silicon_unified_memory_counts_as_model_memory(monkeypatch):
     monkeypatch.setattr(local_profile.Path, "glob", lambda self, pattern: [])
     monkeypatch.setattr(local_profile.Path, "exists", lambda self: False)
     assert local_profile._gpu_vram_gb() == 12
+
+
+def test_compact_schemas_keep_contract_without_mutating_registry():
+    import copy
+    import json
+    from eirene.tools.registry import specs
+    original = specs()
+    saved = copy.deepcopy(original)
+    profile = LocalProfile("compact", 3, 16, 8, 0)
+    selected = profile.tools(original)
+    full = {item["name"]: item for item in original}
+    for item in selected:
+        expected = full[item["name"]]
+        assert item["parameters"].get("required") == expected["parameters"].get("required")
+        assert item["parameters"]["properties"].keys() == expected["parameters"]["properties"].keys()
+    assert original == saved
+    assert len(json.dumps(selected)) < len(json.dumps([full[item["name"]] for item in selected]))
+
+
+def test_compact_schema_preserves_properties_named_description_and_literal_values():
+    schema = {"name": "edit_file", "parameters": {"type": "object", "description": "prose",
+              "properties": {"description": {"type": "string", "description": "field prose"},
+                             "item": {"enum": [{"description": "literal"}]}},
+              "required": ["description"]}}
+    result = LocalProfile("compact", 3, 16, 8, 0).tools([schema])[0]["parameters"]
+    assert result["properties"]["description"] == {"type": "string"}
+    assert result["properties"]["item"]["enum"] == [{"description": "literal"}]
+    assert result["required"] == ["description"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any, AsyncIterator
 from urllib.parse import urlparse
@@ -13,6 +14,9 @@ from .base import (Done, Provider, TextDelta, ThinkingDelta, ToolCall, Usage,
                    parse_json, raise_for_status, sse_lines, wrap_transport_error)
 
 DEFAULT_BASE = "https://generativelanguage.googleapis.com/v1beta"
+# Google's documented sentinel for client-generated calls or imported history.
+# Real Gemini response parts must instead retain their original signatures.
+CLIENT_CALL_SIGNATURE = "skip_thought_signature_validator"
 SCHEMA_KEYS = {"type", "description", "properties", "required", "items", "enum", "format"}
 
 
@@ -38,17 +42,23 @@ class Gemini(Provider):
 
     async def stream(self, messages, model, *, system="", tools=None,
                      max_tokens=8192) -> AsyncIterator:
+        from .preflight import validate_history
+        validate_history(messages)
         payload: dict[str, Any] = {
             "contents": to_gemini_contents(messages),
             "generationConfig": {"maxOutputTokens": max_tokens},
         }
+        from .preflight import validate_gemini
+        validate_gemini(payload["contents"], model)
         if system:
             payload["systemInstruction"] = {"parts": [{"text": system}]}
         if tools:
             payload["tools"] = [{"functionDeclarations": [_declaration(s) for s in tools]}]
         url = f"{self.base_url}/models/{model}:streamGenerateContent"
         calls: list[ToolCall] = []
+        parts: list[dict] = []
         finish = "stop"
+        completed = False
         try:
             async with self._client() as client:
                 async with client.stream("POST", url, json=payload, params={"alt": "sse"},
@@ -64,27 +74,35 @@ class Gemini(Provider):
                             detail = chunk["error"]
                             message = detail.get("message") if isinstance(detail, dict) else detail
                             raise ProviderError(str(message)[:200])
-                        for event in _consume(chunk, calls):
+                        for event in _consume(chunk, calls, parts):
                             yield event
                         reason = _finish(chunk)
                         if reason:
                             finish = reason
+                            completed = True
         except httpx.HTTPError as exc:
             raise wrap_transport_error(exc, self.host) from exc
 
-        for call in calls:
+        if not completed:
+            raise ProviderError("model response ended before completion; no tools were executed", retryable=True)
+        for call in (calls if finish in {"STOP", "MAX_TOKENS"} else []):
             yield call
-        yield Done("tool_use" if calls else finish.lower())
+        reason = finish.lower()
+        yield Done("tool_use" if calls and reason == "stop" else reason, gemini_parts=parts or None)
 
     async def models(self) -> list[str]:
         try:
             async with self._client() as client:
-                response = await client.get(f"{self.base_url}/models",
-                                            headers=self.headers(),
-                                            params={"pageSize": 200})
-                if response.status_code < 400:
+                names, seen = [], set()
+                params = {"pageSize": 200}
+                while True:
+                    response = await client.get(f"{self.base_url}/models",
+                                                headers=self.headers(), params=params)
+                    if response.status_code in (401, 403):
+                        raise_for_status(response, self.host)
+                    if response.status_code >= 400:
+                        break
                     body = response.json()
-                    names = []
                     for item in body.get("models", []):
                         if not isinstance(item, dict):
                             continue
@@ -96,10 +114,13 @@ class Gemini(Provider):
                             name = name[7:]
                         if name:
                             names.append(name)
-                    if names:
-                        return sorted(set(names))
-                elif response.status_code in (401, 403):
-                    raise_for_status(response, self.host)
+                    token = body.get("nextPageToken")
+                    if not token or token in seen:
+                        break
+                    seen.add(token)
+                    params["pageToken"] = token
+                if names:
+                    return sorted(set(names))
         except httpx.HTTPError as exc:
             if not self.static_models:
                 raise wrap_transport_error(exc, self.host) from exc
@@ -141,7 +162,7 @@ def _finish(chunk: dict) -> str:
     return ""
 
 
-def _consume(chunk: dict, calls: list[ToolCall]) -> list:
+def _consume(chunk: dict, calls: list[ToolCall], parts: list[dict] | None = None) -> list:
     events = []
     usage = chunk.get("usageMetadata")
     if isinstance(usage, dict):
@@ -153,6 +174,10 @@ def _consume(chunk: dict, calls: list[ToolCall]) -> list:
         for part in (candidate.get("content") or {}).get("parts") or []:
             if not isinstance(part, dict):
                 continue
+            if parts is not None:
+                # Preserve boundaries and opaque signatures, including empty text
+                # parts sent at the end of a stream. Never merge signed parts.
+                parts.append(copy.deepcopy(part))
             if "text" in part and part["text"]:
                 text = str(part["text"])
                 if part.get("thought"):
@@ -180,6 +205,11 @@ def to_gemini_contents(messages: list[dict]) -> list[dict]:
                                              "data": item.get("data")}})
             _append(out, "user", parts)
         elif role == "assistant":
+            for call in message.get("tool_calls") or []:
+                names[call["id"]] = call["name"]
+            if message.get("gemini_parts"):
+                out.append({"role": "model", "parts": copy.deepcopy(message["gemini_parts"])})
+                continue
             parts: list[dict] = []
             text = message.get("content") or ""
             if text:
@@ -187,7 +217,8 @@ def to_gemini_contents(messages: list[dict]) -> list[dict]:
             for call in message.get("tool_calls") or []:
                 names[call["id"]] = call["name"]
                 parts.append({"functionCall": {"name": call["name"],
-                                               "args": call.get("arguments") or {}}})
+                                               "args": call.get("arguments") or {}},
+                              "thoughtSignature": CLIENT_CALL_SIGNATURE})
             if parts:
                 out.append({"role": "model", "parts": parts})
         elif role == "tool":

@@ -6,6 +6,9 @@ A provider connects Eirene to a model service or an installed agent CLI. Choose 
 connection based on the account or local service you want to use, then select a
 model available through that connection.
 
+See the [provider communication audit](provider-audit.md) for protocol fixes,
+test coverage, and live verification limits.
+
 ## Connect and switch
 
 ```text
@@ -57,6 +60,17 @@ Common aliases include `openai` or `gpt` for `chatgpt`, `claude` for `anthropic`
 `gemini`, `moonshot` for `kimi`, and `custom` for `custom-openai`.
 
 ## API providers
+
+API connections reuse their HTTP connection pools until the provider is switched
+or closed. Agents using the same provider, endpoint, and credential share a
+four-request limit and rate-limit cooldown in this process. Retries honor
+`Retry-After` and are staggered after a cooldown. These limits do not coordinate
+separate Eirene processes.
+
+Before inference, Eirene checks tool-call/result pairing and message order.
+Gemini and Anthropic also check required reasoning signatures in the outgoing
+history. Invalid history produces a local diagnostic before an inference request
+is sent; original provider metadata is preserved rather than reconstructed.
 
 Eirene manages workspace tools for API providers. A model must support tool
 calling to inspect files, edit them, execute commands, or call MCP tools. Text-only

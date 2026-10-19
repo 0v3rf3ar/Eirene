@@ -97,7 +97,7 @@ async def test_streaming_tools_usage_and_tool_result_round_trip():
     assert call.arguments == {"path": "README.md"}
     assert any(isinstance(e, base.ThinkingDelta) for e in events)
     assert base.Usage(42, 7) in events
-    assert events[-1] == base.Done("tool_use")
+    assert events[-1] == base.Done("tool_use", reasoning_content="Inspect files")
     assert requests[0]["model"] == "auto/coding"
     assert requests[0]["stream_options"] == {"include_usage": True}
     assert requests[0]["tools"][0]["function"]["name"] == "read_file"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shlex
+import asyncio
 
 from ..core.errors import CommandError, SessionError
 from ..core.session import export_session, import_session, search_sessions
@@ -35,7 +36,7 @@ async def run(app, args: str) -> None:
             app.say(f"imported as session {session.id}")
             return
         query = " ".join(words[1:] if action == "search" else words)
-        found = search_sessions(query, sandbox=app.sandbox.root)
+        found = await asyncio.to_thread(search_sessions, query, sandbox=app.sandbox.root)
     except SessionError as exc:
         raise CommandError(exc.user_message()) from exc
     if not found:

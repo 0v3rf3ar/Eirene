@@ -435,7 +435,8 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
                   isolation: str = "none", isolate_network: bool = False,
                   plan_scope: str | None = None, read_only: bool = False,
                   search_service=None, call_id="", config=None,
-                  file_attachments: dict[str, dict] | None = None) -> str:
+                  file_attachments: dict[str, dict] | None = None,
+                  expected_file: files.FileVersion | None = None) -> str:
     """Run a tool call and return its text result."""
     if name not in BY_NAME:
         raise ToolError(f"unknown tool '{name}'")
@@ -614,10 +615,11 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
     if name == "plan_clear":
         return plan_ops.clear(box.root, plan_scope)
 
-    return _run_file_tool(name, args, box, max_chars=min(24000, max_bytes))
+    return _run_file_tool(name, args, box, max_chars=min(24000, max_bytes), expected_file=expected_file)
 
 
-def _run_file_tool(name: str, args: dict[str, Any], box: Sandbox, *, max_chars: int = 24000) -> str:
+def _run_file_tool(name: str, args: dict[str, Any], box: Sandbox, *, max_chars: int = 24000,
+                   expected_file: files.FileVersion | None = None) -> str:
     if name == "read_file":
         scoped = project_ops.scoped_instructions(box.root, box.resolve(_text(args, "path")))
         allowance = max(0, max_chars - len(scoped) - (2 if scoped else 0))
@@ -637,13 +639,13 @@ def _run_file_tool(name: str, args: dict[str, Any], box: Sandbox, *, max_chars: 
         content = args.get("content")
         if content is None:
             raise ToolError("content is required")
-        return files.write_file(box, _text(args, "path"), str(content))
+        return files.write_file(box, _text(args, "path"), str(content), expected=expected_file)
     if name == "edit_file":
         if not isinstance(args.get("old_string"), str) or not isinstance(args.get("new_string"), str):
             raise ToolError("old_string and new_string must be strings; use an empty new_string to delete text")
         return files.edit_file(box, _text(args, "path"), str(args.get("old_string", "")),
                                str(args.get("new_string", "")),
-                               args.get("replace_all", False))
+                               args.get("replace_all", False), expected=expected_file)
     if name == "list_dir":
         return files.list_dir(box, str(args.get("path") or "."))
     if name == "glob":
@@ -681,6 +683,21 @@ def escape_paths(name: str, args: dict[str, Any]) -> list[str]:
         return [str(p) for key in ("read_paths", "write_paths") for p in args.get(key, [])]
     value = args.get("path")
     return [str(value)] if value else []
+
+
+def prepare_change(name: str, args: dict[str, Any], box: Sandbox) -> tuple[str, files.FileVersion]:
+    """Render the preview from the exact version execution must validate."""
+    path = _text(args, "path")
+    try:
+        version = files.file_version(box, path)
+    except OSError as exc:
+        raise files._edit_error(path, exc) from exc
+    if name == "write_file":
+        body = files.diff_preview(box, path, args["content"], version=version)
+    else:
+        body = files.edit_preview(box, path, args["old_string"], args["new_string"],
+                                  args.get("replace_all", False), version=version)
+    return body, version
 
 
 def preview(name: str, args: dict[str, Any], box: Sandbox) -> str:

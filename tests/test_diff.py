@@ -160,12 +160,14 @@ def test_an_edit_preview_is_a_real_diff(workdir):
     assert [row.number for row in change.rows if row.sign == "-"] == [2]
 
 
-def test_an_edit_that_does_not_match_falls_back(workdir):
+def test_an_edit_that_does_not_match_shows_no_change(workdir):
     (workdir / "code.py").write_text("a = 1\n", encoding="utf-8")
     text = files.edit_preview(Sandbox(workdir), "code.py", "zzz", "yyy")
     change = diff.parse("code.py", text, "Update")
-    assert change.added == 1
-    assert change.removed == 1
+    assert change.added == 0
+    assert change.removed == 0
+    assert "no match" in text
+    assert (workdir / "code.py").read_text(encoding="utf-8") == "a = 1\n"
 
 
 def test_a_note_is_shown_when_the_change_failed(workdir):

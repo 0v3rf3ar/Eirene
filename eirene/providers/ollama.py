@@ -58,6 +58,8 @@ class Ollama(Provider):
                 system = self.profile.system(system)
             tools = self.profile.tools(tools)
             max_tokens = min(max_tokens, self.profile.max_tokens)
+        from .preflight import validate_history
+        validate_history(messages)
         payload: dict[str, Any] = {
             "model": model,
             "messages": to_ollama_messages(messages, system),
@@ -71,6 +73,8 @@ class Ollama(Provider):
         if tools:
             payload["tools"] = [{"type": "function", "function": spec} for spec in tools]
         calls: list[ToolCall] = []
+        reasoning = ""
+        saw_reasoning = False
         finish = "stop"
         completed = False
         try:
@@ -89,6 +93,10 @@ class Ollama(Provider):
                             continue
                         if chunk.get("error"):
                             raise ProviderError(str(chunk["error"])[:200])
+                        thinking = (chunk.get("message") or {}).get("thinking")
+                        if isinstance(thinking, str):
+                            saw_reasoning = True
+                            reasoning += thinking
                         for event in _consume(chunk, calls):
                             yield event
                         if chunk.get("done"):
@@ -102,7 +110,8 @@ class Ollama(Provider):
             raise ProviderError("model response ended before completion; no tools were executed", retryable=True)
         for call in calls:
             yield call
-        yield Done("tool_use" if calls and finish != "length" else finish)
+        yield Done("tool_use" if calls and finish != "length" else finish,
+                   reasoning_content=reasoning if saw_reasoning else None)
 
     async def _details(self, model: str) -> dict:
         """Fetch local model size once; model-name parsing remains the fallback."""
@@ -190,10 +199,15 @@ def to_ollama_messages(messages: list[dict], system: str) -> list[dict]:
     for message in messages:
         role = message.get("role")
         if role in ("user", "system"):
-            out.append({"role": role, "content": message.get("content", "")})
+            entry = {"role": role, "content": message.get("content", "")}
+            if message.get("attachments"):
+                entry["images"] = [item["data"] for item in message["attachments"]]
+            out.append(entry)
         elif role == "assistant":
             entry: dict[str, Any] = {"role": "assistant",
                                      "content": message.get("content") or ""}
+            if message.get("reasoning_content") is not None:
+                entry["thinking"] = message["reasoning_content"]
             calls = message.get("tool_calls") or []
             if calls:
                 entry["tool_calls"] = [

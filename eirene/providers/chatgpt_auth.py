@@ -306,6 +306,7 @@ class ChatGPTAuth(Provider):
         return confirmed
 
     async def close(self):
+        await super().close()
         if self._server:
             self._server.close()
             await self._server.wait_closed()

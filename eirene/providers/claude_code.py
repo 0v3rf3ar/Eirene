@@ -257,6 +257,12 @@ class ClaudeCode(Provider):
                     if event.get("is_error"):
                         raise ProviderError(str(event.get("result") or
                                                 "Claude Code turn failed"))
+                    # The result aggregates all internal model rounds; earlier
+                    # assistant events report only individual requests.
+                    raw_usage = event.get("usage") or {}
+                    if raw_usage:
+                        yield Usage(int(raw_usage.get("input_tokens") or 0),
+                                    int(raw_usage.get("output_tokens") or 0))
                     completed = True
                     yield Done(str(event.get("subtype") or "stop"))
                     return
@@ -304,7 +310,8 @@ class ClaudeCode(Provider):
     def _permission_mode(self) -> str:
         if getattr(self, "permissions", "sandboxed") == "full-access" and self.mode == "auto":
             return "bypassPermissions"
-        return {"plan": "plan", "auto": "auto"}.get(self.mode, "manual")
+        # `manual` is a recent alias; `default` also works with older CLIs.
+        return {"plan": "plan", "auto": "auto"}.get(self.mode, "default")
 
     def set_permissions(self, level: str) -> None:
         if getattr(self, "permissions", "sandboxed") != level:

@@ -66,7 +66,7 @@ analysis = Analysis(
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
-    runtime_hooks=[],
+    runtime_hooks=[str(ROOT / "build" / "runtime_hook.py")],
     excludes=excludes,
     noarchive=False,
 )

@@ -161,7 +161,7 @@ def test_native_full_access_and_plan_policies(provider_class, workdir):
         assert provider._thread_options("test")["sandbox"] == "danger-full-access"
         assert provider._turn_policy()["approvalPolicy"] == "untrusted"
     else:
-        assert provider._permission_mode() == "manual"
+        assert provider._permission_mode() == "default"
     provider.set_context(workdir, "plan")
     if isinstance(provider, CodexSubscription):
         assert provider._turn_policy()["sandboxPolicy"]["type"] == "readOnly"
@@ -172,7 +172,7 @@ def test_native_full_access_and_plan_policies(provider_class, workdir):
     if isinstance(provider, CodexSubscription):
         assert provider._turn_policy()["sandboxPolicy"]["type"] == "workspaceWrite"
     else:
-        assert provider._permission_mode() == "manual"
+        assert provider._permission_mode() == "default"
 
 
 @pytest.mark.parametrize("permissions", ["sandboxed", "full-access"])
