@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .history import provider_history
+
 from ..core.errors import ProviderError
 from .base import (Done, Provider, TextDelta, ThinkingDelta, ToolCall, Usage,
                    parse_json, raise_for_status, wrap_transport_error)
@@ -196,7 +198,7 @@ def to_ollama_messages(messages: list[dict], system: str) -> list[dict]:
     out: list[dict] = []
     if system:
         out.append({"role": "system", "content": system})
-    for message in messages:
+    for message in provider_history(messages):
         role = message.get("role")
         if role in ("user", "system"):
             entry = {"role": role, "content": message.get("content", "")}

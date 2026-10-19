@@ -197,13 +197,65 @@ async def test_reasoning_survives_agent_tool_loop(key, config, workdir):
         runner.session.close()
 
 
-async def test_gemini_background_completion_uses_client_signature(workdir, config, monkeypatch):
-    """A signed model call followed by an automatic host poll must remain replayable."""
+@pytest.mark.parametrize('state', ['succeeded', 'failed'])
+async def test_deepseek_background_completion_survives_resume(workdir, config, monkeypatch, state):
     import time
     from types import SimpleNamespace
     from eirene.core import artifacts
     from eirene.core.agent import Agent
-    from eirene.providers.gemini import CLIENT_CALL_SIGNATURE
+    from eirene.tools import processes
+    from eirene.tools.sandbox import Sandbox
+
+    session = Session.create(workdir)
+    session.add_user('Run a command and report its result')
+    session.add_assistant('', [{'id': 'model-call', 'name': 'run_command',
+                               'arguments': {'command': 'echo ok'}}],
+                          reasoning_content='Run the command')
+    session.add_tool_result('model-call', 'run_command', 'process p is running')
+    writer = artifacts.Writer()
+    writer.feed('process finished')
+    writer.close()
+    item = SimpleNamespace(id='p', running=False, state=state, artifact=writer,
+                           call_id='model-call', command='echo ok', started=time.monotonic(), notified=False)
+    monkeypatch.setattr(processes, 'pending', lambda *args: [item])
+    async def poll(*args, **kwargs):
+        return 'process finished'
+    monkeypatch.setattr(processes, 'poll', poll)
+    runner = Agent(session, config, Sandbox(workdir))
+    provider = OpenAICompatible('key', 'https://api.deepseek.com', name='deepseek')
+    runner.use(provider, 'deepseek', 'deepseek-flash')
+    resumed = None
+    requests = []
+    def respond(request):
+        messages = json.loads(request.content)['messages']
+        requests.append(messages)
+        assistants = [m for m in messages if m['role'] == 'assistant']
+        assert [m['reasoning_content'] for m in assistants] == ['Run the command']
+        assert assistants[-1]['tool_calls'][0]['id'] == 'model-call'
+        assert messages[-1]['role'] == 'user' and 'process finished' in messages[-1]['content']
+        return httpx.Response(200, text=sse({'choices': [{'delta': {'content': 'Completed'}, 'finish_reason': 'stop'}]}))
+    base.set_transport(httpx.MockTransport(respond))
+    try:
+        _ = [event async for event in runner._background_completions()]
+        assert session.messages[-1]['is_error'] == (state == 'failed')
+        _ = [event async for event in provider.stream(session.messages, 'deepseek-flash')]
+        session.close()
+        resumed = Session.resume(session.id)
+        _ = [event async for event in provider.stream(resumed.messages, 'deepseek-flash')]
+        assert len(requests) == 2
+    finally:
+        if resumed is not None:
+            resumed.close()
+        await runner.close()
+        session.close()
+
+
+async def test_gemini_background_completion_uses_observation(workdir, config, monkeypatch):
+    """Automatic polls must not require synthetic model signatures."""
+    import time
+    from types import SimpleNamespace
+    from eirene.core import artifacts
+    from eirene.core.agent import Agent
     from eirene.tools import processes
     from eirene.tools.sandbox import Sandbox
 
@@ -234,10 +286,10 @@ async def test_gemini_background_completion_uses_client_signature(workdir, confi
         contents = json.loads(request.content)['contents']
         calls = [part for content in contents for part in content['parts'] if 'functionCall' in part]
         assert calls[0] == signed
-        assert calls[1]['functionCall']['name'] == 'poll_process'
-        assert calls[1]['thoughtSignature'] == CLIENT_CALL_SIGNATURE
+        assert len(calls) == 1
         responses = [part for content in contents for part in content['parts'] if 'functionResponse' in part]
-        assert len(responses) == 2
+        assert len(responses) == 1
+        assert 'exit 0' in json.dumps(contents)
         return httpx.Response(200, text=sse({'candidates':[{'content':{'parts':[{'text':'Completed'}]},'finishReason':'STOP'}]}))
     base.set_transport(httpx.MockTransport(respond))
     try:

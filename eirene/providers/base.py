@@ -134,6 +134,8 @@ class Provider:
                                        transport=_TRANSPORT, trust_env=signature[2])
             self._http_client, self._http_signature = client, signature
             async def observe(response):
+                if response.status_code >= 400:
+                    await response.aread()
                 gate_for(self).observe(response)
             client.event_hooks["response"].append(observe)
         gate = gate_for(self)
@@ -184,6 +186,9 @@ def raise_for_status(response: httpx.Response, host: str, model: str = "") -> No
         raise ProviderError(f"{host} returned 404" + (f": {detail}" if detail else ""),
                             status=404)
     if code == 429:
+        quota = quota_exhaustion(response)
+        if quota:
+            raise ProviderError(f"{host}: {quota} Check your quota and billing in Google AI Studio, or switch provider with /connect.", status=429)
         try:
             error = response.json().get("error", {})
             error_code = error.get("code", "") if isinstance(error, dict) else ""
@@ -193,7 +198,9 @@ def raise_for_status(response: httpx.Response, host: str, model: str = "") -> No
             raise ProviderError(f"{host}: {detail or error_code}", status=code)
         retry = _retry_after(response)
         note = f"rate limited by {host}"
-        if retry:
+        if detail:
+            note += f": {detail}"
+        if retry is not None:
             note += f", retry in {retry:.0f}s"
         raise RateLimitError(note, retry_after=retry)
     if code >= 500 or code == 408:
@@ -274,17 +281,53 @@ def _error_detail(response: httpx.Response) -> str:
 
 
 def _retry_after(response: httpx.Response) -> float | None:
+    delays = []
     value = response.headers.get("retry-after")
-    if not value:
-        return None
-    try:
-        seconds = float(value)
-    except ValueError:
+    if value:
         try:
-            seconds = (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()
-        except (ValueError, TypeError, OverflowError):
-            return None
-    return max(0.0, seconds) if math.isfinite(seconds) else None
+            seconds = float(value)
+        except ValueError:
+            try:
+                seconds = (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()
+            except (ValueError, TypeError, OverflowError):
+                seconds = float("nan")
+        if math.isfinite(seconds):
+            delays.append(max(0.0, seconds))
+    for detail in _rpc_details(response):
+        if str(detail.get("@type", "")).endswith("/google.rpc.RetryInfo"):
+            duration = detail.get("retryDelay")
+            if isinstance(duration, str) and re.fullmatch(r"\d+(?:\.\d{1,9})?s", duration):
+                seconds = float(duration[:-1])
+                if math.isfinite(seconds):
+                    delays.append(seconds)
+    return max(delays) if delays else None
+
+
+def _rpc_details(response):
+    try:
+        body = response.json()
+    except (ValueError, UnicodeDecodeError, httpx.ResponseNotRead):
+        return []
+    error = body.get("error") if isinstance(body, dict) else None
+    details = error.get("details") if isinstance(error, dict) else None
+    return [item for item in details if isinstance(item, dict)] if isinstance(details, list) else []
+
+
+def quota_exhaustion(response):
+    """Recognize explicit Google quota limits that short retries cannot fix."""
+    for detail in _rpc_details(response):
+        if not str(detail.get("@type", "")).endswith("/google.rpc.QuotaFailure"):
+            continue
+        for violation in detail.get("violations") or []:
+            if not isinstance(violation, dict):
+                continue
+            value = violation.get("quotaValue")
+            if value in (0, "0"):
+                return "No quota is available for this model."
+            quota_id = str(violation.get("quotaId", "")).lower()
+            if "perday" in quota_id or "per_day" in quota_id or "daily" in quota_id:
+                return "The daily quota is exhausted; wait for its reset or increase the quota."
+    return ""
 
 
 def wrap_transport_error(exc: Exception, host: str) -> ProviderError:

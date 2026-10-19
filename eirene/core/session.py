@@ -223,10 +223,13 @@ class Session:
                       thinking: str = "", *, response_items: list[dict] | None = None,
                       gemini_parts: list[dict] | None = None,
                       reasoning_content: str | None = None,
-                      anthropic_blocks: list[dict] | None = None) -> Message:
+                      anthropic_blocks: list[dict] | None = None,
+                      host_generated: bool = False) -> Message:
         msg = Message.assistant(text, tool_calls)
         self.messages.append(msg)
         record: dict[str, Any] = {"t": "assistant", "content": text}
+        if host_generated:
+            msg["host_generated"] = record["host_generated"] = True
         for key, value in (("reasoning_content", reasoning_content), ("anthropic_blocks", anthropic_blocks)):
             if value is not None:
                 msg[key] = value
@@ -319,7 +322,7 @@ def replay(records: list[dict[str, Any]], *, apply_compaction: bool = True) -> l
                 messages[-1]["response_items"] = record["response_items"]
             if record.get("gemini_parts") is not None:
                 messages[-1]["gemini_parts"] = record["gemini_parts"]
-            for key in ("reasoning_content", "anthropic_blocks"):
+            for key in ("reasoning_content", "anthropic_blocks", "host_generated"):
                 if record.get(key) is not None:
                     messages[-1][key] = record[key]
         elif kind == "tool_result":
@@ -430,7 +433,8 @@ def import_session(source: Path, sandbox: Path) -> "Session":
                                   gemini_parts=raw.get("gemini_parts"),
                                   reasoning_content=raw.get("reasoning_content"),
                                   anthropic_blocks=raw.get("anthropic_blocks"),
-                                  response_items=raw.get("response_items"))
+                                  response_items=raw.get("response_items"),
+                                  host_generated=raw.get("host_generated") is True)
         elif role == "tool":
             session.add_tool_result(str(raw.get("tool_call_id") or ""),
                                     str(raw.get("name") or ""),

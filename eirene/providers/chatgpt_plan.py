@@ -7,6 +7,8 @@ import ssl
 
 import httpx
 
+from .history import provider_history
+
 from ..core.errors import AuthError, ProviderError
 from .base import (Done, Provider, TextDelta, ThinkingDelta, ToolCall, Usage,
                    parse_json, raise_for_status, sse_lines, transient_tls_error,
@@ -243,7 +245,7 @@ class ChatGPTPlan(Provider):
 def to_responses_input(messages):
     """Replay local history, including encrypted reasoning and tool results."""
     result = []
-    for message in messages:
+    for message in provider_history(messages):
         role = message.get("role")
         if role == "assistant" and message.get("response_items"):
             result.extend(message["response_items"])

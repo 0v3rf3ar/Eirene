@@ -65,6 +65,7 @@ async def compact(session: Session, provider, model: str, *,
     summary_message = Message.user(f"Summary of the conversation so far:\n{summary}")
     summary_message["compaction_summary"] = True
     memory_message = Message.assistant(resume)
+    memory_message["host_generated"] = True
     memory_message["execution_memory"] = memory
     rebuilt = [summary_message, memory_message]
     rebuilt.extend(tail)

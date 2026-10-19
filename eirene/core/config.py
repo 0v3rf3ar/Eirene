@@ -64,7 +64,7 @@ INTEGER_LIMITS = {
     "max_attachment_bytes": (1, 1_000_000_000),
     "request_timeout": (1, 86_400),
     "retry_attempts": (1, 100),
-    "max_tokens": (512, 200_000),
+    "max_tokens": (512, 393_216),
     "context_warning": (0, 10_000_000),
     "log_max_bytes": (10_000, 100_000_000),
     "log_backups": (0, 20),

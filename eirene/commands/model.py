@@ -45,7 +45,7 @@ async def run(app, args: str) -> None:
 
 async def _use(app, key: str, model: str) -> None:
     provider = providers.build(key, app.config)
-    if key == "chatgpt-plan":
+    if key in {"chatgpt-plan", "deepseek"}:
         from .connect import _choose_reasoning
         try:
             if not await _choose_reasoning(app, provider, key, model):

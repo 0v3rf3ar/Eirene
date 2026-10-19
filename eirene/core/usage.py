@@ -85,6 +85,7 @@ def estimate_messages(messages: list[dict]) -> int:
             total += estimate_tokens(str(message["gemini_parts"]))
             continue
         total += estimate_tokens(str(message.get("content") or ""))
+        total += 1024 * len(message.get("attachments") or [])
         for call in message.get("tool_calls") or []:
             total += estimate_tokens(str(call.get("arguments") or ""))
     return total

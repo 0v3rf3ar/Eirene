@@ -2055,6 +2055,42 @@ async def test_the_btw_popup_opens_and_closes(workdir):
         await context.__aexit__(None, None, None)
 
 
+async def test_new_btw_cancels_old_answer_without_overwriting_the_panel(workdir):
+    from eirene import commands
+
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    class SlowAside(Script):
+        async def stream(self, messages, model, **kwargs):
+            if messages[-1]["content"] == "first question":
+                yield TextDelta("old partial")
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+            else:
+                yield TextDelta("new answer")
+                yield Done()
+
+    app, pilot, context = await start(workdir, SlowAside())
+    try:
+        await commands.dispatch(app, "/btw first question")
+        await asyncio.wait_for(started.wait(), 5)
+        await commands.dispatch(app, "/btw second question")
+        await asyncio.wait_for(cancelled.wait(), 5)
+        await asyncio.wait_for(app._aside_task, 5)
+        await pilot.pause()
+        assert app.aside.question == "second question"
+        assert app.aside.answer == "new answer"
+        assert not app.aside.failed
+        assert app.session.messages == []
+    finally:
+        await context.__aexit__(None, None, None)
+
+
 @pytest.mark.parametrize("popup", ["usage", "sandbox", "btw"])
 async def test_chat_popups_drag_and_keep_position_during_updates(workdir, popup):
     from eirene import commands

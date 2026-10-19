@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .history import provider_history
+
 from ..core.errors import ProviderError
 from .base import (Done, Provider, TextDelta, ThinkingDelta, ToolCall, Usage,
                    loads_arguments, parse_json, raise_for_status, sse_lines,
@@ -26,6 +28,7 @@ class OpenAICompatible(Provider):
         self.supports_tools = supports_tools
         self.static_models = list(static_models)
         self.extra_headers = dict(extra_headers or {})
+        self._catalog: dict[str, dict] = {}
 
     @property
     def host(self) -> str:
@@ -39,9 +42,14 @@ class OpenAICompatible(Provider):
         return head
 
     def _body(self, messages, model, system, tools, max_tokens) -> dict[str, Any]:
+        deepseek = (self.name == "deepseek" or self.host == "api.deepseek.com"
+                    or "deepseek" in model.lower())
         payload: dict[str, Any] = {
             "model": model,
-            "messages": to_openai_messages(messages, system, include_reasoning=self.name in {"deepseek", "kimi", "omniroute", "custom-openai"}),
+            "messages": to_openai_messages(
+                provider_history(messages, supports_tools=self.supports_tools), system,
+                include_reasoning=self.name in {"deepseek", "kimi", "omniroute", "custom-openai"},
+                require_reasoning=deepseek),
             "stream": True,
             "max_tokens": max_tokens,
         }
@@ -67,7 +75,8 @@ class OpenAICompatible(Provider):
         reasoning = ""
         saw_reasoning = False
         completed = False
-        finish = "stop"
+        strict = getattr(self, "require_finish_reason", False)
+        finish = "" if strict else "stop"
         try:
             async with self._client() as client:
                 async with client.stream("POST", url, json=payload,
@@ -77,7 +86,7 @@ class OpenAICompatible(Provider):
                         raise_for_status(response, self.host, model)
                     async for _, data in sse_lines(response):
                         if data == "[DONE]":
-                            completed = True
+                            completed = not strict or bool(finish)
                             break
                         chunk = parse_json(data)
                         if not isinstance(chunk, dict):
@@ -100,7 +109,17 @@ class OpenAICompatible(Provider):
 
         if not completed:
             raise ProviderError("model response ended before completion; no tools were executed", retryable=True)
-        for call in ([] if finish == "content_filter" else _flush(pending)):
+        if strict and finish not in {"stop", "length", "tool_calls", "content_filter", "insufficient_system_resource", "aborted"}:
+            raise ProviderError(f"{self.host} returned an unknown finish reason {finish!r}; no tools were executed")
+        if finish in {"insufficient_system_resource", "aborted"}:
+            raise ProviderError(f"{self.host} interrupted generation ({finish}); no tools were executed",
+                                retryable=True)
+        if finish == "content_filter":
+            raise ProviderError(f"{self.host} stopped generation because of its content filter; no tools were executed")
+        if strict and finish == "tool_calls" and not pending:
+            raise ProviderError(f"{self.host} finished with tool_calls but returned no calls; no tools were executed", retryable=True)
+        # A truncated argument string is not an executable tool request.
+        for call in ([] if finish in {"length", "content_filter"} else _flush(pending, strict=strict)):
             yield call
         yield Done("tool_use" if pending and finish not in {"length", "content_filter"} else finish,
                    reasoning_content=reasoning if saw_reasoning else None)
@@ -112,8 +131,11 @@ class OpenAICompatible(Provider):
                     response = await client.get(f"{self.base_url}/models",
                                                 headers=self.headers())
                     if response.status_code < 400:
-                        names = _model_names(response.json())
+                        body = response.json()
+                        names = _model_names(body)
                         if names:
+                            self._catalog = {item["id"]: item for item in body.get("data") or []
+                                             if isinstance(item, dict) and isinstance(item.get("id"), str)}
                             return names
                     elif response.status_code in (401, 403):
                         raise_for_status(response, self.host)
@@ -186,23 +208,37 @@ def _consume(chunk: dict, pending: dict[int, dict]) -> list:
     return events
 
 
-def _flush(pending: dict[int, dict]) -> list[ToolCall]:
+def _flush(pending: dict[int, dict], *, strict=False) -> list[ToolCall]:
     calls = []
+    seen = set()
     for index in sorted(pending):
         slot = pending[index]
-        if not slot["name"]:
+        if not slot["name"] and not strict:
             continue
+        if strict:
+            if not slot["id"] or not slot["name"] or slot["id"] in seen:
+                raise ProviderError("model returned missing or duplicate tool-call identity; no tools were executed")
+            seen.add(slot["id"])
+            try:
+                arguments = json.loads(slot["args"])
+            except (ValueError, TypeError) as exc:
+                raise ProviderError("model returned invalid tool arguments; no tools were executed") from exc
+            if not isinstance(arguments, dict):
+                raise ProviderError("model returned non-object tool arguments; no tools were executed")
+        else:
+            arguments = loads_arguments(slot["args"])
         calls.append(ToolCall(slot["id"] or f"call_{index}", slot["name"],
-                              loads_arguments(slot["args"])))
+                              arguments))
     return calls
 
 
-def to_openai_messages(messages: list[dict], system: str, *, include_reasoning=False) -> list[dict]:
+def to_openai_messages(messages: list[dict], system: str, *, include_reasoning=False,
+                       require_reasoning=False) -> list[dict]:
     """Convert internal history to the OpenAI shape."""
     out: list[dict] = []
     if system:
         out.append({"role": "system", "content": system})
-    for message in messages:
+    for message in provider_history(messages):
         role = message.get("role")
         if role == "user":
             content = message.get("content", "")
@@ -218,7 +254,12 @@ def to_openai_messages(messages: list[dict], system: str, *, include_reasoning=F
         elif role == "assistant":
             entry: dict[str, Any] = {"role": "assistant",
                                      "content": message.get("content") or ""}
-            if include_reasoning and message.get("reasoning_content") is not None:
+            if require_reasoning:
+                # DeepSeek thinking mode requires this field on every assistant
+                # turn, including host-generated calls and resumed old history.
+                # Preserve model reasoning; host messages have none to replay.
+                entry["reasoning_content"] = message.get("reasoning_content") or ""
+            elif include_reasoning and message.get("reasoning_content") is not None:
                 entry["reasoning_content"] = message["reasoning_content"]
             calls = message.get("tool_calls") or []
             if calls:

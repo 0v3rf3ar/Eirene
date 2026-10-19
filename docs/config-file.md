@@ -158,6 +158,7 @@ A provider entry can contain:
 | `base_url` | string | API root overriding the provider's built-in default. |
 | `model` | string | Remembered model for this provider, used when switching connections and in headless selection. |
 | `think` | boolean | Local Ollama thinking preference; defaults to true when absent. |
+| `reasoning_efforts` | object | Per-model thinking choice for DeepSeek or ChatGPT plan. DeepSeek accepts `default`, `none`, `low`, `high`, `max`; `/model` offers supported choices. |
 
 ```json
 {
@@ -237,7 +238,7 @@ inclusive range shown. A conversion failure uses the built-in default.
 | `max_attachment_bytes` | 20000000 | 1–1000000000 | Maximum size of each dropped file in bytes. Defaults to 20 MB. Changes apply to new attachments. |
 | `request_timeout` | 300 | 1–86400 | Provider timeout in seconds. Both local and hosted Ollama use at least 600 seconds in the provider factory. |
 | `retry_attempts` | 12 | 1–100 | Total allowed attempts per eligible provider call, including the first attempt. |
-| `max_tokens` | 16384 | 512–200000 | Requested output allowance per model response; provider and local-profile limits still apply. |
+| `max_tokens` | 16384 | 512–393216 | Requested output allowance per model response. DeepSeek uses its model's advertised output limit; other general providers retain the 200000 cap. Local-profile limits still apply. |
 | `context_warning` | 0 | 0–10000000 | Zero selects model-aware budgeting; positive values cap input earlier. Unknown capacities fall back to 60000. |
 | `log_max_bytes` | 2000000 | 10000–100000000 | Runtime log rotation threshold in bytes. |
 | `log_backups` | 3 | 0–20 | Rotated runtime logs retained. |

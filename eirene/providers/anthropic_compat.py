@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .history import provider_history
+
 from ..core.errors import ProviderError
 from .base import (Done, Provider, TextDelta, ThinkingDelta, ToolCall, Usage,
                    loads_arguments, parse_json, raise_for_status, sse_lines,
@@ -187,7 +189,7 @@ def _flush(blocks: dict[int, dict]) -> list[ToolCall]:
 def to_anthropic_messages(messages: list[dict]) -> list[dict]:
     """Convert internal history to Anthropic blocks."""
     out: list[dict] = []
-    for message in messages:
+    for message in provider_history(messages):
         role = message.get("role")
         if role in ("user", "system"):
             blocks = [{"type": "text", "text": message.get("content", "")}]

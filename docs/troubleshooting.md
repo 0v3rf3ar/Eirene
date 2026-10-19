@@ -51,6 +51,20 @@ because actions may already have run. Inspect current files and command state
 before requesting a retry. Exhausted retries show that recovery failed, not proof
 that the service is permanently unavailable.
 
+Gemini retry countdowns retain Google's error reason and honor structured
+`google.rpc.RetryInfo` delays as well as `Retry-After`. Explicit daily quota
+exhaustion or a zero available quota stops short retries with a diagnostic.
+Check your project's model limits and billing in
+[Google AI Studio](https://aistudio.google.com/usage?tab=rate-limit), wait for the
+quota reset, or use `/connect` to select another configured provider. A 500
+response is a service error; Eirene can retry it but cannot repair Google's
+backend. See Google's [troubleshooting guide](https://ai.google.dev/gemini-api/docs/troubleshooting).
+
+An output artifact is a saved tool result. Its paging notice is needed when
+meaningful output was omitted; trimming trailing whitespace alone no longer
+marks a complete result as partial. The artifact remains available even when
+the result fits directly in the conversation.
+
 ## A plugin command is missing
 
 ```text

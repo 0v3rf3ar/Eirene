@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 from ..core.config import Config
 from ..core.errors import ProviderError
@@ -11,6 +12,7 @@ from .base import Provider
 from .gemini import Gemini
 from .ollama import Ollama
 from .openai_compat import OpenAICompatible
+from .deepseek import DeepSeek, MODELS as DEEPSEEK_MODELS
 from .omniroute import OmniRoute
 from .codex_subscription import CodexSubscription
 from .claude_code import ClaudeCode
@@ -86,7 +88,7 @@ SPECS: dict[str, Spec] = {
     "deepseek": Spec(
         "deepseek", "DeepSeek", "openai", "https://api.deepseek.com/v1",
         key_hint="starts with 'sk-'",
-        models=["deepseek-chat", "deepseek-reasoner"]),
+        models=DEEPSEEK_MODELS),
     "kimi": Spec(
         "kimi", "Kimi (Moonshot)", "openai", "https://api.moonshot.ai/v1",
         key_hint="starts with 'sk-'",
@@ -181,6 +183,9 @@ def build(key: str, config: Config, *, api_key: str | None = None,
                       timeout=max(timeout, 600.0), think=think)
     if key == "omniroute":
         return OmniRoute(token, url, timeout=timeout)
+    if key == "deepseek" or (info.protocol == "openai" and urlparse(url).hostname == "api.deepseek.com"):
+        return DeepSeek(token, url, name=key, timeout=timeout,
+                        reasoning_efforts=config.provider_config(key).get("reasoning_efforts"))
     return OpenAICompatible(token, url, name=key, supports_tools=info.supports_tools,
                             static_models=info.models, timeout=timeout)
 

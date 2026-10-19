@@ -23,11 +23,15 @@ class Writer:
         self.handle = path.open("xb")
         path.chmod(0o600)
         self.size = 0
+        self.content_size = 0
         self.truncated = False
 
     def feed(self, text: str):
         data = text.encode("utf-8", "replace")
         room = max(0, MAX_BYTES - self.size)
+        significant = text.rstrip().encode("utf-8", "replace")
+        if significant and room:
+            self.content_size = self.size + min(len(significant), room)
         self.handle.write(data[:room])
         self.size += min(len(data), room)
         if len(data) > room and not self.truncated:

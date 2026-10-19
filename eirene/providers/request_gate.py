@@ -5,7 +5,7 @@ import asyncio
 import hashlib
 import random
 
-from .base import _retry_after
+from .base import _retry_after, quota_exhaustion
 
 class RequestGate:
     def __init__(self):
@@ -31,6 +31,8 @@ class RequestGate:
 
     def observe(self, response):
         if response.status_code == 429:
+            if quota_exhaustion(response):
+                return
             self.failures = min(self.failures + 1, 6)
             delay = _retry_after(response)
             if delay is None:

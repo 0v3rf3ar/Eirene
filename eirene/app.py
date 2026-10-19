@@ -110,6 +110,7 @@ class Eirene(App):
         self.turn: asyncio.Task | None = None
         self.command: asyncio.Task | None = None
         self.asides: set[asyncio.Task] = set()
+        self._aside_task: asyncio.Task | None = None
         self._text_future: asyncio.Future[str | None] | None = None
         self._new_session = not resume
         self._banner: str | None = None
@@ -1240,9 +1241,12 @@ class Eirene(App):
 
     def start_aside(self, question: str) -> None:
         """Ask in a popup, without touching the session."""
+        if self._aside_task is not None and not self._aside_task.done():
+            self._aside_task.cancel()
         panel = self.aside
         panel.ask(question)
         task = asyncio.create_task(self._aside(question))
+        self._aside_task = task
         self.asides.add(task)
         task.add_done_callback(self.asides.discard)
 
@@ -1250,18 +1254,24 @@ class Eirene(App):
         panel = self.aside
         try:
             async for chunk in self.agent.aside(question):
+                if asyncio.current_task() is not self._aside_task:
+                    return
                 panel.feed(chunk)
                 panel.refresh_body()
         except asyncio.CancelledError:
-            panel.finish("stopped", failed=True)
+            if asyncio.current_task() is self._aside_task:
+                panel.finish("stopped", failed=True)
             raise
         except (ProviderError, EireneError) as exc:
-            panel.finish(exc.user_message(), failed=True)
+            if asyncio.current_task() is self._aside_task:
+                panel.finish(exc.user_message(), failed=True)
             return
         except Exception as exc:  # noqa: BLE001
-            panel.finish(f"btw failed: {exc}", failed=True)
+            if asyncio.current_task() is self._aside_task:
+                panel.finish(f"btw failed: {exc}", failed=True)
             return
-        panel.finish(panel.answer.strip() or "(no answer)")
+        if asyncio.current_task() is self._aside_task:
+            panel.finish(panel.answer.strip() or "(no answer)")
 
     # teardown
 

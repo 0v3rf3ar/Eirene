@@ -22,7 +22,7 @@ approvals, cancellation, and errors. Live checks are listed separately.
 | Claude Code (`claude-code`) | [CLI reference](https://code.claude.com/docs/en/cli-reference) | Fake-CLI tests cover its integration. Manual mode now uses the older-compatible `default` spelling. Executable absent locally; no live check. |
 | Gemini (`gemini`) | [Thought signatures](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures), [Models](https://ai.google.dev/api/models) | Live catalog and signed tool round trip passed. Fixed completion/truncation handling and model pagination; signed parts survive session resume/export/import. |
 | Groq (`groq`) | [OpenAI compatibility](https://console.groq.com/docs/openai), [API](https://console.groq.com/docs/api-reference) | Mock token-limit, streaming, tool, usage, and authorization coverage. No live API credential. |
-| DeepSeek (`deepseek`) | [Thinking mode](https://api-docs.deepseek.com/guides/thinking_mode/) | Fixed reasoning-content replay for tool loops and later turns. Mock coverage; no live API credential. |
+| DeepSeek (`deepseek`) | [Thinking mode](https://api-docs.deepseek.com/guides/thinking_mode/), [detailed audit](deepseek.md) | Dedicated capability/thinking adapter, background observation conversion and interruption handling. Both models, tool round trips, Flash vision and saved history passed live checks. |
 | Kimi (`kimi`) | [Thinking models](https://platform.kimi.ai/docs/guide/use-thinking-models) | Fixed reasoning-content replay for tool loops and later turns. Mock coverage; no live API credential. |
 | Ollama cloud (`ollama`) | [Chat](https://docs.ollama.com/api/chat), [Tools](https://docs.ollama.com/capabilities/tool-calling) | Fixed thinking history and image forwarding. Mock NDJSON/tool/usage/error coverage. No live hosted credential. |
 | Local Ollama (`ollama-local`) | [Thinking](https://docs.ollama.com/capabilities/thinking), [Vision](https://docs.ollama.com/capabilities/vision) | Same wire fixes, plus existing local context/profile checks. Live model discovery failed; local inference remains unverified. |
@@ -47,11 +47,19 @@ approvals, cancellation, and errors. Live checks are listed separately.
   OpenAI and Gemini responses do not release tool calls.
 - Shared SSE parsing handles multi-line event data. Gemini and Anthropic model
   discovery follow their next-page tokens.
-- Host-generated calls such as automatic background `poll_process` events, and
-  imported tool history without original Gemini parts, use Google's documented
-  client-call signature sentinel. Real Gemini parts are returned unchanged,
-  including unsigned secondary calls in parallel responses. This covers the
-  background-command failure observed in session `a7995d56`.
+- All API adapters now share runtime-context conversion. Automatic background
+  `poll_process` pairs, recovery guidance and compaction handoffs are sent as
+  labeled context rather than model-generated assistant activity. This covers
+  resumed legacy logs as well as new explicitly tagged host events, without
+  inventing reasoning or signatures. Original model metadata remains unchanged.
+  Gemini's client-call sentinel remains available for imported genuine calls
+  lacking Gemini parts; signed and unsigned original parallel parts stay intact.
+- Process completion is acknowledged only after a terminal poll result is saved,
+  suppressing duplicate automatic reports without losing results that arrive
+  after a still-running poll. Side conversations snapshot complete tool groups
+  and omit pending groups instead of sending orphan results to the provider.
+- Text-only endpoints receive prior tools as context observations when switching
+  providers. Codex and Claude CLI handoffs retain background and tool evidence.
 - Ollama forwards attached images as base64 `images` entries.
 - Context estimates include preserved provider reasoning and signed blocks.
   An output reserve larger than a small model's context window no longer
@@ -86,6 +94,23 @@ Regression checks are in `tests/test_provider_audit.py` and the existing provide
 CLI, ChatGPT authentication, session, and agent suites. Live tests used synthetic
 status data; they did not ask models to modify the project. Credentials and
 response signatures are not included in this report.
+
+`tests/test_host_history.py` exercises all 13 API connections through active
+history, resume, JSON transfer and compaction, with successful and failed
+background results. It also covers both native CLI handoffs, pending side
+requests, metadata preservation and process-notification races. The matrix uses
+mock transports; separate live checks apply only to available accounts.
+
+The shared runtime-context path was also verified live with DeepSeek, Gemini,
+Groq and ChatGPT plan: each accepted its original reasoning/signatures, a real
+echo-tool round trip, an automatic background result and runtime guidance.
+Accounts for the other services were unavailable for this live check.
+
+After the shared-context changes, the full suite recorded 2059 passes, 17 skips
+and one UI scrolling failure (`test_streaming_reattaches_after_reader_returns_to_bottom`).
+That check passed on isolated rerun. All 352 final affected tests passed, along
+with lint, whitespace checks, frozen startup/UI smoke checks, and live frozen
+executable command execution and session resume in a temporary workspace.
 
 Model catalogs are not entitlement checks. Bundled lists remain fallbacks, and
 an account can reject an otherwise valid model ID. Tool and image support vary

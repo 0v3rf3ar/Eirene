@@ -434,6 +434,16 @@ def pending(cwd: Path, owner: str = "") -> list[ManagedProcess]:
     ]
 
 
+def acknowledge(process_id: str, owner: str, result: str) -> ManagedProcess | None:
+    """Suppress an automatic completion only after its tool result was saved."""
+    item = _processes.get(process_id.strip())
+    if (item is not None and item.owner == owner and not item.running and not item.notified
+            and result.startswith(f"{item.id}: exited ")):
+        item.notified = True
+        return item
+    return None
+
+
 def _get(process_id):
     item = _processes.get(process_id.strip())
     if item is None:

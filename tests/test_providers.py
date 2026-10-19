@@ -129,6 +129,35 @@ async def test_openai_reasoning_delta():
     assert any(isinstance(e, base.ThinkingDelta) and e.text == "hmm" for e in events)
 
 
+@pytest.mark.parametrize("name,url,model", [
+    ("deepseek", "https://mock.invalid/v1", "model"),
+    ("openai", "https://api.deepseek.com/v1", "model"),
+    ("custom-openai", "https://proxy.invalid/v1", "deepseek-flash"),
+    ("omniroute", "https://proxy.invalid/v1", "deepseek/deepseek-v4-pro"),
+])
+async def test_deepseek_fills_missing_reasoning_without_changing_history(name, url, model):
+    history = [
+        Message.user("Continue"),
+        {"role": "assistant", "content": "Earlier reply", "reasoning_content": "Original reasoning"},
+        {"role": "assistant", "content": "Review the current objective and tool results.", "host_generated": True},
+        {"role": "assistant", "content": "Imported reply", "reasoning_content": None},
+        *HISTORY[1:3],
+    ]
+    original = json.dumps(history)
+    recorder = install(Recorder(sse({"choices": [{"delta": {"content": "Done"}, "finish_reason": "stop"}]})))
+    provider = OpenAICompatible("key", url, name=name)
+    _ = [event async for event in provider.stream(history, model, tools=TOOLS)]
+    assistants = [m for m in recorder.payload["messages"] if m["role"] == "assistant"]
+    assert [m["reasoning_content"] for m in assistants] == ["Original reasoning", "", ""]
+    assert json.dumps(history) == original
+
+
+async def test_openai_does_not_add_deepseek_reasoning_fields():
+    recorder = install(Recorder(OPENAI_STREAM))
+    await collect(OpenAICompatible("key", "https://api.openai.com/v1"))
+    assert all("reasoning_content" not in m for m in recorder.payload["messages"])
+
+
 async def test_openai_tools_omitted_when_unsupported():
     recorder = install(Recorder(OPENAI_STREAM))
     provider = OpenAICompatible("k", "https://api.perplexity.ai", supports_tools=False)

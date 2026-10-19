@@ -185,8 +185,11 @@ async def _choose_model(app, provider, key: str) -> str:
         raise CommandError("no models available for that provider")
     saved = app.config.provider_config(key).get("model")
     options = [(name, name, "saved" if name == saved else "") for name in names]
-    return await app.ask_choice(f"model for {providers.spec(key).label}", options,
-                                selected=str(saved or "")) or ""
+    chosen = await app.ask_choice(f"model for {providers.spec(key).label}", options,
+                                  selected=str(saved or "")) or ""
+    if chosen and key == "deepseek" and not await _choose_reasoning(app, provider, key, chosen):
+        return ""
+    return chosen
 
 
 def _open_browser(url: str) -> bool:

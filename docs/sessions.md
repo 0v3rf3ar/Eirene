@@ -132,6 +132,12 @@ and the model's current context can differ. Pending tool calls are repaired with
 an unknown-outcome result; they are not executed merely by replaying the log.
 Inspect current state before requesting a repeated action.
 
+New host-generated assistant records carry `host_generated: true`. The marker
+survives resume and JSON import/export. API adapters send runtime controls and
+automatic process results as labeled context without synthesizing model
+reasoning, signed blocks or tool calls. Existing background records are recognized
+on the wire; their raw logs and tool artifacts remain unchanged.
+
 ## Search, export, and import details
 
 Picker listing uses newest file modification time first, with a default recent

@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .history import provider_history
+
 from ..core.errors import ProviderError
 from .base import (Done, Provider, TextDelta, ThinkingDelta, ToolCall, Usage,
                    parse_json, raise_for_status, sse_lines, wrap_transport_error)
@@ -196,7 +198,7 @@ def to_gemini_contents(messages: list[dict]) -> list[dict]:
     """Convert internal history to Gemini contents."""
     names: dict[str, str] = {}
     out: list[dict] = []
-    for message in messages:
+    for message in provider_history(messages):
         role = message.get("role")
         if role in ("user", "system"):
             parts = [{"text": message.get("content", "")}]

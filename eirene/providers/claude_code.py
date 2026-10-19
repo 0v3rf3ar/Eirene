@@ -436,16 +436,5 @@ def _last_user_text(messages: list[dict]) -> str:
 
 
 def _prior_history(messages: list[dict], limit: int = 24_000) -> str:
-    rows = []
-    seen_latest = False
-    for message in reversed(messages):
-        role = str(message.get("role") or "")
-        if role == "user" and not seen_latest:
-            seen_latest = True
-            continue
-        if role not in ("user", "assistant"):
-            continue
-        content = str(message.get("content") or "").strip()
-        if content:
-            rows.append(f"{role}: {content}")
-    return "\n\n".join(reversed(rows))[-limit:]
+    from .history import prior_history
+    return prior_history(messages, limit)

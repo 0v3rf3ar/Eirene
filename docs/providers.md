@@ -81,6 +81,9 @@ Vision also depends on the selected model and endpoint. Ask Eirene to inspect a
 local screenshot only when that connection supports images. A compatible API
 protocol alone does not guarantee tools, images, or every model parameter.
 
+For DeepSeek model limits, thinking choices, image support, compatibility fixes,
+and verification scope, see the [DeepSeek integration audit](deepseek.md).
+
 ## Local Ollama
 
 Start Ollama and download a model using your normal Ollama setup. Eirene's local

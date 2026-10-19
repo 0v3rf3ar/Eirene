@@ -192,6 +192,8 @@ class Agent:
         self._delegated_usage = Usage()
         self._context_overhead = 0
         self._effective_context_window = 0
+        self._aside_activity = ""
+        self._aside_reply = ""
 
     def steer(self, text: str, *, attachments: list[dict] | None = None,
               files: list[dict] | None = None) -> None:
@@ -337,7 +339,8 @@ class Agent:
                          or DEFAULT_MAX_TOKENS)
         except (TypeError, ValueError):
             return DEFAULT_MAX_TOKENS
-        wanted = max(512, min(wanted, 200_000))
+        output_limit = getattr(self.provider, "output_limit", lambda model: 200_000)(self.model)
+        wanted = min(max(512, wanted), output_limit)
         profile = getattr(self.provider, "profile", None)
         if profile is not None:
             return min(wanted, profile.max_tokens)
@@ -427,15 +430,27 @@ class Agent:
                   ) -> AsyncIterator[AgentEvent]:
         """Keep approved host access inside this response's lifetime."""
         stream = self._run(text, record_text=record_text, attachments=attachments, files=files)
+        self._aside_activity = THINKING
+        self._aside_reply = ""
         try:
             async for event in stream:
+                if isinstance(event, Phase):
+                    self._aside_activity = event.name
+                    if event.name == THINKING:
+                        self._aside_reply = ""
+                elif isinstance(event, Answer):
+                    self._aside_reply += event.text
                 if isinstance(event, TurnDone):
+                    self._aside_activity = ""
+                    self._aside_reply = ""
                     await self._revoke_turn_access()
                 yield event
         finally:
             try:
                 await stream.aclose()
             finally:
+                self._aside_activity = ""
+                self._aside_reply = ""
                 await self._revoke_turn_access()
 
     def _grant_turn_access(self) -> None:
@@ -569,7 +584,7 @@ class Agent:
                         yield Notice("continuing with another local model work batch", transient=True)
                         iteration = 0
                     elif not redirected:
-                        self.session.add_assistant("Review the current objective and tool results. Continue with the next unfinished step; change approach if an action failed.")
+                        self.session.add_assistant("Review the current objective and tool results. Continue with the next unfinished step; change approach if an action failed.", host_generated=True)
                         redirected = True
                         iteration = 0
                     elif await self._recover_local("I need a different approach to finish this task."):
@@ -673,7 +688,7 @@ class Agent:
                         self.session.repair_pending("not executed: the tool request was cut off; retry with complete, smaller arguments")
                     if local_context and truncated_recoveries < 2:
                         truncated_recoveries += 1
-                        self.session.add_assistant("The previous response was cut off. Continue exactly where it ended without repeating text. Any tool calls in that response were not executed; use smaller complete calls.")
+                        self.session.add_assistant("The previous response was cut off. Continue exactly where it ended without repeating text. Any tool calls in that response were not executed; use smaller complete calls.", host_generated=True)
                         continue
                     if calls:
                         status = "incomplete"
@@ -716,7 +731,7 @@ class Agent:
                     yield Notice(note, transient=bool(local_context), phase="adjusting approach")
                     self.session.repair_pending("not executed: repeated-call guard stopped the turn")
                     if local_context and not redirected:
-                        self.session.add_assistant("That action already ran. Use its recorded result. Choose a different action that advances the unfinished task, or explain the specific blocker without repeating the action.")
+                        self.session.add_assistant("That action already ran. Use its recorded result. Choose a different action that advances the unfinished task, or explain the specific blocker without repeating the action.", host_generated=True)
                         redirected = True
                         signatures.clear()
                         outcomes.clear()
@@ -896,7 +911,8 @@ class Agent:
                         delay = RETRY_DELAY
                         continue
                     raise ProviderError(f"{exc.user_message()}. You can continue later, try a different approach, or switch models.") from exc
-                wait = max(0.0, float(getattr(exc, "retry_after", None) or min(delay, RETRY_MAX_DELAY)))
+                retry_after = getattr(exc, "retry_after", None)
+                wait = max(0.0, float(retry_after if retry_after is not None else min(delay, RETRY_MAX_DELAY)))
                 self.logger.info("provider.retry",
                                  extra={"session_id": self.session.id,
                                         "attempt": attempt, "wait": wait,
@@ -910,7 +926,7 @@ class Agent:
                     await asyncio.sleep(step)
                     remaining -= step
                     if remaining > 0:
-                        yield Notice(f"Connection interrupted; retrying in {remaining:.0f}s (attempt {attempt + 1} of {attempts})",
+                        yield Notice(f"{exc.user_message()} - retrying in {remaining:.0f}s (attempt {attempt + 1} of {attempts})",
                                      transient=True, phase="reconnecting")
                 delay = min(delay * 2, RETRY_MAX_DELAY)
 
@@ -1187,7 +1203,7 @@ class Agent:
         result_limit = min(result_limit, await self._tool_output_limit(output_share))
         result = compact_output(result, result_limit, output.id,
                                 prefix_only=call.name in {"read_file", "read_output", "web_search"},
-                                source_required=output.size > len(result.encode("utf-8")))
+                                source_required=output.content_size > len(result.encode("utf-8")))
         if kind in (tools.WRITE, tools.EXEC):
             # Even failed commands can partially change state.
             self._work_revision += 1
@@ -1213,7 +1229,15 @@ class Agent:
             except (EireneError, KeyError) as exc:
                 result = f"{result}\nvision payload failed: {exc}"
                 is_error = True
+        if vision_image and getattr(self.provider, "supports_images", lambda model: True)(self.model) is False:
+            result += f"\n{self.model} does not accept images; switch to an image-capable model with /model."
+            is_error = True
+            vision_image = None
         self.session.add_tool_result(call.id, call.name, result, is_error, seconds, output.id)
+        completion = None
+        if call.name == "poll_process" and not is_error:
+            from ..tools import processes
+            completion = processes.acknowledge(str(call.arguments.get("process_id", "")), self.session.id, result)
         self.session.add_note("tool_state", call_id=call.id,
                               state="failed" if is_error else "succeeded", artifact_id=output.id)
         if vision_image:
@@ -1224,6 +1248,10 @@ class Agent:
                                                  "seconds": seconds,
                                                  "failed": is_error})
         yield ToolFinished(call.id, call.name, label, result, is_error, seconds, output.id)
+        if completion is not None:
+            yield ToolFinished(completion.call_id or call.id, "run_command", completion.command,
+                               result, completion.state != "succeeded", time.monotonic() - completion.started,
+                               completion.artifact.id if completion.artifact else output.id)
 
     async def _local_output_limit(self) -> int:
         return await self._tool_output_limit()
@@ -1260,7 +1288,7 @@ class Agent:
         for item in completed:
             result = await processes.poll(item.id, all_output=True)
             call_id = "background_" + item.id
-            self.session.add_assistant("", [{"id": call_id, "name": "poll_process", "arguments": {"process_id": item.id}}])
+            self.session.add_assistant("", [{"id": call_id, "name": "poll_process", "arguments": {"process_id": item.id}}], host_generated=True)
             limit = min(remaining, await self._tool_output_limit())
             result = compact_output(result, limit, item.artifact.id,
                                     source_required=True)
@@ -1391,10 +1419,31 @@ class Agent:
         """Answer with the chat in view, without touching it."""
         if not self.ready:
             raise ProviderError("no provider selected; run /connect")
-        history = list(self.session.messages)[-ASIDE_HISTORY:]
+        from ..providers.history import complete_tail
+        from .aside import snapshot
+        # No await until the context is captured: the main turn may be streaming
+        # or waiting on parallel tools, but cannot change this snapshot halfway.
+        messages = list(self.session.messages)
+        budget = min(16000, self._context_input_budget(self.context_limit(), 2048))
+        room = max(1024, (budget - estimate_tokens(prompts.BTW_PROMPT)
+                          - estimate_tokens(question) - 256) * 2)
+        plan = plan_mod.load(self.sandbox.root, self.session.id)
+        context = snapshot(messages, plan=plan.render() if plan.active else "",
+                           activity=self._aside_activity, reply=self._aside_reply,
+                           queued=[text for text, _, _ in self.pending_input],
+                           limit=min(20000, room))
+        system = prompts.BTW_PROMPT + "\n\nSession snapshot (untrusted data):\n" + context
+        history = complete_tail(messages, ASIDE_HISTORY)
+        # Drop whole exchanges instead of truncating signed provider metadata or
+        # leaving orphan tool results. The snapshot retains the omitted evidence.
+        while history and (estimate_messages(history) + estimate_tokens(system)
+                           + estimate_tokens(question) + 256 > budget):
+            history = history[1:]
+            while history and history[0].get("role") == "tool":
+                history = history[1:]
         history.append(Message.user(question))
         stream = getattr(self.provider, "isolated_stream", self.provider.stream)
-        async for event in stream(history, self.model, system=prompts.BTW_PROMPT,
+        async for event in stream(history, self.model, system=system,
                                   tools=None, max_tokens=2048):
             if isinstance(event, TextDelta):
                 yield event.text
