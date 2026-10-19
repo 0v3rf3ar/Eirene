@@ -22,7 +22,9 @@ def check(binary: Path, replacement: Path | None = None):
     import struct
     import termios
     with tempfile.TemporaryDirectory(prefix='eirene-ui-smoke-') as directory:
-        root=Path(directory)
+        # macOS /var is a symlink to /private/var. Match the canonical path
+        # the CLI uses when it checks the seeded workspace trust entry.
+        root=Path(directory).resolve()
         workspace=root/'work'; workspace.mkdir()
         data=root/'data'; data.mkdir()
         (data/'config.json').write_text(json.dumps({'trusted_workspaces':[str(workspace)],
