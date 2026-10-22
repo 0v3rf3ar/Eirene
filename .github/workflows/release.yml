@@ -63,6 +63,10 @@ jobs:
           else
             gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "Eirene $RELEASE_TAG"
           fi
+          notes="docs/releases/${RELEASE_TAG#v}.md"
+          if [[ -f "$notes" ]]; then
+            gh release edit "$RELEASE_TAG" --notes-file "$notes"
+          fi
           gh release upload "$RELEASE_TAG" release/*.tar.gz release/*.zip release/SHA256SUMS --clobber
           if [[ "$IS_PRERELEASE" == true ]]; then
             gh release edit "$RELEASE_TAG" --prerelease --draft=false --latest=false
