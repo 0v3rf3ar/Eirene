@@ -59,7 +59,7 @@ def test_rows_carry_line_numbers(workdir):
 def test_the_header_names_the_file(workdir):
     change = make(workdir)
     out = render(change)
-    assert "● Update(" in out and "notes.txt)" in out
+    assert "• Update(" in out and "notes.txt)" in out
     assert "▤" not in out
     assert "Added 2 lines, removed 1 line" in out
 
@@ -71,7 +71,7 @@ def test_the_header_names_the_file(workdir):
 def test_change_headers_contain_only_the_path_inside_parentheses(workdir, name):
     change = make(workdir, name=name)
     header = render(change).splitlines()[0]
-    assert header == f"● Update({name})"
+    assert header == f"• Update({name})"
 
 
 def test_added_and_removed_lines_are_marked(workdir):
@@ -123,7 +123,7 @@ def test_a_new_file_is_all_additions(workdir):
     assert change.action == "Create"
     assert change.added == 2
     assert change.removed == 0
-    assert "● Create(" in render(change) and "fresh.txt)" in render(change)
+    assert "• Create(" in render(change) and "fresh.txt)" in render(change)
 
 
 def test_a_huge_diff_is_trimmed(workdir):
@@ -147,7 +147,7 @@ def test_a_loose_preview_still_renders():
 def test_an_empty_diff_is_harmless():
     change = diff.parse("thing.py", "", "Update")
     assert change.rows == []
-    assert "● Update(" in render(change) and "thing.py)" in render(change)
+    assert "• Update(" in render(change) and "thing.py)" in render(change)
 
 
 def test_an_edit_preview_is_a_real_diff(workdir):
@@ -212,9 +212,9 @@ def test_the_theme_does_not_paint_its_own_background(workdir, name, background):
 def test_the_header_matches_the_layout(workdir):
     change = make(workdir)
     lines = render(change).splitlines()
-    assert lines[0].startswith("● Update(")
+    assert lines[0].startswith("• Update(")
     assert lines[0].endswith("notes.txt)")
-    assert lines[1].startswith("└ Added 2 lines, removed 1 line")
+    assert lines[1].startswith("  └ Added 2 lines, removed 1 line")
 
 
 def test_plain_text_lines_up_with_the_gutter(workdir):
@@ -240,7 +240,7 @@ def test_the_header_survives_gutter_stripping(workdir):
     change = make(workdir)
     view = diff.ChangeView(change)
     kept = diff.strip_gutter(view.plain(60), view.gutter())
-    assert kept.splitlines()[0].startswith("● Update")
+    assert kept.splitlines()[0].startswith("• Update")
 
 
 def test_the_chat_and_the_diffs_share_one_palette():

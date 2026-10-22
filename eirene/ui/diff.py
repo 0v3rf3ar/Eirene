@@ -231,7 +231,7 @@ class ChangeView:
     def _summary(self) -> Text:
         change = self.change
         summary = Text()
-        summary.append(f"{art.icon('corner')} ", style="dim")
+        summary.append(f"  {art.icon('corner')} ", style="dim")
         summary.append("Added ", style="dim")
         summary.append(str(change.added), style="bold")
         summary.append(" line" if change.added == 1 else " lines", style="dim")

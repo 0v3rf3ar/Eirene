@@ -12,7 +12,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 from .. import __version__
 from ..core.errors import AuthError, ConnectionFailed, ProviderError
 from .base import ConnectionStatus, transient_tls_error
-from ..core.subprocesses import executable_argv
+from ..core.subprocesses import executable_argv, external_environment
 from ..tools import activity
 from .base import (Done, Event, PlanUpdate, Provider, ProviderTool, TextDelta,
                    ThinkingDelta, Usage)
@@ -423,7 +423,7 @@ class _AppServer:
             self.process = await asyncio.create_subprocess_exec(
                 *executable_argv(executable, "app-server", "--listen", "stdio://"),
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE)
+                stderr=asyncio.subprocess.PIPE, env=external_environment())
         except OSError as exc:
             raise ConnectionFailed("Codex app-server", str(exc)) from exc
         self._reader_task = asyncio.create_task(self._read())

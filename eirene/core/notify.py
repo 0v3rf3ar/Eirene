@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .subprocesses import external_environment
+
 import os
 import shutil
 import subprocess
@@ -130,7 +132,7 @@ def send(title: str, body: str = "") -> bool:
         return False
     try:
         subprocess.Popen(_command(title, body), stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+                         stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, env=external_environment())
     except (OSError, ValueError):
         return False
     return True

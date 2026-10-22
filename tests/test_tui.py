@@ -776,17 +776,24 @@ async def test_command_card_has_running_success_and_error_states(workdir):
         await app.push(card)
         assert "• Running(pytest -q)" in content(card)
         assert card._Static__content.get_style_at_offset(app.console, 0).color.name == palette.YELLOW
+        assert not any(span.style == "underline" for span in card._Static__content.spans)
+
+        card.expanded = True
+        card.flush()
+        assert "• Running(pytest -q)" in content(card)
+        assert not any(span.style == "underline" for span in card._Static__content.spans)
+        card.expanded = False
 
         card.finish("Still running as managed process p1", False, 1.0)
         card.flush()
         assert "• Working(pytest -q)" in content(card)
         assert card._Static__content.get_style_at_offset(app.console, 0).color.name == palette.YELLOW
 
-        card.finish("12 passed", False, 2.0)
+        card.finish("12 passed\nsecond line", False, 2.0)
         card.flush()
         assert "• Ran(pytest -q)" in content(card)
         assert card._Static__content.get_style_at_offset(app.console, 0).color.name == palette.GREEN
-        assert "└ 12 passed" in content(card)
+        assert content(card).splitlines()[1:] == ["  └ 12 passed", "    second line"]
 
         failed = CommandBlock("run_command", "exit 3")
         await app.push(failed)
@@ -4120,5 +4127,94 @@ async def test_copy_notice_restarts_deadline_and_follows_resize(workdir):
         assert notice.region.bottom == 30
         await pilot.pause(1)
         assert not notice.display
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize('automatic', [True, False])
+@pytest.mark.parametrize('exit_code', [0, 7])
+async def test_resume_background_completion_updates_original_card(workdir, automatic, exit_code):
+    from eirene.core.session import Session
+    from eirene.ui import palette
+
+    saved = Session.create(workdir)
+    saved.add_user('run command')
+    saved.add_assistant('', [{'id': 'command', 'name': 'run_command',
+                             'arguments': {'command': 'example'}, 'label': 'example'}])
+    saved.add_tool_result('command', 'run_command',
+                          'Still running as managed process process1. It has not finished.')
+    if not automatic:
+        saved.add_assistant('', [{'id': 'early', 'name': 'poll_process',
+                                 'arguments': {'process_id': 'process1'}}])
+        saved.add_tool_result('early', 'poll_process', 'process1: running for 0.1s')
+    poll_id = 'background_process1' if automatic else 'poll'
+    saved.add_assistant('', [{'id': poll_id, 'name': 'poll_process',
+                             'arguments': {'process_id': 'process1'}}], host_generated=automatic)
+    state = 'succeeded' if exit_code == 0 else 'failed'
+    saved.add_tool_result(poll_id, 'poll_process',
+                          f'process1: exited {exit_code}; {state} for 1.0s\nfinished output',
+                          is_error=automatic and exit_code != 0)
+    saved.close()
+    app, pilot, context = await start(workdir, resume=saved.id)
+    try:
+        cards = blocks(app, ToolBlock)
+        assert len(cards) == 1
+        card = cards[0]
+        assert 'Ran(example)' in content(card)
+        assert 'finished output' in content(card)
+        assert card.is_error == (exit_code != 0)
+        colour = palette.GREEN if exit_code == 0 else palette.RED
+        assert card._Static__content.get_style_at_offset(app.console, 0).color.name == colour
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_read_output_is_invisible_live_and_after_resume(workdir):
+    provider = Script(
+        [ToolCall('page', 'read_output', {'artifact_id': 'missing', 'limit': 1024}), Done('tool_use')],
+        [TextDelta('Finished reading.'), Done('stop')])
+    app, pilot, context = await start(workdir, provider)
+    try:
+        await type_line(pilot, 'read the saved output')
+        for _ in range(100):
+            await pilot.pause()
+            if not app._busy:
+                break
+        assert not app._busy
+        assert not blocks(app, ToolBlock)
+        assert any('Finished reading.' in content(b) for b in blocks(app, AnswerBlock))
+        assert any(m.get('name') == 'read_output' for m in app.session.messages if m.get('role') == 'tool')
+        await app.replay_transcript()
+        assert not blocks(app, ToolBlock)
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize('exit_code', [0, 7])
+async def test_live_background_completion_updates_original_card(workdir, python_command, exit_code):
+    from eirene.ui import palette
+
+    command = python_command(f'import time; time.sleep(.1); print("finished output"); raise SystemExit({exit_code})')
+    provider = Script(
+        [ToolCall('command', 'run_command', {'command': command}), Done('tool_use')],
+        [TextDelta('Waiting.'), Done('stop')],
+        [TextDelta('Finished.'), Done('stop')])
+    app, pilot, context = await start(workdir, provider)
+    try:
+        app.agent.mode = Mode.AUTO
+        app.config.set("execution_isolation", "none")
+        await type_line(pilot, 'run command')
+        for _ in range(100):
+            await pilot.pause()
+            if not app._busy:
+                break
+        assert not app._busy
+        cards = blocks(app, CommandBlock)
+        assert len(cards) == 1
+        card = cards[0]
+        assert card.finished and card.is_error == (exit_code != 0), card.result
+        assert 'Working(' not in content(card)
+        colour = palette.GREEN if exit_code == 0 else palette.RED
+        assert card._Static__content.get_style_at_offset(app.console, 0).color.name == colour
     finally:
         await context.__aexit__(None, None, None)

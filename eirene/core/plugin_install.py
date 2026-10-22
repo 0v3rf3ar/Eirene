@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .subprocesses import external_environment
+
 import json
 import os
 from pathlib import Path
@@ -56,7 +58,8 @@ def install(source: str) -> tuple[str, int]:
         else:
             owner, name, subdirectory, ref = github_source(source_for(source))
             root = Path(temporary) / "repo"
-            environment = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+            environment = external_environment()
+            environment["GIT_TERMINAL_PROMPT"] = "0"
             try:
                 result = subprocess.run(
                     ["git", "-c", "core.hooksPath=", "clone", "--depth", "1",

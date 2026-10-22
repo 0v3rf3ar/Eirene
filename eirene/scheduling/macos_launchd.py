@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..core.subprocesses import external_environment
+
 import os
 import plistlib
 import subprocess
@@ -95,7 +97,7 @@ def plist_body(task: Task) -> dict:
 def _run(argv: list[str], check: bool = True) -> subprocess.CompletedProcess:
     try:
         result = subprocess.run(argv, capture_output=True, text=True, timeout=30,
-                                stdin=subprocess.DEVNULL)
+                                stdin=subprocess.DEVNULL, env=external_environment())
     except FileNotFoundError as exc:
         raise SchedulerError(f"{argv[0]} not found on this system") from exc
     except subprocess.TimeoutExpired as exc:

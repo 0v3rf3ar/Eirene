@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..core.subprocesses import external_environment
+
 import subprocess
 
 from ..core.errors import SchedulerError
@@ -65,7 +67,7 @@ def create_argv(task: Task) -> list[str]:
 def _run(argv: list[str], check: bool = True) -> subprocess.CompletedProcess:
     try:
         result = subprocess.run(argv, capture_output=True, text=True, timeout=60,
-                                stdin=subprocess.DEVNULL)
+                                stdin=subprocess.DEVNULL, env=external_environment())
     except FileNotFoundError as exc:
         raise SchedulerError("schtasks.exe not found") from exc
     except subprocess.TimeoutExpired as exc:

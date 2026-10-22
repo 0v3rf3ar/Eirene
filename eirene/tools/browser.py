@@ -23,7 +23,7 @@ except ImportError:  # pragma: no cover - dependency is installed in builds
     websockets = None
 
 from ..core.errors import ToolError
-from ..core.subprocesses import executable_argv
+from ..core.subprocesses import executable_argv, external_environment
 from .sandbox import Sandbox
 
 MAX_DOM = 120_000
@@ -150,7 +150,7 @@ async def interact(url: str, actions: list[dict], *, timeout: float = 30) -> str
         argv += ["--remote-debugging-port=0", "about:blank"]
         process = await asyncio.create_subprocess_exec(
             *executable_argv(argv[0], *argv[1:]), stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE)
+            stderr=asyncio.subprocess.PIPE, env=external_environment())
         try:
             endpoint = await _devtools_endpoint(Path(profile), process, timeout)
             async with websockets.connect(endpoint, open_timeout=timeout,
@@ -486,7 +486,7 @@ async def _run(argv: list[str], timeout: float) -> tuple[bytes, bytes, int]:
     try:
         process = await asyncio.create_subprocess_exec(
             *executable_argv(argv[0], *argv[1:]), stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE, **shell._spawn_kwargs())
+            stderr=asyncio.subprocess.PIPE, env=external_environment(), **shell._spawn_kwargs())
         stdout, stderr = shell._Capture(MAX_DOM), shell._Capture(8000)
 
         async def drain(stream, capture):

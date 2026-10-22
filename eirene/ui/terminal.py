@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..core.subprocesses import external_environment
+
 import base64
 import os
 import shutil
@@ -57,7 +59,7 @@ def copy_to_system(text: str) -> str:
     try:
         process = subprocess.run(command, input=text.encode("utf-8"),
                                  stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL, timeout=5)
+                                 stderr=subprocess.DEVNULL, timeout=5, env=external_environment())
     except (OSError, subprocess.SubprocessError):
         return ""
     return command[0] if process.returncode == 0 else ""

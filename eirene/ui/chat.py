@@ -569,7 +569,7 @@ class CommandBlock(ToolBlock):
             color, action = palette.YELLOW, "Working"
         else:
             color, action = palette.GREEN, "Ran"
-        marker = "*" if art.ACCESSIBLE else "•"
+        marker = art.icon("bullet")
         body.append(f"{marker} ", style=f"bold {color}")
         body.append(action, style="bold")
         body.append("(")
@@ -579,7 +579,7 @@ class CommandBlock(ToolBlock):
             limit = min(MAX_COMMAND_LABEL_CHARS, max(self.content_size.width - 32, 24))
             if len(label) > limit:
                 label = label[:limit - 1] + "…"
-        body.append(label or "(empty)", style="underline")
+        body.append(label or "(empty)")
         body.append(")")
         body.append("  ▾ collapse" if self.expanded else "  ▸ expand", style="dim")
         if self.finished and self.seconds >= 1:
@@ -589,7 +589,7 @@ class CommandBlock(ToolBlock):
             lines = lines[:2]
         for index, line in enumerate(lines):
             body.append("\n")
-            body.append(f"{art.icon('corner')} " if index == 0 else "  ", style="dim")
+            body.append(f"  {art.icon('corner')} " if index == 0 else "    ", style="dim")
             body.append(line, style="dim")
         self.update(body)
 

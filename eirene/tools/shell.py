@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..core.errors import ToolError
+from ..core.subprocesses import external_environment
 from . import activity
 
 IS_WINDOWS = os.name == "nt"
@@ -303,7 +304,7 @@ def _tokenize(segment: str) -> list[str]:
 
 
 def _child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
-    env = dict(os.environ)
+    env = external_environment()
     env.update(NONINTERACTIVE_ENV)
     env.pop("EIRENE_HOME", None)
     if extra:

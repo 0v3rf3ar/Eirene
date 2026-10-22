@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .subprocesses import external_environment
+
 import asyncio
 import hashlib
 import os
@@ -177,7 +179,7 @@ def _extract(archive: Path, destination: Path, windows: bool) -> None:
 
 def _smoke_test(binary: Path, version: str) -> None:
     result = subprocess.run([str(binary), "--version"], capture_output=True, timeout=30,
-                            text=True, encoding="utf-8", errors="replace")
+                            text=True, encoding="utf-8", errors="replace", env=external_environment())
     if result.returncode or result.stdout.strip() != f"eirene {version}":
         raise UpdateError("downloaded executable failed its version smoke test")
 
@@ -264,7 +266,7 @@ def _windows_install(pending: Path, target: Path) -> str:
         subprocess.Popen(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                           "-File", str(script)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, cwd=str(target.parent),
-                         creationflags=0x00000008 | 0x00000200)
+                         creationflags=0x00000008 | 0x00000200, env=external_environment())
     except OSError:
         script.unlink(missing_ok=True)
         raise

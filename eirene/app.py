@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import os
+import re
 import sys
 import textwrap
 import time
@@ -297,6 +298,8 @@ class Eirene(App):
         """Redraw a resumed conversation."""
         cards: dict[str, ToolBlock] = {}
         attachment_cards: dict[str, ToolBlock] = {}
+        process_cards: dict[str, ToolBlock] = {}
+        poll_processes: dict[str, str] = {}
         shown = 0
         history = self.session.transcript_messages or self.session.messages
         for message in history:
@@ -316,7 +319,11 @@ class Eirene(App):
                     block.flush()
                     shown += 1
                 for call in message.get("tool_calls") or []:
+                    if call.get("name") == "read_output":
+                        continue
                     if call.get("name") == "poll_process":
+                        poll_processes[str(call.get("id", ""))] = str(
+                            (call.get("arguments") or {}).get("process_id", ""))
                         continue
                     attachment_id = str(call.get("attachment_id") or
                         ((call.get("arguments") or {}).get("attachment_id")
@@ -343,10 +350,24 @@ class Eirene(App):
                         attachment_cards[attachment_id] = card
                     shown += 1
             elif role == "tool":
-                card = cards.get(str(message.get("tool_call_id", "")))
+                call_id = str(message.get("tool_call_id", ""))
+                card = cards.get(call_id)
+                process_id = poll_processes.get(call_id)
+                if process_id:
+                    # Polls are hidden, but their terminal results belong to the
+                    # original command, including host-generated completions.
+                    if not body.startswith(f"{process_id}: exited "):
+                        continue
+                    card = process_cards.get(process_id)
                 if card is not None:
+                    pending = re.match(r"Still running as managed process ([\w-]+)", body)
+                    if pending:
+                        process_cards[pending[1]] = card
                     card.artifact_id = str(message.get("artifact_id") or "")
-                    card.finish(body, bool(message.get("is_error")),
+                    failed = bool(message.get("is_error"))
+                    if process_id:
+                        failed = failed or not body.startswith(f"{process_id}: exited 0; succeeded")
+                    card.finish(body, failed,
                                 card.seconds + float(message.get("seconds") or 0.0))
                     card.flush()
         self.prompt.recall_from([m.get("content", "") for m in history
@@ -692,7 +713,7 @@ class Eirene(App):
                 options["files"] = files
             async for event in self.agent.run(text, record_text=record_text, **options):
                 if isinstance(event, (agent_mod.ToolStarted, agent_mod.ToolPreview,
-                                      agent_mod.ToolFinished)) and event.name == "poll_process":
+                                      agent_mod.ToolFinished)) and event.name in {"poll_process", "read_output"}:
                     continue
                 if isinstance(event, agent_mod.Answer):
                     if event.text:

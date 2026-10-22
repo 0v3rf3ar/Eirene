@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..core.subprocesses import external_environment
+
 import asyncio
 import subprocess
 import sys
@@ -224,7 +226,7 @@ def _open_browser(url: str) -> bool:
             try:
                 result = subprocess.run(command, stdin=subprocess.DEVNULL,
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                        timeout=10, check=False)
+                                        timeout=10, check=False, env=external_environment())
                 if result.returncode == 0:
                     return True
             except (OSError, subprocess.TimeoutExpired):

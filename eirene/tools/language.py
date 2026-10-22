@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import shlex
 import tempfile
-from ..core.subprocesses import executable_argv
+from ..core.subprocesses import executable_argv, external_environment
 from pathlib import Path
 
 from ..core.errors import ToolError
@@ -52,7 +52,7 @@ async def diagnostics(box: Sandbox, path: str, timeout: float = 30, *,
         raise ToolError(f"no installed diagnostic engine supports {suffix or 'this file'}")
     process = await asyncio.create_subprocess_exec(
         *executable_argv(command[0], *command[1:]), cwd=str(box.root), stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT)
+        stderr=asyncio.subprocess.STDOUT, env=external_environment())
     try:
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout)
     except asyncio.TimeoutError as exc:

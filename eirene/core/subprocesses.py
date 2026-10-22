@@ -4,9 +4,23 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 IS_WINDOWS = os.name == "nt"
+
+
+def external_environment() -> dict[str, str]:
+    """Restore the host loader path for programs outside the frozen bundle."""
+    env = dict(os.environ)
+    if getattr(sys, "frozen", False):
+        for name in ("LD_LIBRARY_PATH", "LIBPATH"):
+            original = env.get(name + "_ORIG")
+            if original is None:
+                env.pop(name, None)
+            else:
+                env[name] = original
+    return env
 
 
 def executable_argv(executable: str, *args: str) -> list[str]:

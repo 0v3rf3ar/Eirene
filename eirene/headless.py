@@ -197,6 +197,8 @@ async def _drive(text: str, cwd: Path, provider_key: str, model: str,
 
 def _emit(event, quiet: bool) -> bool:
     """Print an event; True when it is a failure."""
+    if isinstance(event, (agent_mod.ToolStarted, agent_mod.ToolFinished)) and event.name == "read_output":
+        return False
     if isinstance(event, agent_mod.Answer):
         sys.stdout.write(safe_text(event.text))
         sys.stdout.flush()

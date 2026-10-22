@@ -61,7 +61,7 @@ ICONS = {
     "plan": "☑", "skill": "⚙", "task": "⚑", "link": "↗",
     "dot": "\u00b7",
     "arrow": "\u2192",
-    "bullet": "\u25cf",
+    "bullet": "\u2022",
     "corner": "\u2514",
 }
 ASCII_ICONS = {

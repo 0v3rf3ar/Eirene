@@ -490,3 +490,14 @@ def test_task_json_retries_emit_only_final_attempt(workdir, connected, monkeypat
         assert result["errors"] == [] and result["output_tokens"] == 2
     finally:
         base.set_transport(None)
+
+
+@pytest.mark.parametrize('failed', [False, True])
+def test_read_output_events_are_silent(capsys, failed):
+    from eirene.core.agent import ToolFinished, ToolStarted
+    from eirene.headless import _emit
+
+    _emit(ToolStarted('page', 'read_output', 'internal artifact', 'read'), False)
+    _emit(ToolFinished('page', 'read_output', 'internal artifact', 'internal result', failed, 0), False)
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ''

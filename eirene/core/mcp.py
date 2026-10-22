@@ -7,7 +7,7 @@ import json
 import os
 import re
 import subprocess
-from .subprocesses import executable_argv
+from .subprocesses import executable_argv, external_environment
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,7 +55,7 @@ class MCPClient:
             if candidate != self.sandbox and self.sandbox not in candidate.parents:
                 raise ToolError(f"MCP server {self.name} cwd leaves the sandbox")
             cwd = candidate
-        env = dict(os.environ)
+        env = external_environment()
         configured_env = self.definition.get("env")
         if isinstance(configured_env, dict):
             env.update({str(k): str(v) for k, v in configured_env.items()})

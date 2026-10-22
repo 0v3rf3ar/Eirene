@@ -13,7 +13,7 @@ from typing import Any, AsyncIterator
 from ..core.errors import (AuthError, ConnectionFailed, EireneError,
                            ProviderError)
 from .base import ConnectionStatus
-from ..core.subprocesses import executable_argv
+from ..core.subprocesses import executable_argv, external_environment
 from ..tools import activity
 from .base import (Done, Event, PlanUpdate, Provider, ProviderTool, TextDelta,
                    ThinkingDelta, Usage)
@@ -70,7 +70,7 @@ class ClaudeCode(Provider):
         process = await asyncio.create_subprocess_exec(
             *executable_argv(self._executable(), "auth", "status", "--json"),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            cwd=str(self.root))
+            cwd=str(self.root), env=external_environment())
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), 20)
         except asyncio.TimeoutError as exc:
@@ -156,7 +156,7 @@ class ClaudeCode(Provider):
             self._process = await asyncio.create_subprocess_exec(
                 *executable_argv(self._executable(), *args), cwd=str(self.root),
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE)
+                stderr=asyncio.subprocess.PIPE, env=external_environment())
         except OSError as exc:
             if broker is not None:
                 await broker.close()
