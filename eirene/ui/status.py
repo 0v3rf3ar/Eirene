@@ -64,7 +64,6 @@ class StatusLine(Static):
         self.active = False
         self.phase = ""
         self.started = 0.0
-        self.thinking = 0.0
         self.input_tokens = 0
         self.output_tokens = 0
         self.verb = art.verb()
@@ -87,7 +86,6 @@ class StatusLine(Static):
         self._connection_wait = False
         self._active_tools.clear()
         self._writing_tools.clear()
-        self.thinking = 0.0
         self.input_tokens = 0
         self.output_tokens = 0
         self.phase = "thinking"
@@ -109,8 +107,6 @@ class StatusLine(Static):
         if phase in CONNECTION_PHASES:
             self.set_connection_wait()
             return
-        if phase not in {"thinking", "reasoning"} and not self.thinking and self.started:
-            self.thinking = time.monotonic() - self.started
         self.phase = " ".join(strip_escapes(phase).split())[:240]
         self.mark_activity()
 
@@ -192,9 +188,6 @@ class StatusLine(Static):
         if self.output_tokens:
             body.append(f" {art.icon('dot')} {art.icon('tokens')} "
                         f"{self.output_tokens} tokens", style="dim")
-        if self.thinking:
-            body.append(f" {art.icon('dot')} thought for {self.thinking:.0f}s",
-                        style="dim")
         body.append(")", style="dim")
         body.append("  esc to stop", style="dim")
         self.update(body)

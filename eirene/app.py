@@ -1016,8 +1016,6 @@ class Eirene(App):
         parts = [f"{event.seconds:.0f}s"]
         if event.usage.output_tokens:
             parts.append(f"{art.icon('tokens')} {event.usage.output_tokens} tokens")
-        if event.thinking_seconds >= 1:
-            parts.append(f"thought for {event.thinking_seconds:.0f}s")
         return " · ".join(parts)
 
     # actions

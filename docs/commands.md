@@ -92,6 +92,7 @@ eirene [options]
 | `-C DIR`, `--directory DIR` | Set the existing workspace directory; defaults to the current directory. |
 | `--resume` | Open the saved-session picker for that workspace. |
 | `--resume UUID` | Open a particular saved interactive session. |
+| `--continue` | Open the most recently updated session for this workspace without a picker. |
 | `-p TEXT`, `--prompt TEXT` | Run a single headless task. |
 | `--provider NAME` | Override the provider for a headless prompt. |
 | `--model NAME` | Override the model for a headless prompt. |

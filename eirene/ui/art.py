@@ -44,7 +44,7 @@ SMALL_BANNER = r"""
 TINY_BANNER = "e i r e n e"
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-SPINNERS = (SPINNER, "⡀⠄⠂⠁⠈⠐⠠⢀", "▁▂▃▄▅▆▇█▇▆▅▄▃▂")
+SPINNERS = (SPINNER,)
 ACCESSIBLE = False
 
 ICONS = {

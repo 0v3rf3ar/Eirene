@@ -30,12 +30,16 @@ use their existing permission settings.
 ```sh
 eirene -C /path/to/project --resume
 eirene -C /path/to/project --resume SESSION_ID
+eirene -C /path/to/project --continue
 ```
 
 The first command opens a picker for saved sessions associated with that
 workspace. The second opens a particular session. In a redirected, noninteractive
 terminal, `--resume` without an ID lists matching sessions instead of opening the
 interface. Use the actual saved identifier in place of `SESSION_ID`.
+
+`--continue` opens the most recently updated session for that workspace directly,
+without showing a picker or list. If none are saved, it reports that and exits.
 
 Every process starts with sandboxed permissions, including a resume. A previous
 process's full-access choice is not restored.

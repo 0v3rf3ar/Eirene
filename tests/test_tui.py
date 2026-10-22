@@ -3942,7 +3942,7 @@ async def test_picker_shortcuts_use_existing_commands(workdir, monkeypatch, key,
         await context.__aexit__(None, None, None)
 
 
-async def test_long_command_is_abbreviated_but_approval_shows_it_all(workdir):
+async def test_long_command_is_abbreviated_but_expansion_and_approval_show_it_all(workdir):
     app, pilot, context = await start(workdir, size=(100, 35))
     command = "python -c '" + "print(123);" * 100 + "'"
     try:
@@ -3952,7 +3952,12 @@ async def test_long_command_is_abbreviated_but_approval_shows_it_all(workdir):
         assert "…" in card.render().plain
         card.expanded = True
         card.flush()
+        assert f"Running({command})" in card.render().plain
+        assert "…" not in card.render().plain
+        card.expanded = False
+        card.flush()
         assert command not in card.render().plain
+        assert "…" in card.render().plain
         pending = asyncio.create_task(app._approve("run_command", command, command, "command"))
         await pilot.pause()
         assert command in app.permission.title

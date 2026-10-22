@@ -137,6 +137,61 @@ def test_resume_takes_an_optional_id():
     assert build_parser().parse_args(["--resume", "abc"]).resume == "abc"
 
 
+def test_continue_flag_is_exclusive_with_resume():
+    assert not build_parser().parse_args([]).continue_session
+    assert build_parser().parse_args(["--continue"]).continue_session
+    with pytest.raises(SystemExit) as caught:
+        build_parser().parse_args(["--continue", "--resume"])
+    assert caught.value.code == 2
+
+
+@pytest.mark.parametrize("terminal", [True, False])
+def test_continue_selects_most_recent_workspace_session_without_menu(
+        workdir, tmp_path, monkeypatch, capsys, terminal):
+    import os
+    from eirene import __main__ as cli
+    from eirene.core.session import Session
+
+    recent = Session.create(workdir)
+    recent.add_user("updated conversation")
+    recent.close()
+    older = Session.create(workdir)
+    older.add_user("older conversation")
+    older.close()
+    elsewhere = Session.create(tmp_path)
+    elsewhere.add_user("different workspace")
+    elsewhere.close()
+    for saved, stamp in [(older, 100), (recent, 200), (elsewhere, 300)]:
+        os.utime(saved.path, (stamp, stamp))
+
+    opened = []
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: terminal, raising=False)
+    monkeypatch.setattr(cli, "open_session",
+                        lambda box, resume: opened.append((box, resume)) or 17)
+    monkeypatch.setattr(cli, "pick_session",
+                        lambda box: pytest.fail("continue must never open the picker"))
+
+    result = main(["--continue", "-C", str(workdir)])
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    if terminal:
+        assert result == 17
+        assert opened == [(workdir.resolve(), recent.id)]
+    else:
+        assert result == 2
+        assert opened == []
+        assert "needs a terminal" in captured.err
+
+
+def test_continue_with_nothing_saved(workdir, monkeypatch, capsys):
+    from eirene import __main__ as cli
+
+    monkeypatch.setattr(cli, "pick_session",
+                        lambda box: pytest.fail("continue must never open the picker"))
+    assert main(["--continue", "-C", str(workdir)]) == 0
+    assert "no saved sessions" in capsys.readouterr().out
+
+
 def test_bare_resume_lists_this_directory(workdir, tmp_path, capsys):
     from eirene.core.session import Session
     other = tmp_path / "elsewhere"

@@ -164,14 +164,14 @@ def test_terminal_quota_and_server_retry_header():
     assert base._retry_after(httpx.Response(429, headers={"Retry-After": "Wed, 01 Jan 2031 00:00:00 GMT"})) > 0
 
 
-def test_three_stable_width_spinners_and_accessibility(monkeypatch):
+def test_standard_spinner_and_accessibility(monkeypatch):
     monkeypatch.setattr(art, "ACCESSIBLE", False)
-    assert len(art.SPINNERS) == 3
+    assert art.SPINNERS == (art.SPINNER,)
     for style, frames in enumerate(art.SPINNERS):
         assert len(set(frames)) > 3
         assert all(cell_len(art.spinner_frame(t, style)) == 1 for t in range(30))
     monkeypatch.setattr(art, "ACCESSIBLE", True)
-    assert all(art.spinner_frame(4, style) == "*" for style in range(3))
+    assert art.spinner_frame(4) == "*"
 
 
 def test_status_picks_style_once_per_turn(monkeypatch):

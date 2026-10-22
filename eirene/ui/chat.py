@@ -570,13 +570,15 @@ class CommandBlock(ToolBlock):
         else:
             color, action = palette.GREEN, "Ran"
         marker = "*" if art.ACCESSIBLE else "•"
-        body.append(f"{marker} ", style=color)
+        body.append(f"{marker} ", style=f"bold {color}")
         body.append(action, style="bold")
         body.append("(")
-        label = " ".join(self.label.split())
-        limit = min(MAX_COMMAND_LABEL_CHARS, max(self.content_size.width - 32, 24))
-        if len(label) > limit:
-            label = label[:limit - 1] + "…"
+        label = self.label
+        if not self.expanded:
+            label = " ".join(label.split())
+            limit = min(MAX_COMMAND_LABEL_CHARS, max(self.content_size.width - 32, 24))
+            if len(label) > limit:
+                label = label[:limit - 1] + "…"
         body.append(label or "(empty)", style="underline")
         body.append(")")
         body.append("  ▾ collapse" if self.expanded else "  ▸ expand", style="dim")

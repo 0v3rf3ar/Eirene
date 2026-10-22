@@ -21,8 +21,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="run a scheduled task by id (used by the scheduler)")
     parser.add_argument("-C", "--directory", metavar="DIR", default=".",
                         help="sandbox directory (default: the current one)")
-    parser.add_argument("--resume", metavar="UUID", nargs="?", const="", default=None,
+    sessions = parser.add_mutually_exclusive_group()
+    sessions.add_argument("--resume", metavar="UUID", nargs="?", const="", default=None,
                         help="continue a saved session; omit the id to list them")
+    sessions.add_argument("--continue", dest="continue_session", action="store_true",
+                          help="continue the most recent session for this workspace without a picker")
     parser.add_argument("--provider", metavar="NAME", help="override the provider")
     parser.add_argument("--model", metavar="NAME", help="override the model")
     discovery = parser.add_mutually_exclusive_group()
@@ -140,6 +143,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.resume == "":
         return pick_session(sandbox)
+
+    if args.continue_session:
+        from .core.session import list_sessions
+
+        found = list_sessions(limit=1, sandbox=sandbox)
+        if not found:
+            sys.stdout.write(f"no saved sessions for {sandbox}\n")
+            return 0
+        args.resume = found[0]["id"]
 
     text = args.prompt
     if args.list_providers:
