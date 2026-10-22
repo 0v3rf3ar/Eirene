@@ -50,6 +50,11 @@ eirene --version
 
 ## Use the installer again
 
+On Android/Termux, rerun the [Bash installer](installation.md#android--termux).
+It finds the newest compatible Android package, including betas, verifies its
+checksum and metadata, and upgrades through Termux APT without downgrading an
+installed newer version. The in-application `/update` command points to this method.
+
 The original [installer commands](installation.md) can also replace an existing
 installation. Close Eirene first on Windows. Use the same installation directory
 and a real `EIRENE_VERSION` release tag when you want a specific version rather
@@ -73,7 +78,7 @@ The in-application updater requires a matching platform archive and `SHA256SUMS`
 from the release. It verifies the archive hash, extracts a unique bounded
 executable, and smoke-tests its `--version` output before staging it under
 `EIRENE_HOME/updates/`. Verification failure leaves the installed executable
-unchanged. This flow differs from the POSIX installer script's verification.
+unchanged. This flow differs from the desktop Bash installer's verification.
 
 A frozen POSIX executable is copied to a temporary file beside the installation
 and replaced atomically. Windows uses a helper to wait for the target to unlock

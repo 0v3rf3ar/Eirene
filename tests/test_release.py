@@ -514,3 +514,189 @@ def test_edge_checks_later_release_pages(installer):
     requests = Path(env['TEST_LOG']).read_text()
     assert 'per_page=100&page=2' in requests
     assert '/v0.1.7b1/eirene-Linux-amd64-0.1.7b1.tar.gz' in requests
+
+
+@pytest.fixture
+def termux_installer(installer):
+    run, env, fixture = installer
+    tools = Path(env['PATH'].split(os.pathsep)[0])
+    state = fixture / 'installed.json'
+    apt_log = fixture / 'apt.log'
+    versions = ('0.1.20b1', '0.1.20b2', '0.1.20')
+    for version in versions:
+        debian_version = version.replace('b', '~b')
+        (fixture / f'eirene-Termux-aarch64-{version}.deb').write_text(json.dumps({
+            'Package': 'eirene', 'Architecture': 'aarch64', 'Version': debian_version,
+            'runtime': version}))
+    (fixture / 'SHA256SUMS').write_text(''.join(checksum_entry(p) for p in sorted(fixture.glob('*.deb'))))
+    scripts = {
+        'dpkg-deb': '''import json, sys
+from pathlib import Path
+print(json.loads(Path(sys.argv[2]).read_text())[sys.argv[3]])
+''',
+        'dpkg-query': '''import json, os, sys
+from pathlib import Path
+state = Path(os.environ['TEST_INSTALLED'])
+if not state.exists(): sys.exit(1)
+print('install ok installed')
+print(json.loads(state.read_text())['Version'])
+''',
+        'dpkg': '''import sys
+from packaging.version import Version
+assert sys.argv[1] == '--compare-versions' and sys.argv[3] == 'gt'
+sys.exit(0 if Version(sys.argv[2].replace('~', '')) > Version(sys.argv[4].replace('~', '')) else 1)
+''',
+        'sha256sum': '''import hashlib, sys
+from pathlib import Path
+print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest() + '  ' + sys.argv[1])
+''',
+        'apt-get': '''import json, os, sys
+from pathlib import Path
+with open(os.environ['TEST_APT_LOG'], 'a') as stream: stream.write(json.dumps(sys.argv[1:]) + '\\n')
+if os.environ.get('TEST_APT_FAIL') in ('1', sys.argv[1]): sys.exit(17)
+if sys.argv[1] == 'update': sys.exit(0)
+assert sys.argv[1] == 'install' and '-y' in sys.argv
+package = json.loads(Path(sys.argv[-1]).read_text())
+Path(os.environ['TEST_INSTALLED']).write_text(json.dumps(package))
+binary = Path(os.environ['TEST_BIN']) / 'eirene'
+binary.write_text('#!/bin/sh\\nif [ "$1" = --version ]; then echo "eirene ' + package['runtime'] + '"; else echo "Eirene usage"; fi\\n')
+binary.chmod(0o755)
+''',
+    }
+    for name, body in scripts.items():
+        path = tools / name
+        path.write_text(f'#!{sys.executable}\n' + body)
+        path.chmod(0o755)
+
+    def release(version, date, *, prerelease=True, uploaded=True):
+        return dict(tag_name='v' + version, draft=False, prerelease=prerelease, published_at=date,
+                    assets=[dict(name=f'eirene-Termux-aarch64-{version}.deb',
+                                 state='uploaded' if uploaded else 'new')])
+
+    releases = [
+        dict(tag_name='v9.0.0', draft=False, prerelease=False, published_at='2026-10-24T00:00:00Z',
+             assets=[dict(name='eirene-Linux-arm64-9.0.0.tar.gz', state='uploaded')]),
+        release('0.1.20b2', '2026-10-23T00:00:00Z'),
+        release('0.1.20b1', '2026-10-22T00:00:00Z'),
+    ]
+    base = dict(PREFIX='/data/data/com.termux/files/usr', TERMUX_VERSION='0.118.0',
+                TEST_OS='Linux', TEST_CPU='aarch64', EIRENE_INSTALL_DIR='/data/data/com.termux/files/usr/bin',
+                TEST_RELEASES=json.dumps(releases), TEST_INSTALLED=str(state),
+                TEST_BIN=str(tools), TEST_APT_LOG=str(apt_log))
+
+    def install(*args, **overrides):
+        return run(*args, **{**base, **overrides})
+    return install, env, fixture, state, apt_log, release
+
+
+def test_termux_installer_installs_and_upgrades_with_apt(termux_installer):
+    run, env, _, state, apt_log, _ = termux_installer
+    first = run(EIRENE_VERSION='v0.1.20b1')
+    assert first.returncode == 0, first.stderr
+    assert json.loads(state.read_text())['Version'] == '0.1.20~b1'
+    updated = run()
+    assert updated.returncode == 0, updated.stderr
+    assert json.loads(state.read_text())['Version'] == '0.1.20~b2'
+    assert [json.loads(row)[0] for row in apt_log.read_text().splitlines()] == ['update', 'install'] * 2
+    requests = Path(env['TEST_LOG']).read_text()
+    assert 'eirene-Termux-aarch64-0.1.20b2.deb' in requests and 'SHA256SUMS' in requests
+    assert 'eirene-Linux-arm64' not in requests and '/releases/latest' not in requests
+    assert 'may be a beta' in updated.stdout
+    assert not (Path(env['HOME']) / '.bashrc').exists()
+
+
+@pytest.mark.parametrize('problem', ['checksum', 'identity', 'architecture', 'version', 'duplicate_checksum'])
+def test_termux_rejects_invalid_package_before_apt(termux_installer, problem):
+    run, _, fixture, state, apt_log, _ = termux_installer
+    package = fixture / 'eirene-Termux-aarch64-0.1.20b2.deb'
+    body = json.loads(package.read_text())
+    if problem == 'checksum':
+        package.write_bytes(b'corrupted')
+    elif problem == 'duplicate_checksum':
+        manifest = fixture / 'SHA256SUMS'
+        manifest.write_text(manifest.read_text() + checksum_entry(package))
+    else:
+        field = {'identity': 'Package', 'architecture': 'Architecture', 'version': 'Version'}[problem]
+        body[field] = 'wrong'
+        package.write_text(json.dumps(body))
+        (fixture / 'SHA256SUMS').write_text(checksum_entry(package))
+    result = run()
+    assert result.returncode != 0
+    assert not state.exists() and not apt_log.exists()
+
+
+def test_termux_installer_does_not_downgrade(termux_installer):
+    run, _, _, state, apt_log, _ = termux_installer
+    assert run().returncode == 0
+    original = state.read_bytes(), apt_log.read_bytes()
+    result = run(EIRENE_VERSION='v0.1.20b1')
+    assert result.returncode != 0 and 'refusing to downgrade' in result.stderr
+    assert (state.read_bytes(), apt_log.read_bytes()) == original
+
+
+@pytest.mark.parametrize('cpu', ['x86_64', 'armv7l'])
+def test_termux_unsupported_architecture_fails_before_download(termux_installer, cpu):
+    run, env, _, _, apt_log, _ = termux_installer
+    result = run(TEST_CPU=cpu)
+    assert result.returncode != 0 and 'unsupported Termux architecture' in result.stderr
+    assert not Path(env['TEST_LOG']).exists() and not apt_log.exists()
+
+
+def test_termux_latest_and_edge_select_matching_uploaded_assets(termux_installer):
+    run, env, _, state, _, release = termux_installer
+    stable = release('0.1.20', '2026-10-24T00:00:00Z', prerelease=False)
+    beta = release('0.1.20b2', '2026-10-23T00:00:00Z')
+    uploading = release('0.1.20b3', '2026-10-25T00:00:00Z', uploaded=False)
+    draft = {**release('0.1.20b4', '2026-10-26T00:00:00Z'), 'draft': True}
+    metadata = json.dumps([uploading, stable, draft, beta], indent=2)
+    # Edge must skip a newer stable release; default Android installation may use it.
+    result = run('edge', TEST_RELEASES=metadata)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(state.read_text())['runtime'] == '0.1.20b2'
+    result = run(TEST_RELEASES=metadata)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(state.read_text())['runtime'] == '0.1.20'
+    assert '/v0.1.20/eirene-Termux-aarch64-0.1.20.deb' in Path(env['TEST_LOG']).read_text()
+
+
+def test_termux_skips_releases_without_matching_packages(termux_installer):
+    run, _, _, state, apt_log, _ = termux_installer
+    result = run(TEST_RELEASES=json.dumps([dict(tag_name='v9.0.0', draft=False, prerelease=True,
+                    published_at='2026-10-24T00:00:00Z',
+                    body='"name": "eirene-Termux-aarch64-9.0.0.deb"',
+                    author=dict(name='eirene-Termux-aarch64-9.0.0.deb'),
+                    assets=[dict(name='other.deb', state='uploaded')])]))
+    assert result.returncode != 0 and 'no compatible published Termux package' in result.stderr
+    assert not state.exists() and not apt_log.exists()
+
+
+@pytest.mark.parametrize(('stage', 'message'), [
+    ('update', 'refreshing Termux package indexes'),
+    ('install', 'installing or upgrading the Eirene package'),
+])
+def test_termux_package_install_failure_is_reported(termux_installer, stage, message):
+    run, _, _, _, _, _ = termux_installer
+    result = run(TEST_APT_FAIL=stage)
+    assert result.returncode != 0 and message in result.stderr
+    if stage == 'install':
+        assert 'existing executable was not changed' not in result.stderr
+
+
+def test_termux_release_selection_checks_later_pages(termux_installer):
+    run, env, _, state, _, release = termux_installer
+    first_page = [dict(tag_name=f'v9.0.{n}', draft=False, prerelease=False,
+                       published_at='2026-10-24T00:00:00Z', assets=[]) for n in range(100)]
+    package = release('0.1.20b2', '2026-10-23T00:00:00Z')
+    package['assets'][0]['uploader'] = dict(name='other.deb', state='new')
+    pages = {'1': json.dumps(first_page), '2': json.dumps([package], indent=2)}
+    result = run(TEST_RELEASE_PAGES=json.dumps(pages))
+    assert result.returncode == 0, result.stderr
+    assert json.loads(state.read_text())['runtime'] == '0.1.20b2'
+    assert 'per_page=100&page=2' in Path(env['TEST_LOG']).read_text()
+
+
+def test_termux_rejects_custom_install_directory(termux_installer):
+    run, env, _, _, _, _ = termux_installer
+    result = run(EIRENE_INSTALL_DIR=env['HOME'] + '/bin')
+    assert result.returncode != 0 and 'custom EIRENE_INSTALL_DIR is unsupported' in result.stderr
+    assert not Path(env['TEST_LOG']).exists()

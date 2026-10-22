@@ -13,6 +13,7 @@ executable, and installs it in your user account.
 | Linux | AMD64 or ARM64 | `~/.local/bin` |
 | macOS | Apple Silicon / ARM64 | `~/.local/bin` |
 | Windows | AMD64 | `%LOCALAPPDATA%\Programs\eirene` |
+| Android / Termux (experimental) | ARM64 | `$PREFIX/bin` |
 
 A release for one system cannot run on another. Intel macOS does not have a
 matching standalone archive in this release set. See [platform support](platforms.md)
@@ -30,6 +31,26 @@ The installer configures PATH in detected supported shell profiles and backs up
 existing profiles before changing them. It prints a command to refresh the shell;
 run that command or open a new terminal. Its verification shell cannot change the
 environment of your current terminal.
+
+## Android / Termux
+
+In the standard F-Droid/GitHub `com.termux` app on ARM64, run:
+
+```sh
+bash <(curl -fsSL https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.sh)
+```
+
+The installer selects the newest published release containing an uploaded Termux
+package, including betas. It verifies the release checksum and package metadata,
+then uses Termux APT to install or upgrade Eirene and its dependencies. Rerun the
+same command to update; an installed newer version will not be downgraded.
+`EIRENE_VERSION` can select a specific tag with a Termux package; `edge` restricts
+selection to prereleases.
+
+Termux manages the command path, so no shell profiles are changed. The package
+requires the standard `/data/data/com.termux/files/usr` prefix; custom installation
+directories and other Android architectures are unsupported. See
+[platform support](platforms.md#experimental-android--termux-beta) for limitations.
 
 ## Windows
 
@@ -63,7 +84,8 @@ walks through connection, modes, and a small task.
 
 ## Choose a directory or version
 
-Both installers accept the following environment variables.
+The desktop installers accept the following environment variables. On Termux,
+the installation directory is fixed and shell profile configuration is unnecessary.
 
 | Variable | Purpose |
 | --- | --- |
@@ -99,8 +121,9 @@ Download the archive for your system from the releases page, extract it, and put
 `eirene` or `eirene.exe` in a directory on PATH. On Linux and macOS, ensure the
 file is executable with `chmod +x /path/to/eirene`. Run `--version` before use.
 
-The Bash installer checks the downloaded executable but does not verify release
-checksums. The PowerShell installer also verifies release checksums. When doing
+For desktop archives, the Bash installer checks the downloaded executable but
+does not verify release checksums. Its Termux branch and the PowerShell installer
+verify release checksums. When doing
 manual verification, use the checksums supplied with the same release.
 
 ## If the command is missing

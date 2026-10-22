@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the matching GitHub release without requiring Python or sudo.
+# Install a matching desktop release or a package-managed Android/Termux release.
 set -Eeuo pipefail
 
 path_only=0
@@ -61,12 +61,31 @@ version=${EIRENE_VERSION:-latest}
 if [[ "$edge" == 1 ]]; then version=edge; fi
 install_dir=${EIRENE_INSTALL_DIR:-"$HOME/.local/bin"}
 case "$install_dir" in /*) ;; *) install_dir="$PWD/$install_dir" ;; esac
-for tool in curl tar uname mktemp grep cp chmod mv mkdir cat sleep ps awk; do
+for tool in curl uname mktemp awk cat rm; do
     command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"
 done
 case "$install_dir" in *$'\n'*|*$'\r'*|*:*) fail 'install directory must not contain newlines or a colon (PATH separator)' ;; esac
 os_name=$(uname -s)
 cpu=$(uname -m)
+termux=0
+if [[ "$os_name" == Android || -n "${TERMUX_VERSION:-}" || "${PREFIX:-}" == /data/data/com.termux/* ]]; then
+    termux=1
+    [[ "${PREFIX:-}" == /data/data/com.termux/files/usr ]] || fail 'Android installation requires the standard com.termux prefix'
+    case "$cpu" in aarch64|arm64) target=Termux-aarch64 ;; *) fail "unsupported Termux architecture: $cpu (ARM64 is required)" ;; esac
+    [[ -z "${EIRENE_INSTALL_DIR:-}" || "$EIRENE_INSTALL_DIR" == "$PREFIX/bin" ]] || fail 'Termux packages install in $PREFIX/bin; custom EIRENE_INSTALL_DIR is unsupported'
+    install_dir="$PREFIX/bin"
+    for tool in apt-get dpkg-deb dpkg dpkg-query sha256sum; do
+        command -v "$tool" >/dev/null 2>&1 || fail "$tool is required in Termux"
+    done
+    if [[ "$path_only" == 1 ]]; then
+        command -v eirene >/dev/null 2>&1 || fail 'shell setup needs an installed executable'
+        ok 'Termux manages PATH; no shell profile changes are needed'
+        exit 0
+    fi
+else
+for tool in tar grep cp chmod mv mkdir sleep ps; do
+    command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"
+done
 case "$os_name" in
     Linux)
         case "$cpu" in
@@ -83,16 +102,18 @@ case "$os_name" in
     MINGW*|MSYS*|CYGWIN*) fail 'on Windows, use install.ps1 from PowerShell' ;;
     *) fail "unsupported operating system: $os_name" ;;
 esac
+fi
 fetch() {
     curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
         --retry 3 --retry-delay 2 --connect-timeout 30 --max-time 600 "$@"
 }
-# Extract only top-level release fields, ignoring nested assets and JSON strings.
+# Read top-level release fields and uploaded asset names without confusing
+# nested uploader metadata or braces inside JSON strings with release fields.
 # This keeps installation independent of Python and jq.
-edge_metadata() {
-    awk '
-    function field(name, value) {
-        value = object
+release_metadata() {
+    awk -v target="$metadata_target" -v prerelease_only="$prerelease_only" '
+    function field(name, source, value) {
+        value = source
         if (!match(value, "\"" name "\"[[:space:]]*:[[:space:]]*\"[^\"]*\"")) return ""
         value = substr(value, RSTART, RLENGTH)
         sub(/^[^:]*:[[:space:]]*"/, "", value)
@@ -103,6 +124,7 @@ edge_metadata() {
         for (i = 1; i <= length($0); i++) {
             c = substr($0, i, 1)
             if (depth == 1) object = object c
+            if (in_assets && depth == 2) asset = asset c
             if (quoted) {
                 if (escaped) escaped = 0
                 else if (c == "\\") escaped = 1
@@ -110,15 +132,25 @@ edge_metadata() {
                 continue
             }
             if (c == "\"") { quoted = 1; continue }
-            if (c == "{") { depth++; if (depth == 1) object = "" }
+            if (c == "[" && depth == 1 && object ~ /"assets"[[:space:]]*:[[:space:]]*\[$/) in_assets = 1
+            if (c == "]" && depth == 1) in_assets = 0
+            if (c == "{") {
+                depth++
+                if (depth == 1) { object = ""; names = "\n"; in_assets = 0 }
+                if (in_assets && depth == 2) asset = ""
+            }
             if (c == "}") {
+                if (in_assets && depth == 2 && field("state", asset) == "uploaded") names = names field("name", asset) "\n"
                 depth--
                 if (depth == 0) {
                     count++
-                    if (object ~ /"prerelease"[[:space:]]*:[[:space:]]*true/ &&
-                        object ~ /"draft"[[:space:]]*:[[:space:]]*false/) {
-                        date = field("published_at")
-                        if (date > newest) { newest = date; tag = field("tag_name") }
+                    release_tag = field("tag_name", object)
+                    expected = "eirene-" target "-" substr(release_tag, 2) ".deb"
+                    if (object ~ /"draft"[[:space:]]*:[[:space:]]*false/ &&
+                        (!prerelease_only || object ~ /"prerelease"[[:space:]]*:[[:space:]]*true/) &&
+                        (target == "" || index(names, "\n" expected "\n"))) {
+                        date = field("published_at", object)
+                        if (date > newest) { newest = date; tag = release_tag }
                     }
                 }
             }
@@ -129,17 +161,25 @@ edge_metadata() {
 if [[ "$path_only" == 0 ]]; then ok "$target · $install_dir"; fi
 if [[ "$path_only" == 0 ]]; then
 heading 2 'Find the release'
-if [[ "$version" == edge ]]; then
-    step='finding the latest unstable release'
+if [[ "$version" == edge || ("$termux" == 1 && "$version" == latest) ]]; then
+    step='finding the latest compatible release'
+    metadata_target='' prerelease_only=1
+    if [[ "$termux" == 1 ]]; then
+        metadata_target=$target
+        if [[ "$version" == latest ]]; then prerelease_only=0; fi
+    fi
     page=1 newest='' candidate=''
     while :; do
         metadata=$(fetch "https://api.github.com/repos/$repo/releases?per_page=100&page=$page")
-        read -r count published tag <<< "$(printf '%s\n' "$metadata" | edge_metadata)"
+        read -r count published tag <<< "$(printf '%s\n' "$metadata" | release_metadata)"
         if [[ -n "$tag" && "$published" > "$newest" ]]; then newest=$published; candidate=$tag; fi
         [[ "$count" == 100 ]] || break
         page=$((page + 1))
     done
-    [[ -n "$candidate" ]] || fail 'no published unstable release is available'
+    if [[ -z "$candidate" ]]; then
+        if [[ "$termux" == 1 ]]; then fail 'no compatible published Termux package is available'; fi
+        fail 'no published unstable release is available'
+    fi
     version=$candidate
 elif [[ "$version" == latest ]]; then
     step='finding the latest release; check your connection to github.com'
@@ -150,6 +190,10 @@ fi
 [[ "$version" =~ ^v[0-9][A-Za-z0-9._+-]*$ ]] || fail "invalid release tag: $version (expected v followed by a version)"
 ok "Release $version"
 asset="eirene-$target-${version#v}.tar.gz"
+if [[ "$termux" == 1 ]]; then
+    asset="eirene-$target-${version#v}.deb"
+    printf 'Android/Termux package channel: newest compatible release (may be a beta).\n'
+fi
 base="https://github.com/$repo/releases/download/$version"
 step='creating temporary files; check free disk space and temporary-directory permissions'
 temporary=$(mktemp -d)
@@ -175,6 +219,53 @@ else
 fi
 [[ -s "$temporary/$asset" ]] || fail 'downloaded archive is empty'
 ok 'Archive downloaded'
+
+if [[ "$termux" == 1 ]]; then
+    heading 4 'Verify the Android package'
+    step='verifying the Termux package checksum'
+    fetch --output "$temporary/SHA256SUMS" "$base/SHA256SUMS"
+    expected=$(awk -v wanted="$asset" '
+        ($2 == wanted || $2 == "*" wanted) && length($1) == 64 && $1 ~ /^[[:xdigit:]]+$/ {
+            count++; checksum = tolower($1)
+        }
+        END { if (count != 1) exit 1; print checksum }
+    ' "$temporary/SHA256SUMS") || fail 'release must contain one valid checksum for the Termux package'
+    actual=$(sha256sum "$temporary/$asset")
+    [[ "${actual%% *}" == "$expected" ]] || fail 'Termux package checksum mismatch; existing installation was not changed'
+    package_version=$(dpkg-deb --field "$temporary/$asset" Version)
+    expected_version=${version#v}
+    if [[ "$expected_version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(a|b|rc)([0-9]+)$ ]]; then
+        expected_version="${BASH_REMATCH[1]}~${BASH_REMATCH[2]}${BASH_REMATCH[3]}"
+    fi
+    [[ "$(dpkg-deb --field "$temporary/$asset" Package)" == eirene &&
+       "$(dpkg-deb --field "$temporary/$asset" Architecture)" == aarch64 &&
+       "$package_version" == "$expected_version" ]] || fail 'Termux package metadata does not match this release and architecture'
+    current=$(dpkg-query -W '-f=${Status}\n${Version}\n' eirene 2>/dev/null || true)
+    if [[ "${current%%$'\n'*}" == 'install ok installed' ]] &&
+        dpkg --compare-versions "${current##*$'\n'}" gt "$package_version"; then
+        fail "a newer Eirene package is already installed (${current##*$'\n'}); refusing to downgrade"
+    fi
+    ok 'Checksum, package identity, architecture and version verified'
+    heading 5 'Install or update Eirene with Termux APT'
+    step='refreshing Termux package indexes'
+    apt-get update
+    step='installing or upgrading the Eirene package and its dependencies'
+    # APT may already have changed package state if installation fails.
+    installed=1
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -- "$temporary/$asset"
+    heading 6 'Use the Termux-managed command path'
+    export PATH="$PREFIX/bin:$PATH"
+    hash -r
+    command -v eirene >/dev/null 2>&1 || fail 'eirene was not found after package installation'
+    heading 7 'Check the installed command'
+    step='verifying the installed Termux command'
+    output=$(eirene --version)
+    [[ "$output" == "eirene ${version#v}" ]] || fail "unexpected installed version: $output"
+    eirene --help > /dev/null
+    ok "Eirene ${version#v} installed or updated"
+    printf '\nStart now: eirene\nRerun this installer to update the Android package.\n'
+    exit 0
+fi
 heading 4 'Unpack'
 step='extracting the release archive'
 tar -xzf "$temporary/$asset" -C "$temporary" eirene

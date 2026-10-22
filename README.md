@@ -40,11 +40,17 @@ bash <(curl -fsSL https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/insta
 irm https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.ps1 | iex
 ```
 
+**Android / Termux** · ARM64 · experimental
+
+Run the Bash installer above in the standard `com.termux` app. It installs or
+updates the newest compatible Android package, including betas, and its dependencies
+through Termux APT. Rerun the same command to update.
+
 <details>
 <summary><strong>Edge / beta</strong> — try the latest prerelease</summary>
 
 Get the newest changes before the next stable release. Edge builds may be less
-stable; the commands above always install the latest stable release.
+stable; the desktop commands above default to the latest stable release.
 
 **Linux & macOS**
 
@@ -59,7 +65,7 @@ $installer = irm https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/instal
 & ([scriptblock]::Create($installer)) -Edge
 ```
 
-Already installed? Run `/update edge` inside Eirene.
+Already installed? Run `/update edge` inside Eirene. On Termux, rerun the installer.
 
 </details>
 

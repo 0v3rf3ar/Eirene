@@ -107,8 +107,11 @@ the official Termux Docker image and uploads a package only after native import,
 command, file-read, CLI, and PTY UI checks pass. This tests Android/Bionic
 userspace, not a physical Android device. Stable releases do not run this job.
 
-Use the standard F-Droid/GitHub `com.termux` distribution and Termux Python 3.14.
-Install the downloaded package using `apt install ./eirene-Termux-aarch64-VERSION.deb`.
+Use the standard F-Droid/GitHub `com.termux` distribution. The
+[Bash installer](installation.md#android--termux) installs or upgrades the newest
+compatible package and its Termux Python 3.14 dependencies through APT.
+Alternatively, install a downloaded package using
+`apt install ./eirene-Termux-aarch64-VERSION.deb`.
 Arbitrary commands require explicit approval; plan mode only supports fixed
 file/search tools. Scheduling, desktop self-updates, and Android integration
 features are not supported yet. See the beta release notes for limitations.

@@ -14,7 +14,7 @@ from . import register
 async def run(app, args: str) -> None:
     from ..core.platforms import is_termux
     if is_termux():
-        app.say("Experimental Termux packages must be updated using a newer Termux .deb from GitHub Releases; desktop binary updates are unavailable.")
+        app.say("On Android/Termux, rerun the installer to install or update the newest compatible package (including betas): bash <(curl -fsSL https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.sh)")
         return
     args = args.strip()
     if args not in {"", "check", "edge", "edge check", "check edge"}:
