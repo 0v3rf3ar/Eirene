@@ -53,6 +53,7 @@ ICONS = {
     "write": "▣", "edit": "✎", "read": "◉", "dir": "▰",
     "search": "⌕", "shell": "⌘", "ok": "✓", "fail": "✗",
     "warn": "⚠︎", "info": "ⓘ", "clock": "◷",
+    "network": "ᯤ", "mcp": "⚙︎", "access": "⚿",
     "tokens": "\u2193",
     "up": "\u2191",
     "auto": "↯",
@@ -68,6 +69,7 @@ ASCII_ICONS = {
     "file": "F", "write": "W", "edit": "E", "read": "R", "dir": "D",
     "search": "S", "shell": "$", "ok": "+", "fail": "x", "warn": "!",
     "info": "i", "clock": "t", "tokens": "v", "up": "^", "auto": "A",
+    "network": "@", "mcp": "K", "access": "K",
     "manual": "M", "plan": "P", "skill": "K", "task": "T", "link": "@",
     "dot": ".", "arrow": "->", "bullet": "*", "corner": "`",
 }
@@ -79,10 +81,10 @@ TOOL_ICONS = {
     "edit_file": ICONS["edit"],
     "list_dir": ICONS["dir"],
     "glob": ICONS["search"],
-    "web_search": "🌐︎",
-    "WebSearch": "🌐︎",
-    "web_fetch": "🌐︎",
-    "WebFetch": "🌐︎",
+    "web_search": "ᯤ",
+    "WebSearch": "ᯤ",
+    "web_fetch": "ᯤ",
+    "WebFetch": "ᯤ",
     "run_command": ICONS["shell"],
 }
 
@@ -146,6 +148,23 @@ def icon(name: str) -> str:
     table = ASCII_ICONS if ACCESSIBLE else ICONS
     glyph = table.get(name, table["dot"])
     return terminal_icon(glyph) if name == "manual" and not ACCESSIBLE else glyph
+
+
+def permission_icon(name: str) -> str:
+    """Identify the action in an approval without treating every tool as a warning."""
+    name = name.removeprefix("native_")
+    if name == "MCP" or name.startswith("mcp__"):
+        return icon("mcp")
+    if name == "request_full_access":
+        return icon("access")
+    if name in {"run_command", "start_process", "stop_process", "execution", "Bash"}:
+        return icon("shell")
+    if name in {"write_file", "edit_file", "Write", "Edit", "MultiEdit", "NotebookEdit"}:
+        return icon("edit")
+    if name in {"web_fetch", "web_search", "WebFetch", "WebSearch", "http_request",
+                "browser_inspect", "browser_interact", "browser_screenshot"}:
+        return icon("network")
+    return icon("info")
 
 
 def set_accessible(enabled: bool) -> None:

@@ -739,28 +739,40 @@ async def test_tool_calls_appear_as_cards(workdir):
 
 
 async def test_command_card_has_running_success_and_error_states(workdir):
+    from eirene.ui import palette
+
     app, pilot, context = await start(workdir)
     try:
         card = CommandBlock("run_command", "pytest -q")
         await app.push(card)
-        assert "● Running(pytest -q)" in content(card)
+        assert "• Running(pytest -q)" in content(card)
+        assert card._Static__content.get_style_at_offset(app.console, 0).color.name == palette.YELLOW
+
+        card.finish("Still running as managed process p1", False, 1.0)
+        card.flush()
+        assert "• Working(pytest -q)" in content(card)
+        assert card._Static__content.get_style_at_offset(app.console, 0).color.name == palette.YELLOW
 
         card.finish("12 passed", False, 2.0)
         card.flush()
-        assert "● Ran(pytest -q)" in content(card)
+        assert "• Ran(pytest -q)" in content(card)
+        assert card._Static__content.get_style_at_offset(app.console, 0).color.name == palette.GREEN
         assert "└ 12 passed" in content(card)
 
         failed = CommandBlock("run_command", "exit 3")
         await app.push(failed)
         failed.finish("exit 3", True, 1.0)
         failed.flush()
-        assert "● Ran(exit 3)" in content(failed)
+        assert "• Ran(exit 3)" in content(failed)
+        assert failed._Static__content.get_style_at_offset(app.console, 0).color.name == palette.RED
         assert failed.is_error
     finally:
         await context.__aexit__(None, None, None)
 
 
 async def test_nonzero_command_exit_makes_the_card_fail(workdir, python_command):
+    from eirene.ui import palette
+
     command = python_command("raise SystemExit(3)")
     provider = Script(
         [ToolCall("c1", "run_command", {"command": command}),
@@ -776,6 +788,7 @@ async def test_nonzero_command_exit_makes_the_card_fail(workdir, python_command)
                 break
         card = blocks(app, CommandBlock)[0]
         assert card.is_error
+        assert card._Static__content.get_style_at_offset(app.console, 0).color.name == palette.RED
         assert card.label == command
         assert command[:24] in content(card)
     finally:
@@ -1346,6 +1359,10 @@ async def test_resume_redraws_the_earlier_chat(workdir):
         assert "just notes.txt" in content(blocks(app, AnswerBlock)[0])
         card = blocks(app, Card)[0]
         assert "list_dir" in content(card) or "." in content(card)
+        assert "notes.txt" not in content(card)
+        assert content(card).endswith("▾")
+        await pilot.click(card, offset=(3, 0))
+        assert content(card).splitlines()[0].endswith("▴")
         assert "notes.txt" in content(card)
         assert any("resumed 3 earlier messages" in content(b)
                    for b in blocks(app, NoticeBlock))
@@ -1399,7 +1416,7 @@ async def test_resume_redraws_saved_command_state(workdir):
     try:
         await pilot.pause()
         card = blocks(app, CommandBlock)[0]
-        assert "● Ran(pytest -q)" in content(card)
+        assert "• Ran(pytest -q)" in content(card)
         assert "└ 12 passed" in content(card)
         assert card.finished and not card.is_error and card.seconds == 3.0
     finally:
@@ -3484,7 +3501,9 @@ async def test_gruvbox_paints_each_section_its_own_colour(workdir):
         assert str(app.query_one(Marker)._Static__content.style) == "bold #fe8019"
         assert str(app.query_one(Rule)._Static__content.style) == "#98971a"
         assert "italic #928374" == str(think._Static__content.style)
-        label = [str(span.style) for span in tool._Static__content.spans][-1]
+        rendered = tool._Static__content
+        label = next(str(span.style) for span in rendered.spans
+                     if rendered.plain[span.start:span.end] == "calc.py")
         assert label == "bold #8ec07c", "tools get their own colour"
         assert markup.STYLES["code"] == "#b8bb26 on #3c3836"
     finally:
@@ -3943,6 +3962,31 @@ async def test_long_command_is_abbreviated_but_approval_shows_it_all(workdir):
         await context.__aexit__(None, None, None)
 
 
+@pytest.mark.parametrize("name,label,expected", [
+    ("mcp__cloudflare__execute", "mcp__cloudflare__execute", "mcp__cloudflare__execute"),
+    ("mcp__cloudflare__execute", "mcp__cloudflare_execute", "mcp__cloudflare__execute"),
+    ("mcp__cloudflare__execute", "deploy worker", "mcp__cloudflare__execute deploy worker"),
+    ("web_fetch", "https://example.com", "web_fetch https://example.com"),
+])
+async def test_approval_title_does_not_repeat_tool_name(workdir, name, label, expected):
+    app, pilot, context = await start(workdir)
+    pending = None
+    try:
+        pending = asyncio.create_task(app._approve(name, label, "", "permission required"))
+        await pilot.pause()
+        assert app.permission.title == expected
+        from eirene.ui import art
+        symbol = art.icon("network") if name == "web_fetch" else art.icon("mcp")
+        assert content(app.permission).startswith(f"{symbol} {expected}\n")
+        await pilot.press("n")
+        assert await pending == "no"
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        await context.__aexit__(None, None, None)
+
+
 @pytest.mark.parametrize("tool", ["write_file", "native_write_file"])
 async def test_empty_file_approval_offers_session_edits(workdir, tool):
     app, pilot, context = await start(workdir)
@@ -3951,6 +3995,7 @@ async def test_empty_file_approval_offers_session_edits(workdir, tool):
         pending = asyncio.create_task(app._approve(tool, "empty.txt", "", ""))
         await pilot.pause()
         assert ("always", "allow edits for this session") in app.permission.choices
+        assert content(app.permission).startswith("✎ ")
         await pilot.press("2")
         assert await pending == "always"
     finally:

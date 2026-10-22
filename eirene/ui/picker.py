@@ -52,6 +52,7 @@ class Picker(Static):
         self.future: asyncio.Future[str | None] | None = None
         self.options: list[tuple] = []
         self.title = ""
+        self.footer = ""
         self.index = 0
         self.filter = ""
         self.on_highlight: Callable[[str], None] | None = None
@@ -74,11 +75,12 @@ class Picker(Static):
 
     async def choose(self, title: str, options: list[tuple], *,
                      on_highlight: Callable[[str], None] | None = None,
-                     selected: str = "") -> str | None:
+                     selected: str = "", footer: str = "") -> str | None:
         """Show options; returns the value or None."""
         if not options:
             return None
         self.title = title
+        self.footer = footer
         self.options = options
         self.index = next((row for row, option in enumerate(options)
                            if str(option[0]) == selected), 0)
@@ -164,7 +166,14 @@ class Picker(Static):
             body.append_text(option)
             body.append("\n")
         detail = self._detail(rows)
-        if detail and self.show_detail:
+        if self.footer:
+            footer = Text(" " + self.footer, style="dim")
+            if detail and self.show_detail:
+                footer.append(" · " + " ".join(detail.split()), style="dim italic")
+            footer.truncate(room, overflow="ellipsis")
+            body.append_text(footer)
+            body.append("\n")
+        elif detail and self.show_detail:
             for line in _wrap(detail, max(self.size.width - 6, 30)):
                 body.append(f"   {line}\n", style="dim italic")
         if self.filter:

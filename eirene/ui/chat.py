@@ -7,6 +7,7 @@ from math import ceil
 from time import monotonic
 
 from rich.text import Text
+from rich.style import Style
 from textual.containers import VerticalScroll
 from textual.css.query import NoMatches
 from textual.widget import Widget
@@ -451,12 +452,16 @@ class AnswerBlock(Block):
 class ToolBlock(Block):
     """A tool call with live output."""
 
+    auto_links = False
+
     def __init__(self, name: str, label: str, *, hide_output: bool = False):
-        quiet_tools = {"read_attachment", "read_file", "web_search", "Read", "WebSearch"}
+        quiet_tools = {"read_attachment", "read_file", "web_search", "web_fetch",
+                       "file_search", "search_text", "glob", "grep", "list_dir", "Read", "NotebookRead",
+                       "WebSearch", "WebFetch", "Glob", "Grep", "LS"}
         self.hide_output = (hide_output or name in quiet_tools
-                            or any(name.endswith(f"__{tool}") for tool in quiet_tools)
-                            or (name == "MCP" and (label in quiet_tools
-                                or any(label.endswith(f"__{tool}") for tool in quiet_tools))))
+                            or name == "MCP" or name.startswith("mcp__")
+                            or any(name.endswith(f"__{tool}") for tool in quiet_tools))
+        self.expanded = False
         self.tool = name
         self.label = strip_escapes(label)
         self.output = ""
@@ -469,6 +474,10 @@ class ToolBlock(Block):
         self.flush()
 
     def restyle(self) -> None:
+        self.flush()
+
+    def action_toggle_output(self) -> None:
+        self.expanded = not self.expanded
         self.flush()
 
     def feed(self, chunk: str) -> None:
@@ -484,7 +493,8 @@ class ToolBlock(Block):
         body = Text()
         mark = art.icon("ok") if self.finished and not self.is_error else (
             art.icon("dot") if self.is_error else art.icon("clock"))
-        body.append(f"{mark} ")
+        if not self.hide_output:
+            body.append(f"{mark} ")
         tool_icon = art.tool_icon(self.tool)
         spacing = "  " if tool_icon == "🌐︎" else " "
         body.append(f"{tool_icon}{spacing}", style="dim")
@@ -496,9 +506,17 @@ class ToolBlock(Block):
         body.append(self.label or self.tool, style=named)
         if self.finished and self.seconds >= 1:
             body.append(f"  {self.seconds:.0f}s", style="dim")
-        detail = "" if self.hide_output and not self.is_error else (
+        if self.hide_output:
+            triangle = ("^" if self.expanded else "v") if art.ACCESSIBLE else (
+                "▴" if self.expanded else "▾")
+            if self.is_error:
+                body.append(f"  {art.icon('fail')}", style="bold")
+            body.append(f" {triangle}", style="dim")
+            body.stylize(Style(meta={"@click": "toggle_output"}), 0, len(body))
+        detail = "" if self.hide_output and not self.expanded and not self.is_error else (
             self.result if self.finished else self.output)
-        for line in _tail(detail):
+        lines = detail.splitlines() if self.hide_output and self.expanded else _tail(detail)
+        for line in lines:
             body.append("\n  ")
             body.append(line, style="dim")
         self.update(body)
@@ -546,12 +564,13 @@ class CommandBlock(ToolBlock):
         if not self.finished:
             color, action = palette.YELLOW, "Running"
         elif self.is_error:
-            color, action = palette.YELLOW, "Ran"
+            color, action = palette.RED, "Ran"
         elif self.result.startswith("Still running as managed process"):
             color, action = palette.YELLOW, "Working"
         else:
             color, action = palette.GREEN, "Ran"
-        body.append(f"{art.icon('bullet')} ", style=color)
+        marker = "*" if art.ACCESSIBLE else "•"
+        body.append(f"{marker} ", style=color)
         body.append(action, style="bold")
         body.append("(")
         label = " ".join(self.label.split())

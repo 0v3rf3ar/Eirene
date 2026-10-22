@@ -327,8 +327,8 @@ Prefer the activation commands when changing execution grants in a live session.
 
 ## Standalone MCP declarations
 
-`mcp_servers` maps server names to stdio launch definitions. This is the way to
-configure a server without installing a plugin. It declares available servers;
+`mcp_servers` maps server names to stdio, HTTP, or SSE definitions. Use `/mcp add`
+for guided setup without editing JSON. It declares available servers;
 `mcp_enabled` separately records activation.
 
 ```json
@@ -350,10 +350,18 @@ configure a server without installing a plugin. It declares available servers;
 
 | Server field | Default | Meaning |
 | --- | --- | --- |
-| `command` | required | Nonempty array of executable plus separate arguments. A string is treated as one executable name, not parsed shell text. |
+| `type` | inferred | `stdio`, `http` (Streamable HTTP), or `sse` (legacy). A URL without a type implies HTTP. |
+| `url` | required for remote | HTTPS or HTTP MCP endpoint. |
+| `auth` | `auto` without headers | `auto` discovers OAuth during setup; `oauth` requires saved browser authorization; `none` uses only configured headers. `/mcp login NAME` updates authentication. |
+| `headers` | `{}` | Optional HTTP headers. The setup wizard stores header credentials privately outside config.json. |
+| `scope` | discovered | Optional OAuth scopes requested during browser authorization. |
+| `client_metadata_url` | unset | Optional HTTPS client metadata document for servers supporting URL-based OAuth client registration. |
+| `oauth` | `{}` | Registered OAuth client settings: `client_id`, `client_secret`, `redirect_uri`, `scope`, `token_endpoint_auth_method`, and `authorization_params`. Camel-case clientId/clientSecret/redirectUri aliases are accepted on import. |
+| `auto_setup` | false | Guided JSON imports prepare package caches and runtime access again when connecting, so missing runtimes can be installed and retried. |
+| `command` | required for stdio | Nonempty array of executable plus separate arguments. A string is treated as one executable name, not parsed shell text. |
 | `env` | `{}` | Environment overrides; keys and values are converted to strings by the managed client. |
 | `cwd` | workspace | Relative path resolved beneath the workspace. A path leaving it is rejected by the managed client. |
-| `network` | no grant | Only JSON `true` grants network access to the enabled managed process. |
+| `network` | false for stdio, true for remote | Network access for an enabled connection; set `false` explicitly to block remote access while network isolation is enabled. |
 | `read_paths` | `[]` | Additional host paths exposed read-only to the command sandbox. |
 | `write_paths` | `[]` | Additional host paths exposed writable to the command sandbox. |
 | `startup_timeout` | 30 | Initialization request deadline in seconds. |
@@ -363,8 +371,8 @@ Timeouts accept numbers in 1–600; out-of-range or invalid values use 30, rathe
 than clamping. `startup_timeout` applies to initialization, not the entire tool
 catalog sequence. Each `tools/list` page uses the ordinary request deadline.
 
-Put every argument inside `command` for a direct config entry. Separate `args`
-is normalized by the **plugin importer**, not the managed standalone client.
+Prefer putting every argument inside `command` for a direct config entry.
+The runtime and importer also accept the common separate `command`/`args` form.
 Use literal absolute executable/JAR paths: the launcher does not expand shell
 variables, `~`, quotes, redirections, or pipes. An `env` value is not a shell
 interpolation template. Plugin-root substitutions apply to plugin declarations,

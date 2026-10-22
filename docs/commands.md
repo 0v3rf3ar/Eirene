@@ -52,7 +52,7 @@ support dragging. Close a popup with Esc, or use `[x]` when shown.
 | `/plugins trust NAME` | Allow hook execution after confirmation. | [Plugins](plugins.md) |
 | `/plugins untrust NAME` | Revoke hook trust and disable the plugin's MCP servers. | [Plugins](plugins.md) |
 | `/plugins refresh NAME` | Reindex installed files and revoke executable activation; does not download updates. | [Plugins](plugins.md) |
-| `/mcp` | Enable or disable each available MCP server. | [MCP](mcp.md) |
+| `/mcp [add/import/test/login/remove]` | Add, authenticate, test, enable, or remove MCP servers. | [MCP](mcp.md) |
 | `/search-api` | Configure, replace, or remove the optional Tavily key through hidden input. | [Web search](web-search.md) |
 
 `/plugin` is an alias for `/plugins`. Installed bundles add their own commands;
@@ -121,7 +121,8 @@ and starts an agent turn, while a built-in handler can update settings without
 a model request. Commands accepting paths can have their own parsing rules;
 `/sessions` uses shell-like argument splitting, so quote a path with spaces.
 
-There is no general `/config`, `/mcp add`, or `--config PATH` interface.
+There is no general `/config` or `--config PATH` interface. Use `/mcp add` for
+guided MCP setup.
 Standalone servers and settings without an interactive control are declared in
 [config.json](config-file.md). Its reference maps commands to saved fields and
 explains process-local choices. Use [data layout](data-layout.md) to find the

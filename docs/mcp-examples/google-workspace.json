@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "google-workspace": {
+      "type": "http",
+      "url": "https://gmailmcp.googleapis.com/mcp/v1",
+      "oauth": {
+        "client_id": "${input:google_client_id}",
+        "client_secret": "${input:google_client_secret}",
+        "redirect_uri": "http://127.0.0.1:8765/callback",
+        "authorization_params": {
+          "access_type": "offline",
+          "prompt": "consent"
+        }
+      }
+    }
+  }
+}

@@ -41,6 +41,7 @@ class PermissionBar(Static):
         self.index = 0
         self.title = ""
         self.reason = ""
+        self.tool = ""
         self.choices = CHOICES
 
     def on_mount(self) -> None:
@@ -58,12 +59,13 @@ class PermissionBar(Static):
         """Dismiss as a denial."""
         self._resolve(NO)
 
-    async def ask(self, title: str, reason: str, *, edits: bool = False) -> str:
+    async def ask(self, title: str, reason: str, *, edits: bool = False, tool: str = "") -> str:
         """Show the prompt and wait for a choice."""
         self.choices = [(YES, "yes"), (ALWAYS, "allow edits for this session"),
                         (NO, "no, stop here")] if edits else CHOICES
         self.title = title
         self.reason = reason
+        self.tool = tool
         self.index = 0
         self.future = asyncio.get_running_loop().create_future()
         self.add_class("showing")
@@ -84,7 +86,7 @@ class PermissionBar(Static):
 
     def _draw(self) -> None:
         body = Text()
-        body.append(f"{art.icon('warn')} {self.title}\n", style="bold")
+        body.append(f"{art.permission_icon(self.tool)} {self.title}\n", style="bold")
         if self.reason:
             body.append(f"  {self.reason}\n", style="dim")
         room = max(self.size.width - 4, 1)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from rich.text import Text
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Static
@@ -12,9 +13,26 @@ from textual.widgets import Static
 from ..core import paths
 from ..core.config import Config
 from ..core.text import safe_text
-from .backdrop import LogoBackdrop as TrustBackdrop
 from .picker import Picker
+from .splash import pixel_logo
 from .theme import PLAIN
+
+
+class TrustPortrait(Static):
+    """Use the session-loading portrait in the space above the question."""
+
+    DEFAULT_CSS = """
+    TrustPortrait {
+        height: 1fr;
+        min-height: 0;
+        content-align: center middle;
+        background: transparent;
+    }
+    """
+
+    def on_resize(self, event: events.Resize) -> None:
+        self.update(pixel_logo(max(1, event.size.width - 4),
+                               max(1, event.size.height), transparent=True))
 
 
 class WorkspaceTrust(App[bool]):
@@ -23,9 +41,9 @@ class WorkspaceTrust(App[bool]):
     ENABLE_COMMAND_PALETTE = False
     TITLE = "eirene — workspace trust"
     CSS = """
-    Screen { background: transparent; layers: watermark content; }
-    #trust-explanation { layer: content; height: auto; padding: 1; }
-    Picker { layer: content; }
+    Screen { background: transparent; overflow-y: auto; }
+    #trust-explanation { height: auto; padding: 1; }
+    Picker { margin: 0 0 1 0; }
     """
     BINDINGS = [
         Binding("ctrl+c,ctrl+d", "decline", "leave", priority=True, show=False),
@@ -36,7 +54,7 @@ class WorkspaceTrust(App[bool]):
         self.workspace = workspace
 
     def compose(self) -> ComposeResult:
-        yield TrustBackdrop()
+        yield TrustPortrait()
         body = Text("Trust this workspace?\n\n", style="bold")
         body.append(safe_text(str(self.workspace)) + "\n\n", style="bold")
         body.append(

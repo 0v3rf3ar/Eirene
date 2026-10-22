@@ -2,9 +2,70 @@
 
 [Documentation](README.md) / MCP servers
 
-An MCP server adds tools from an external program, such as a browser automation
-service or a semantic code assistant. A plugin can declare the server, but Eirene
-requires you to enable it separately before it starts.
+An MCP server adds tools from a local program or remote service. Eirene supports
+stdio, Streamable HTTP (`type: "http"`), and legacy SSE (`type: "sse"`).
+
+## Guided setup
+
+Open `/mcp` and choose **Add MCP server…**, or run `/mcp add`. Paste the MCP JSON
+from a server's documentation, or enter the path to a JSON/JSONC file. There are
+no provider-specific setup menus. Eirene resolves missing values, prepares the
+runtime, detects authentication, and tests the connection before enabling it.
+For multiple servers, one review can connect all of them. **Save disabled**
+records declarations without connecting. Esc cancels; failed tests stay disabled.
+
+The importer accepts `mcpServers`, `mcp_servers`, VS Code `servers`/`inputs`,
+`mcp.servers`, OpenCode `mcp`, and a bare map. Copied Markdown code fences,
+comments, and trailing commas are accepted. Use `/mcp add NAME` for an unnamed
+single-server object. Simple `npx mcp-remote URL` declarations use native HTTP/SSE
+automatically; unfamiliar proxy flags keep the original command.
+
+`${VAR}`, `${env:VAR}`, `${VAR:-default}`, `${input:id}`, `${workspaceFolder}`,
+and `${userHome}` are supported. Missing secrets and documentation placeholders
+are requested securely. VS Code promptString and pickString inputs work;
+editor-specific command inputs are rejected rather than executed as shell code.
+
+See the [24 sourced JSON examples and compatibility notes](mcp-examples/README.md)
+for the integrations reviewed, including Cloudflare, Burp, Google Workspace,
+Ahrefs, databases, browser tools, and collaboration services.
+
+Remote authentication options are browser OAuth, bearer token, custom headers,
+and no authentication. Remote JSON defaults to automatic OAuth discovery when
+no authentication headers are supplied. Header credentials and OAuth tokens are stored privately
+under Eirene's data directory, separately from `config.json`. The official MCP
+SDK handles discovery, PKCE, state verification, and token refresh. Background
+connections never open a browser; if sign-in is needed, use `/mcp login NAME`.
+Adding write permissions later may require signing in again with those scopes.
+Pre-registered OAuth clients are supported using an `oauth` object with
+`client_id`, `client_secret`, `redirect_uri`, and `authorization_params`.
+Google's `access_type=offline`/`prompt=consent` can be supplied there. Registered
+callbacks must be HTTP localhost callbacks with a port. App registration, tenant
+consent, account plans, and database credentials remain service prerequisites.
+
+For local servers, Eirene checks that the executable exists, prepares persistent
+npm/uv caches when applicable, and guides you through environment variables,
+network access, and additional readable/writable folders. Imports prepare a
+persistent server home and package/browser caches, detect Docker sockets and
+configuration, and expose existing kubeconfig where needed. These grants are
+shown in the connection review. Node.js or uv must
+already be installed for commands using npx or uvx. The wizard does not install
+system runtimes. **Connect and enable** authorizes launching that local command;
+package launchers may download their requested packages.
+
+```text
+/mcp add my-server https://example.com/mcp
+/mcp import
+/mcp import /path/to/mcp.json
+/mcp test my-server
+/mcp login my-server
+/mcp remove my-server
+```
+
+`/mcp import` accepts `mcpServers`, `mcp_servers`, or a map of named declarations,
+including the usual `command` plus `args` format and HTTP `type` plus `url`.
+It reviews connections before saving, and asks before replacing a name.
+The **Manage connection…** menu offers testing, authentication, and removal.
+Removing a standalone remote server also removes its saved credentials.
 
 ## Enable a server
 
@@ -14,8 +75,8 @@ requires you to enable it separately before it starts.
 /mcp
 ```
 
-In the picker, select the server to toggle it on, then select Done. Review its
-launcher, network access, and writable paths. The plugin must be enabled first.
+In the picker, select the server to toggle it on, then press Esc. The fixed
+footer shows its access details. The plugin must be enabled first.
 Finish or stop the current turn before changing server activation.
 
 The server starts on the next normal agent turn. Plan mode does not launch
@@ -30,8 +91,9 @@ to toggle an MCP-only plugin's server.
 
 Use the plugin entry command or ask in ordinary language. Eirene discovers the
 tools actually advertised by the running version. API providers expose them to a
-tool-capable model. Codex and Claude Code receive the enabled stdio declaration
-and use their native MCP handling.
+tool-capable model. Codex and Claude Code receive local stdio declarations
+directly; remote connections use Eirene's bundled stdio proxy, sharing its saved
+login and token refresh without exporting tokens into native configuration.
 
 Server activation and tool readiness are different. The server may start while a
 browser binary, language toolchain, project selection, or service authorization
@@ -68,16 +130,19 @@ Already completed external actions are not undone.
 
 ## Supported connections
 
-The plugin importer supports stdio server launchers with their arguments and
-environment. It does not import HTTP/SSE transports or OAuth app connections.
-A native CLI may support additional transports outside Eirene, but that does not
-make them available through this installer. Use the declared grants and the
-[permission guide](harness.md) to understand a server's access.
+The plugin importer supports stdio, HTTP, and SSE declarations. Remote servers
+require a network grant when network isolation is enabled. HTTPS and HTTP
+endpoints are supported, including local development and private-network servers.
+Use `/mcp login NAME` to configure authentication for an imported remote server.
+Use the declared grants and the [permission guide](harness.md) to understand a
+server's access. Testing connects and lists tools; it does not call them or
+prove that deployment or write permissions have been granted.
 
 ## Declare a standalone server
 
-A server does not need to belong to a plugin. Close Eirene and merge a declaration
-into `mcp_servers` in [config.json](config-file.md#standalone-mcp-declarations):
+A server does not need to belong to a plugin. Prefer `/mcp add` for guided setup.
+For manual configuration, close Eirene and merge a declaration into `mcp_servers`
+in [config.json](config-file.md#standalone-mcp-declarations):
 
 ```json
 {
@@ -94,20 +159,20 @@ into `mcp_servers` in [config.json](config-file.md#standalone-mcp-declarations):
 ```
 
 Use the executable and flags documented by the server. A direct config entry
-uses an argv array including all arguments, rather than the plugin importer's
-separate `command` and `args` fields. This is not shell syntax: pipes, shell
+can use an argv array including all arguments or separate `command` and `args`
+fields. This is not shell syntax: pipes, shell
 variables, and a command-plus-arguments string are not expanded.
 
 Restart Eirene, open `/mcp`, and toggle `local-tools` on. Its activation key is
 `mcp_enabled.local-tools`. Imported plugins instead use `PLUGIN__SERVER` keys.
 A direct entry takes precedence if it collides with a plugin's public server key.
-The picker supports activation; it does not create or edit declarations, and
-there is no `/mcp add` command in this implementation.
+The picker supports adding connections, activation, testing, authentication, and
+removal. `/mcp add` also accepts a server name and URL.
 
 For all launcher, environment, working-directory and mount fields, see the
 [configuration reference](config-file.md#standalone-mcp-declarations).
 
-## Connection sequence and protocol limits
+## Stdio connection sequence and protocol limits
 
 For managed API connections, Eirene launches the process with stdin/stdout pipes
 and drains stderr into an 8192-byte diagnostic tail. It sends JSON-RPC
@@ -139,7 +204,9 @@ The managed server's working directory defaults to the project and cannot leave
 it through `cwd`. Executable dependencies can be exposed through read-only
 `read_paths`; additional writable state uses `write_paths`. Paths must exist
 before launching an isolated process. Network permission is enabled only by the
-actual boolean `network: true`, not the string `"true"`.
+actual boolean `network: true`, not the string `"true"`. HTTP/SSE declarations
+default to network access because their connection is remote; an explicit
+`network: false` remains a block when network isolation is enabled.
 
 Process isolation and declared grants control what the server process can access.
 They do not authenticate the downstream service or interpret every remote tool's

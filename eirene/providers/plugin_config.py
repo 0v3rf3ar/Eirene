@@ -5,6 +5,11 @@ from __future__ import annotations
 def native_servers(definitions: dict) -> dict:
     servers = {}
     for name, definition in definitions.items():
+        from ..core.mcp_config import transport
+        if transport(definition) != 'stdio' or definition.get('auto_setup'):
+            from ..core.mcp_proxy import proxy_definition
+            servers[name] = proxy_definition(name)
+            continue
         command = definition.get("command")
         if isinstance(command, str):
             command = [command]

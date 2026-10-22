@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "x-twitter": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@isteam/twitter-mcp"
+      ],
+      "env": {
+        "TWITTER_API_KEY": "${input:twitter_api_key}",
+        "TWITTER_API_SECRET": "${input:twitter_api_secret}",
+        "TWITTER_ACCESS_TOKEN": "${input:twitter_access_token}",
+        "TWITTER_ACCESS_TOKEN_SECRET": "${input:twitter_access_token_secret}"
+      }
+    }
+  }
+}

@@ -104,6 +104,13 @@ def available_mcp_servers(config) -> dict[str, dict[str, Any]]:
             servers.setdefault(f"{plugin.name}__{name}" if plugin.imported else name,
                 {**definition, "read_paths": [str(plugin.path), *definition.get("read_paths", [])],
                  "_plugin": plugin.name, "_plugin_enabled": config.plugin_enabled(plugin.name)})
+    from .mcp_config import normalize
+    for name, definition in servers.items():
+        try:
+            servers[name] = normalize(definition)
+        except ValueError:
+            # Keep invalid entries visible so they can be removed or diagnosed.
+            pass
     return servers
 
 

@@ -49,6 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--permission-proxy", metavar="PORT:TOKEN",
                         help=argparse.SUPPRESS)
     parser.add_argument("--attachment-reader", metavar="SESSION", help=argparse.SUPPRESS)
+    parser.add_argument("--mcp-proxy", metavar="NAME", help=argparse.SUPPRESS)
     parser.add_argument("-v", "--version", action="version",
                         version=f"eirene {__version__}")
     return parser
@@ -101,6 +102,9 @@ def open_session(sandbox: Path, resume: str) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
+    if args.mcp_proxy:
+        from .core.mcp_proxy import proxy_main
+        return proxy_main(args.mcp_proxy)
     if args.permission_proxy:
         from .providers.permission_proxy import proxy_main
         port, _, token = args.permission_proxy.partition(":")

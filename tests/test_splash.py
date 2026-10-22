@@ -137,7 +137,7 @@ async def test_local_status_shows_model_without_profile_tier(workdir):
         app.agent.provider_key = "ollama-local"
         app.agent.model = "qwen:3b"
         app.refresh_mode_line()
-        assert "ollama-local qwen:3b" in content(app.mode_line)
+        assert "Ollama(qwen:3b)" in content(app.mode_line)
         assert "compact" not in content(app.mode_line)
     finally:
         await context.__aexit__(None, None, None)

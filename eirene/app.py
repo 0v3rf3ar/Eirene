@@ -316,6 +316,8 @@ class Eirene(App):
                     block.flush()
                     shown += 1
                 for call in message.get("tool_calls") or []:
+                    if call.get("name") == "poll_process":
+                        continue
                     attachment_id = str(call.get("attachment_id") or
                         ((call.get("arguments") or {}).get("attachment_id")
                          if call.get("name") == "read_attachment" else "") or "")
@@ -584,7 +586,7 @@ class Eirene(App):
     async def ask_choice(self, title: str, options: list[tuple], *,
                          on_highlight=None, selected: str = "",
                          skill_popup: bool = False, right_hint: bool = False,
-                         popup: bool = False) -> str | None:
+                         popup: bool = False, footer: str = "") -> str | None:
         """Pick one option from a list, opening on the one already in use."""
         try:
             if skill_popup or popup:
@@ -607,7 +609,7 @@ class Eirene(App):
             self.picker.right_hint = right_hint
             return await self.picker.choose(title, options,
                                             on_highlight=on_highlight,
-                                            selected=selected)
+                                            selected=selected, footer=footer)
         finally:
             self.prompt.focus()
 
@@ -648,17 +650,21 @@ class Eirene(App):
         if native_change and preview:
             if not any(card.diff_text == preview for card in self.transcript.query(ChangeBlock)):
                 await self.push(ChangeBlock(label, preview, self._change_action(label)))
+        repeated_name = (label == name or (name.startswith("mcp__") and
+            label.replace("__", "_").casefold() == name.replace("__", "_").casefold()))
+        title = name if not label or repeated_name else f"{name} {label}"
+        if name == "run_command":
+            title = f"run {label}"
+        elif name == "request_full_access":
+            title = "allow full host access for this response"
         if preview and name not in ("run_command",) + agent_mod.CHANGE_TOOLS:
             if not native_change:
-                await self.push(DiffBlock(f"{name} {label}", preview))
-        title = f"run {label}" if name == "run_command" else f"{name} {label}"
-        if name == "request_full_access":
-            title = "allow full host access for this response"
+                await self.push(DiffBlock(title, preview))
         companion = self.query_one(Companion)
         companion.begin_question()
         try:
             return await self.permission.ask(
-                title, reason, edits=name in agent_mod.CHANGE_TOOLS)
+                title, reason, edits=name in agent_mod.CHANGE_TOOLS, tool=name)
         finally:
             companion.end_question()
             self.prompt.focus()
@@ -685,6 +691,9 @@ class Eirene(App):
             if files:
                 options["files"] = files
             async for event in self.agent.run(text, record_text=record_text, **options):
+                if isinstance(event, (agent_mod.ToolStarted, agent_mod.ToolPreview,
+                                      agent_mod.ToolFinished)) and event.name == "poll_process":
+                    continue
                 if isinstance(event, agent_mod.Answer):
                     if event.text:
                         self.status.mark_activity()

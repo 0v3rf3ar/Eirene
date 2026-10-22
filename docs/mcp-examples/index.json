@@ -1,0 +1,242 @@
+[
+  {
+    "id": "cloudflare",
+    "name": "Cloudflare",
+    "file": "cloudflare.json",
+    "source": "https://github.com/cloudflare/mcp",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Cloudflare account and browser consent.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "burpsuite",
+    "name": "Burp Suite",
+    "file": "burpsuite.json",
+    "source": "https://github.com/PortSwigger/mcp-server",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Running Burp MCP extension; use the endpoint and transport shown by your installed extension.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "google-workspace",
+    "name": "Google Workspace",
+    "file": "google-workspace.json",
+    "source": "https://developers.google.com/workspace/guides/configure-mcp-servers",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Google Workspace developer preview, enabled APIs, agent-enabled OAuth client, registered callback, and organization consent. This example connects Gmail; products have separate URLs.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "ahrefs",
+    "name": "Ahrefs",
+    "file": "ahrefs.json",
+    "source": "https://docs.ahrefs.com/en/mcp/docs/introduction",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Paid Ahrefs plan and OAuth consent. The former @ahrefs/mcp package is archived and uses different API keys.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "redis",
+    "name": "Redis",
+    "file": "redis.json",
+    "source": "https://github.com/redis/mcp-redis",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "uv and a reachable Redis URL; credentials/TLS settings where required.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "mongodb",
+    "name": "MongoDB",
+    "file": "mongodb.json",
+    "source": "https://www.mongodb.com/docs/mcp-server/local-mcp/configuration/options/",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Node.js and a reachable MongoDB deployment with appropriate database credentials.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "elasticsearch",
+    "name": "Elasticsearch",
+    "file": "elasticsearch.json",
+    "source": "https://github.com/elastic/mcp-server-elasticsearch",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Docker daemon access and Elasticsearch URL/API key.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "puppeteer",
+    "name": "Puppeteer",
+    "file": "puppeteer.json",
+    "source": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/puppeteer",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Archived reference implementation; Node.js, compatible Chrome/Chromium, and browser system libraries. Prefer a maintained browser server for new deployments.",
+    "validation": "Import/runtime regression tests and a real browser tool call passed on Linux with installed Chromium and Node.js. Puppeteer test used its documented headless launch option. This does not validate all tools or all platforms."
+  },
+  {
+    "id": "webflow",
+    "name": "Webflow",
+    "file": "webflow.json",
+    "source": "https://github.com/webflow/mcp-server",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Webflow account and OAuth consent; Designer operations also require its bridge app in the open site.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "microsoft365",
+    "name": "Microsoft 365",
+    "file": "microsoft365.json",
+    "source": "https://github.com/microsoft/work-iq",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Node.js, Microsoft 365 Copilot access, tenant administrator consent, and Work IQ sign-in. This is Work IQ access, not a promise of every Graph operation.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "x-twitter",
+    "name": "X (Twitter)",
+    "file": "x-twitter.json",
+    "source": "https://github.com/isteamhq/mcp-servers",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Community implementation; Node.js and an X developer app with API access and OAuth 1.0a keys/tokens. No official X MCP endpoint was verified.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "github",
+    "name": "GitHub",
+    "file": "github.json",
+    "source": "https://github.com/github/github-mcp-server",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "GitHub PAT with required permissions and organization approval where applicable.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "docker",
+    "name": "Docker MCP Gateway",
+    "file": "docker.json",
+    "source": "https://docs.docker.com/ai/mcp-catalog-and-toolkit/get-started/",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Installed Docker MCP CLI plugin, running Docker daemon, and a configured gateway profile. The gateway exposes the servers in that profile.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "google-drive",
+    "name": "Google Drive",
+    "file": "google-drive.json",
+    "source": "https://developers.google.com/workspace/drive/api/guides/configure-mcp-server",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Workspace developer preview, enabled Drive API, agent-enabled OAuth client and consent. Register this callback with the OAuth client.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "terraform",
+    "name": "Terraform",
+    "file": "terraform.json",
+    "source": "https://developer.hashicorp.com/terraform/mcp-server/deploy/local",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Docker daemon. A token and address are needed for private HCP Terraform/Enterprise operations.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "kubernetes",
+    "name": "Kubernetes",
+    "file": "kubernetes.json",
+    "source": "https://github.com/containers/kubernetes-mcp-server",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Node.js and valid kubeconfig/cluster credentials. External exec credential helpers must be installed and accessible.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "sentry",
+    "name": "Sentry",
+    "file": "sentry.json",
+    "source": "https://mcp.sentry.dev/",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Sentry account and OAuth consent; optionally scope the URL to your organization/project.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "chrome-devtools",
+    "name": "Chrome DevTools",
+    "file": "chrome-devtools.json",
+    "source": "https://github.com/ChromeDevTools/chrome-devtools-mcp",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Supported Node.js LTS, Chrome/Chromium and its OS dependencies. Browser startup is separate from MCP discovery.",
+    "validation": "Import/runtime regression tests and a real browser tool call passed on Linux with installed Chromium and Node.js. Puppeteer test used its documented headless launch option. This does not validate all tools or all platforms."
+  },
+  {
+    "id": "context7",
+    "name": "Context7",
+    "file": "context7.json",
+    "source": "https://github.com/upstash/context7",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Context7 API key for the documented authenticated endpoint.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "figma",
+    "name": "Figma",
+    "file": "figma.json",
+    "source": "https://developers.figma.com/docs/figma-mcp-server/remote-server-installation/",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Figma account, OAuth consent, file access and applicable plan/rate limits.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "notion",
+    "name": "Notion",
+    "file": "notion.json",
+    "source": "https://developers.notion.com/guides/mcp/get-started-with-mcp",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Notion OAuth consent and access to the chosen workspace/pages.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "slack",
+    "name": "Slack",
+    "file": "slack.json",
+    "source": "https://docs.slack.dev/ai/slack-mcp-server/",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Registered internal or Marketplace Slack app; matching callback, app credentials, user scopes, and workspace approval. Slack does not support dynamic client registration.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "postgresql",
+    "name": "PostgreSQL",
+    "file": "postgresql.json",
+    "source": "https://github.com/crystaldba/postgres-mcp",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Community Postgres MCP Pro; uv and reachable PostgreSQL credentials. Restricted mode is read-only. The old reference server is archived.",
+    "validation": "configuration and runtime regression fixtures; live account operations not verified"
+  },
+  {
+    "id": "playwright",
+    "name": "Playwright",
+    "file": "playwright.json",
+    "source": "https://github.com/microsoft/playwright-mcp",
+    "reviewed": "2026-10-20",
+    "format": "documented shape; credential placeholders adapted",
+    "prerequisites": "Supported Node.js and a working browser with OS dependencies; browser_install may be needed on first use.",
+    "validation": "Import/runtime regression tests and a real browser tool call passed on Linux with installed Chromium and Node.js. Puppeteer test used its documented headless launch option. This does not validate all tools or all platforms."
+  }
+]

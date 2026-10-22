@@ -42,10 +42,14 @@ async def test_mcp_picker_enables_persists_and_disables_without_hook_trust(confi
     app = app_for(config, ['omniroute__gateway', ''])
     await dispatch(app, '/mcp')
     first = app.ask_choice.call_args_list[0].args[1]
-    assert {row[1] for row in first} == {'off  docs', 'off  omniroute / gateway', 'done'}
+    assert {row[1] for row in first if not row[0].startswith(':')} == {'docs (off)', 'omniroute / gateway (off)'}
+    assert {row[0] for row in first if row[0].startswith(':')} == {':add', ':manage'}
+    assert app.ask_choice.call_args.kwargs['footer'] == 'Esc back to menu'
+    assert first[0][2:] == ('', '')
+    assert 'docs-mcp' not in str(first)
     assert set(plugins.merged_mcp_servers(Config.load())) == {'omniroute__gateway'}
     assert config.get('plugin_trust', {}) == {}
-    assert app.ask_choice.call_args.args[1][1][1] == 'on  omniroute / gateway'
+    assert app.ask_choice.call_args.args[1][1][1] == 'omniroute / gateway (on)'
     app.agent.mcp.close.assert_awaited_once()
     app.ask_choice = AsyncMock(side_effect=['omniroute__gateway', ''])
     await dispatch(app, '/mcp')
@@ -59,7 +63,7 @@ async def test_disabled_plugin_mcp_cannot_be_enabled(config):
     app = app_for(config, ['omniroute__gateway', ''])
     await dispatch(app, '/mcp')
     assert config.get('mcp_enabled') == {}
-    assert 'plugin disabled' in app.ask_choice.call_args.args[1][0][2]
+    assert 'plugin disabled' in app.ask_choice.call_args.args[1][0][3]
     app.agent.mcp.close.assert_not_awaited()
 
 
@@ -73,12 +77,13 @@ async def test_plugin_revocation_clears_mcp_grant(config, action):
 
 
 async def test_empty_mcp_list_and_active_turn_do_not_prompt(config):
-    app = app_for(config, [])
+    app = app_for(config, [''])
     await dispatch(app, '/mcp')
+    assert app.ask_choice.call_args.args[1][0][0] == ':add'
     install('omniroute')
     app.turn = SimpleNamespace(done=lambda: False)
     await dispatch(app, '/mcp')
-    app.ask_choice.assert_not_awaited()
+    assert app.ask_choice.await_count == 1
     assert plugins.merged_mcp_servers(config) == {}
 
 
@@ -88,3 +93,38 @@ async def test_first_launch_does_not_install_default_skills(workdir):
     async with app.run_test():
         assert skills.discover() == []
         assert app.agent.skills == []
+
+
+async def test_mcp_footer_keeps_height_and_escape_closes(workdir, config):
+    from eirene.app import Eirene
+    from test_tui import content
+
+    config.set('mcp_servers', {
+        'plain': {'command': ['hidden-command']},
+        'network': {'command': ['also-hidden'], 'network': True,
+                    'write_paths': ['/a/very/long/path' * 20]},
+    })
+    config.save()
+    app = Eirene(workdir)
+    async with app.run_test(size=(80, 30)) as pilot:
+        worker = app.run_worker(dispatch(app, '/mcp'))
+        await pilot.pause()
+        picker = app.picker
+        height = picker.size.height
+        assert 'Esc back to menu' in content(picker)
+        assert 'done' not in content(picker)
+        assert 'hidden-command' not in content(picker)
+        await pilot.press('down')
+        await pilot.pause()
+        assert picker.size.height == height
+        assert 'Esc back to menu · network access' in content(picker)
+        assert '…' in content(picker)
+        await pilot.press('escape')
+        await worker.wait()
+        assert not picker.waiting
+
+        worker = app.run_worker(app.ask_choice('Another menu', [('x', 'item', '', 'details')]))
+        await pilot.pause()
+        assert 'Esc back to menu' not in content(picker)
+        await pilot.press('escape')
+        await worker.wait()

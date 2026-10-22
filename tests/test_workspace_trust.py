@@ -5,7 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from eirene.ui.picker import Picker
-from eirene.ui.trust import TrustBackdrop, WorkspaceTrust, confirm_workspace_trust
+from eirene.ui.splash import pixel_logo
+from eirene.ui.trust import TrustPortrait, WorkspaceTrust, confirm_workspace_trust
 
 
 @pytest.mark.parametrize("keys", [("down", "enter"), ("escape",), ("ctrl+c",), ("ctrl+d",)])
@@ -27,10 +28,12 @@ async def test_explicit_trust_continues(workdir):
         await pilot.pause()
         explanation = str(app.query_one("#trust-explanation").render())
         assert str(workdir) in explanation
-        backdrop = app.query_one(TrustBackdrop)
-        assert "▀" in str(backdrop.render())
-        assert backdrop.styles.opacity == 0.12
-        assert backdrop.styles.layer == "watermark"
+        portrait = app.query_one(TrustPortrait)
+        expected = pixel_logo(max(1, portrait.size.width - 4),
+                              max(1, portrait.size.height), transparent=True)
+        assert str(portrait.render()) == expected.plain
+        assert portrait.styles.opacity == 1
+        assert portrait.region.bottom <= app.query_one("#trust-explanation").region.y
         await pilot.press("enter")
         await pilot.pause()
     assert app.return_value is True

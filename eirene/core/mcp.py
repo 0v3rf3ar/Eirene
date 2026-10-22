@@ -65,7 +65,8 @@ class MCPClient:
             command = isolation.command(shlex.join(command), cwd, backend=backend,
                 network=not self.definition.get("_isolate_network", True),
                 read_paths=self.definition.get("read_paths", []),
-                write_paths=self.definition.get("write_paths", []))
+                write_paths=self.definition.get("write_paths", []),
+                home_path=Path(self.definition['_runtime_home']) if self.definition.get('_runtime_home') else None)
             env = isolation.environment(configured_env if isinstance(configured_env, dict) else {})
         try:
             self.process = await asyncio.create_subprocess_exec(
@@ -223,10 +224,11 @@ class MCPManager:
             return
         self.ready = True
         for name, definition in self.definitions.items():
-            client = MCPClient(str(name), definition, self.sandbox)
             try:
+                from .mcp_remote import make_client
+                client = make_client(str(name), definition, self.sandbox)
                 tools = await client.connect()
-            except ToolError as exc:
+            except (ToolError, ValueError) as exc:
                 self.errors.append(str(exc))
                 continue
             self.clients[str(name)] = client

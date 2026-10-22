@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "slack": {
+      "type": "http",
+      "url": "https://mcp.slack.com/mcp",
+      "oauth": {
+        "client_id": "${input:slack_client_id}",
+        "client_secret": "${input:slack_client_secret}",
+        "redirect_uri": "http://127.0.0.1:8767/callback"
+      }
+    }
+  }
+}

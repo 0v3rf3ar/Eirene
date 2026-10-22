@@ -53,6 +53,8 @@ hiddenimports += [
 
 hiddenimports += collect_submodules("eirene.commands")
 hiddenimports += collect_submodules("keyring.backends")
+hiddenimports += collect_submodules("mcp.client")
+hiddenimports += collect_submodules("mcp.shared")
 
 # Python 3.12+ gets distutils from setuptools. PyInstaller aliases those modules
 # while analyzing Windows dependencies, so neither package can be excluded.

@@ -13,7 +13,8 @@ from ..core.errors import ToolError
 
 def command(command: str, root: Path, *, backend: str = "auto",
             network: bool = False, read_paths=(), write_paths=(),
-            read_only: bool = False, launch_argv: list[str] | None = None, workdir: Path | None = None) -> list[str]:
+            read_only: bool = False, launch_argv: list[str] | None = None, workdir: Path | None = None,
+            home_path: Path | None = None) -> list[str]:
     from .shell import posix_argv
     launch_argv = launch_argv or posix_argv(command)
     root = root.resolve()
@@ -25,6 +26,10 @@ def command(command: str, root: Path, *, backend: str = "auto",
         return launch_argv
     reads = [(root / Path(p).expanduser()).resolve() for p in read_paths]
     writes = [(root / Path(p).expanduser()).resolve() for p in write_paths]
+    if home_path:
+        home_path = home_path.resolve()
+        if not any(home_path == mount or mount in home_path.parents for mount in [root, *writes]):
+            raise ToolError('persistent tool home must be inside a granted writable directory')
     if read_only and writes:
         raise ToolError("read-only execution cannot grant writable paths")
     for path in reads + writes:
@@ -76,7 +81,7 @@ def command(command: str, root: Path, *, backend: str = "auto",
                  "--dir", "/tmp/eirene-home"]
         for path, writable in mounts:
             argv += ["--bind" if writable else "--ro-bind", str(path), str(path)]
-        argv += ["--setenv", "HOME", "/tmp/eirene-home",
+        argv += ["--setenv", "HOME", str(home_path) if home_path else "/tmp/eirene-home",
                  "--setenv", "TMPDIR", "/tmp", "--chdir", str(workdir or root)]
         return argv + launch_argv
     raise ToolError(f"unknown isolation backend: {backend}")

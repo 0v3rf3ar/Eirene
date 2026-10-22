@@ -132,7 +132,7 @@ See [specialists](specialists.md) and [MCP](mcp.md).
 | Specialist agent profiles | Profile commands and independent task passes where supported. |
 | Session-start and prompt-submit hooks | Trusted synchronous command hooks run under the configured execution policy. |
 | Stdio MCP servers | Explicit server activation for API or native CLI connections. |
-| HTTP/SSE MCP and OAuth/app connectors | Not imported by this bundle installer. |
+| HTTP/SSE MCP | Imported; use `/mcp` to enable and `/mcp login NAME` for guided OAuth, token, or header authentication. |
 | Native status lines, LSP declarations, output styles, and other hook events | Not emulated; inspection reports compatibility limits. |
 
 For a plugin's full workflow and requirements, use its individual guide from the

@@ -100,15 +100,12 @@ def normalize(root: Path, fallback: str) -> dict:
     for server, definition in servers.items():
         if not isinstance(definition, dict):
             raise ValueError(f"invalid MCP server {server}")
-        command = definition.get("command")
-        args = definition.get("args", [])
-        if isinstance(command, str):
-            command = [command]
-        if not isinstance(command, list) or not command or not isinstance(args, list) or not all(isinstance(x, str) for x in command + args):
-            warnings.append(f"MCP {server}: only stdio servers with command/args are supported")
+        from .mcp_config import normalize as normalize_mcp
+        try:
+            mcp[str(server)] = normalize_mcp(definition)
+        except ValueError as exc:
+            warnings.append(f"MCP {server}: {exc}")
             continue
-        mcp[str(server)] = {**definition, "command": command + args}
-        mcp[str(server)].pop("args", None)
     for feature in ("lspServers", "outputStyles"):
         if body.get(feature):
             warnings.append(f"{feature} requires a native host and is not imported")

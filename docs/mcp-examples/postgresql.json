@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "postgresql": {
+      "command": "uvx",
+      "args": [
+        "postgres-mcp",
+        "--access-mode=restricted"
+      ],
+      "env": {
+        "DATABASE_URI": "${input:database_uri}"
+      }
+    }
+  }
+}

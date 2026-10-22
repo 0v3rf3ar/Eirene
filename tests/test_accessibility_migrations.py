@@ -39,9 +39,9 @@ def test_windows_emoji_icons_use_consistent_presentation_and_width(monkeypatch):
     assert art.icon("manual") == Mode.MANUAL.icon == "⏸\ufe0f"
     assert Mode.AUTO.icon == "⚡\ufe0f"
     for name in ("web_search", "web_fetch", "WebSearch", "WebFetch"):
-        assert art.tool_icon(name) == "🌐\ufe0f"
+        assert art.tool_icon(name) == "ᯤ"
     # A following border must start after both cells of a color emoji.
-    for glyph in (Mode.MANUAL.icon, Mode.AUTO.icon, art.tool_icon("web_search")):
+    for glyph in (Mode.MANUAL.icon, Mode.AUTO.icon):
         assert cell_len(glyph) == 2
         text = Text(glyph + " text")
         text.truncate(8, pad=True)
