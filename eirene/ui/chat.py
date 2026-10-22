@@ -754,7 +754,8 @@ class Transcript(VerticalScroll):
         return super().scroll_home(*args, **kwargs)
 
     def _schedule_follow(self) -> None:
-        self._follow_token += 1
+        # New chunks may arrive before the previous frame's callback runs.
+        # Only navigation should cancel an already queued follow request.
         token = self._follow_token
         self.call_after_refresh(lambda: self._follow_bottom(token))
 

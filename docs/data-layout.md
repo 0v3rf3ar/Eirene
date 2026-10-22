@@ -150,9 +150,8 @@ Eirene/
 ├── skills/                   example Markdown guidance in the source distribution
 ├── img/                      repository images
 ├── scripts/                  packaging, release metadata and benchmark helpers
-├── pyproject.toml            package metadata and tool configuration
-├── requirements.txt          source/build runtime dependencies
-├── requirements-dev.txt      testing and build tools
+├── pyproject.toml            package metadata, dependency groups and tool configuration
+├── uv.lock                   resolved runtime, development and build dependencies
 ├── build.py                  standalone build entry point
 ├── install.sh                POSIX release installer
 ├── install.ps1               PowerShell release installer

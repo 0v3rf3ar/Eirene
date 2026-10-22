@@ -601,6 +601,35 @@ async def test_streaming_still_follows_when_reader_is_at_bottom(workdir):
         await context.__aexit__(None, None, None)
 
 
+async def test_new_stream_chunks_do_not_cancel_pending_follow(workdir, monkeypatch):
+    app, pilot, context = await start(workdir, size=(70, 24))
+    try:
+        app._flusher.pause()
+        answer = AnswerBlock()
+        answer.feed("first line")
+        answer.flush()
+        await app.push(answer, live=True)
+        await pilot.pause()
+
+        # Model a busy renderer: the next chunk arrives before the previous
+        # frame's follow callback is serviced.
+        pending = []
+        monkeypatch.setattr(app.transcript, "call_after_refresh", pending.append)
+        answer.feed("\n" + "growing answer\n" * 30)
+        app.transcript.flush_live()
+        follow_previous_frame = pending[-1]
+        answer.feed("\n" + "more streamed text\n" * 15)
+        app.transcript.flush_live()
+        answer.flush()
+        await pilot.pause()
+
+        assert not app.transcript.is_vertical_scroll_end
+        follow_previous_frame()
+        assert app.transcript.is_vertical_scroll_end
+    finally:
+        await context.__aexit__(None, None, None)
+
+
 async def test_streaming_reattaches_after_reader_returns_to_bottom(workdir):
     app, pilot, context = await start(workdir, size=(70, 24))
     try:

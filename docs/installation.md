@@ -122,17 +122,38 @@ terminal or follow the installer's printed recovery instructions. See
 
 ## Running the Python source tree
 
-The package requires Python 3.11 or newer. From a checkout, create an isolated
-Python environment, install the package, then launch its module:
+The package requires Python 3.11 or newer and [uv](https://docs.astral.sh/uv/getting-started/installation/).
+From a checkout, sync the locked dependencies and launch the application:
 
 ```sh
-python3 -m venv .venv
-.venv/bin/python -m pip install -e .
-.venv/bin/python -m eirene -C /absolute/path/to/project
+uv sync --locked
+uv run --locked eirene -C /absolute/path/to/project
 ```
 
-On Windows, use `py -3 -m venv .venv` and `.venv/Scripts/python.exe` for the
-remaining commands. Runtime dependencies are declared in `pyproject.toml`.
+These commands also work on Windows. uv manages the local `.venv` automatically.
+Dependencies are declared in `pyproject.toml` and resolved versions are saved in
+`uv.lock`. The default sync includes development and build tools. Use
+`uv sync --locked --no-dev` for runtime dependencies only.
+
+For development and standalone builds:
+
+```sh
+uv run --locked pytest
+uv run --locked ruff check .
+uv run --locked mypy
+uv run --locked python build.py --no-install
+```
+
+`python build.py` also syncs the uv environment before running tests and building.
+CI installs Bubblewrap for Linux sandbox tests, then runs lint, type checks,
+and the full test suite on Python 3.14 before
+building native binaries for Linux AMD64/ARM64, macOS Apple Silicon, and Windows
+AMD64. Packaging uses Python 3.14 with an explicit interpreter check and
+`uv sync --locked --no-dev --group build`; each executable and extracted release
+archive is smoke-tested before upload.
+After changing dependencies with `uv add` or `uv add --dev`, commit both
+`pyproject.toml` and `uv.lock`.
+
 A standalone release bundles its Python runtime; a source installation uses the
 interpreter/environment you chose. Neither supplies project compilers or MCP
 server dependencies. `/update` does not update an editable Python checkout.

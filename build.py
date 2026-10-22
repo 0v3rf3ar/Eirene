@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Set up the venv, run the tests, build the binary."""
+"""Sync the uv environment, run the tests, build the binary."""
 
 from __future__ import annotations
 
@@ -13,7 +13,9 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-VENV = ROOT / (".venv-build-" + platform.system().lower() + "-" + platform.machine().lower())
+VENV = Path(os.environ.get("UV_PROJECT_ENVIRONMENT", ROOT / ".venv"))
+if not VENV.is_absolute():
+    VENV = ROOT / VENV
 SPEC = ROOT / "build" / "eirene.spec"
 DIST = ROOT / "dist"
 WORK = ROOT / "build" / "work"
@@ -31,17 +33,12 @@ def run(argv: list[str], **kwargs) -> int:
 
 
 def ensure_venv() -> Path:
-    python = venv_python()
-    if not python.exists():
-        print(f"creating {VENV}", flush=True)
-        if run([sys.executable, "-m", "venv", str(VENV)]) != 0:
-            fail("could not create the virtualenv")
-    if run([python, "-m", "pip", "install", "-q", "--upgrade", "pip"]) != 0:
-        print("warning: could not upgrade pip", flush=True)
-    if run([python, "-m", "pip", "install", "-q", "-r",
-            str(ROOT / "requirements-dev.txt")]) != 0:
-        fail("could not install the dependencies")
-    return python
+    uv = shutil.which("uv")
+    if not uv:
+        fail("uv is required; install it from https://docs.astral.sh/uv/getting-started/installation/")
+    if run([uv, "sync", "--locked", "--group", "build", "--python", sys.executable]) != 0:
+        fail("could not sync the dependencies")
+    return venv_python()
 
 
 def test(python: Path) -> None:
@@ -120,7 +117,11 @@ def main() -> int:
         fail("Python 3.11 or newer is required")
     print(f"eirene build on {platform.system()} {platform.machine()} "
           f"with python {platform.python_version()}", flush=True)
-    python = Path(sys.executable) if args.no_install else ensure_venv()
+    if not args.no_install:
+        python = ensure_venv()
+        # Packaging and its smoke checks must run in the same synced environment.
+        return run([python, ROOT / "build.py", "--no-install", *sys.argv[1:]])
+    python = Path(sys.executable)
 
     if not args.skip_tests:
         test(python)

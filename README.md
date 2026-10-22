@@ -70,5 +70,12 @@ terminal after installation, run `eirene` from your project directory, and use
 [Documentation](docs/README.md) · [Installation options](docs/installation.md) ·
 [Release downloads](https://github.com/0v3rf3ar/Eirene/releases)
 
+To run from a source checkout with [uv](https://docs.astral.sh/uv/):
+
+```sh
+uv sync --locked
+uv run --locked eirene
+```
+
 [Configuration reference](docs/config-file.md) · [Data and source layout](docs/data-layout.md) ·
 [Standalone MCP setup](docs/mcp.md#declare-a-standalone-server)

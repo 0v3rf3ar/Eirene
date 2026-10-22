@@ -1,5 +1,8 @@
 """Interactive popup navigation and catalog installation workflows."""
 import asyncio
+import time
+
+import pytest
 
 from textual.widgets import Tree
 
@@ -21,7 +24,24 @@ def child_of(parent, label):
     return child
 
 
-async def test_tree_popup_opens_child_and_mother(workdir):
+async def wait_for_popup(app, pilot, screen_type):
+    # pilot.pause() waits for UI messages, not work running in a background thread.
+    async with asyncio.timeout(5):
+        while not isinstance(app.screen, screen_type) or not app.screen.is_mounted:
+            await asyncio.sleep(0.01)
+    await pilot.pause()
+
+
+@pytest.mark.parametrize('load_delay', [0, 0.1])
+async def test_tree_popup_opens_child_and_mother(workdir, monkeypatch, load_delay):
+    from eirene.commands import subagents
+    original = subagents.session_tree
+
+    def load_tree(*args):
+        time.sleep(load_delay)
+        return original(*args)
+
+    monkeypatch.setattr(subagents, 'session_tree', load_tree)
     app = Eirene(workdir)
     async with app.run_test(size=(110,36)) as pilot:
         await pilot.pause()
@@ -30,7 +50,7 @@ async def test_tree_popup_opens_child_and_mother(workdir):
         first = child_of(mother,'Explorer')
         second = child_of(mother,'Reviewer')
         task = asyncio.create_task(dispatch(app,'/subagents'))
-        await pilot.pause()
+        await wait_for_popup(app, pilot, SessionTreeScreen)
         assert isinstance(app.screen,SessionTreeScreen)
         tree = app.screen.query_one(Tree)
         assert len(tree.root.children) == 2
@@ -42,7 +62,7 @@ async def test_tree_popup_opens_child_and_mother(workdir):
         assert app.session.id == first.id
         assert any(m.get('content') == 'Inspected the project' for m in app.session.messages)
         task = asyncio.create_task(dispatch(app,'/subagents'))
-        await pilot.pause()
+        await wait_for_popup(app, pilot, SessionTreeScreen)
         assert app.screen.current == first.id
         assert second.id in app.screen.nodes
         await pilot.press('m')
@@ -59,7 +79,7 @@ async def test_tree_escape_preserves_session_and_active_work(workdir):
         child_of(mother,'Reviewer')
         app.turn = asyncio.create_task(asyncio.Event().wait())
         task = asyncio.create_task(dispatch(app,'/subagents'))
-        await pilot.pause()
+        await wait_for_popup(app, pilot, SessionTreeScreen)
         assert isinstance(app.screen, SessionTreeScreen)
         assert not app.screen.allow_switch
         await pilot.press('enter','escape')
@@ -93,7 +113,7 @@ async def test_plugin_catalog_popup_install_and_toggle(workdir, tmp_path, monkey
         picker=app.screen.query_one('Picker')
         picker.index=next(i for i,row in enumerate(picker.options) if row[0]=='install:ponytail')
         await pilot.press('enter')
-        await pilot.pause()
+        await wait_for_popup(app, pilot, ChoicePopup)
         assert sources == ['ponytail']
         assert isinstance(app.screen,ChoicePopup)
         row=next(row for row in app.screen.options if row[0]=='installed:ponytail')
