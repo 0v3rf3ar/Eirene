@@ -36,6 +36,9 @@ def main():
     python_version = f'{sys.version_info.major}.{sys.version_info.minor}'
     if python_version != '3.14':
         raise SystemExit('This beta targets Termux Python 3.14')
+    # Termux targets Android API 24; its container cannot infer this from an
+    # Android system runtime, so maturin needs an explicit wheel platform level.
+    os.environ.setdefault('ANDROID_API_LEVEL', '24')
     lock = tomllib.loads((ROOT / 'uv.lock').read_text())
     core = next(p for p in lock['package'] if p['name'] == 'pydantic-core')
     output = Path(sys.argv[1]).resolve()
