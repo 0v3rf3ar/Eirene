@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-import sys
 import unicodedata
 
 _SEQUENCES = re.compile(
@@ -12,11 +11,16 @@ _SEQUENCES = re.compile(
     r"|\x1b[@-_]", re.DOTALL)
 
 
+_TEXT_ICONS = {
+    "⏸": "Ⅱ", "⏹": "■", "⚡": "↯", "⚠": "!", "⚙": "⌘",
+    "☑": "≡", "☷": "≡", "↗": "→", "🌐": "ᯤ",
+}
+
+
 def terminal_icon(glyph: str) -> str:
-    """Use emoji presentation consistently for emoji icons on Windows."""
-    if sys.platform == "win32":
-        return glyph.rstrip("\ufe0e\ufe0f") + "\ufe0f"
-    return glyph
+    """Use ordinary text glyphs, without depending on terminal emoji fonts."""
+    glyph = glyph.replace("\ufe0e", "").replace("\ufe0f", "")
+    return "".join(_TEXT_ICONS.get(char, char) for char in glyph)
 
 
 def safe_text(text: str, *, tabs: bool = True) -> str:

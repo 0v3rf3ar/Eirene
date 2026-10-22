@@ -4218,3 +4218,44 @@ async def test_live_background_completion_updates_original_card(workdir, python_
         assert card._Static__content.get_style_at_offset(app.console, 0).color.name == colour
     finally:
         await context.__aexit__(None, None, None)
+
+
+async def test_prompt_navigation_updates_before_deferred_refresh(workdir, monkeypatch):
+    app, pilot, context = await start(workdir, size=(70, 24))
+    try:
+        app._flusher.pause()
+        prompts = []
+        for index in range(8):
+            prompts.append(await app.push(UserBlock(f'prompt {index}')))
+            await app.push(NoticeBlock('response line\n' * 6))
+        await pilot.pause()
+        pending = []
+        monkeypatch.setattr(app.transcript, 'call_after_refresh',
+                            lambda callback, *args, **kwargs: pending.append(lambda: callback(*args, **kwargs)))
+        app.transcript.scroll_to(y=prompts[2].virtual_region.y, animate=False, immediate=True)
+        assert app.query_one(PromptNavigator).target is prompts[2]
+        app.transcript.scroll_to(y=prompts[4].virtual_region.y, animate=False, immediate=True)
+        assert app.query_one(PromptNavigator).target is prompts[4]
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_prompt_jump_cancels_follow_before_deferred_scroll(workdir, monkeypatch):
+    app, pilot, context = await start(workdir, size=(70, 24))
+    try:
+        app._flusher.pause()
+        prompt = await app.push(UserBlock('earlier prompt'))
+        await app.push(NoticeBlock('response line\n' * 40))
+        await pilot.pause()
+        pending = []
+        monkeypatch.setattr(app.transcript, 'call_after_refresh',
+                            lambda callback, *args, **kwargs: pending.append(lambda: callback(*args, **kwargs)))
+        app.transcript._schedule_follow()
+        follow = pending[0]
+        app.transcript.scroll_to_widget(prompt, top=True, animate=False)
+        scrolled_to_end = []
+        monkeypatch.setattr(app.transcript, 'scroll_end', lambda **kwargs: scrolled_to_end.append(True))
+        follow()
+        assert not scrolled_to_end
+    finally:
+        await context.__aexit__(None, None, None)

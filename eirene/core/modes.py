@@ -24,7 +24,7 @@ class Mode(str, Enum):
     @property
     def icon(self) -> str:
         glyph = {"auto": "⚡︎", "manual": "⏸", "plan": "☷"}[self.value]
-        return glyph if self is Mode.PLAN else terminal_icon(glyph)
+        return terminal_icon(glyph)
 
     @property
     def blurb(self) -> str:

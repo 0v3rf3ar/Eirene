@@ -58,12 +58,13 @@ ICONS = {
     "up": "\u2191",
     "auto": "↯",
     "manual": "\u23f8",
-    "plan": "☑", "skill": "⚙", "task": "⚑", "link": "↗",
+    "plan": "☑", "skill": "✧", "task": "⚑", "link": "↗",
     "dot": "\u00b7",
     "arrow": "\u2192",
     "bullet": "\u2022",
     "corner": "\u2514",
 }
+ICONS = {name: terminal_icon(glyph) for name, glyph in ICONS.items()}
 ASCII_ICONS = {
     "prompt": ">", "user": "U", "agent": "A", "think": "?",
     "file": "F", "write": "W", "edit": "E", "read": "R", "dir": "D",
@@ -147,7 +148,7 @@ TIPS = [
 def icon(name: str) -> str:
     table = ASCII_ICONS if ACCESSIBLE else ICONS
     glyph = table.get(name, table["dot"])
-    return terminal_icon(glyph) if name == "manual" and not ACCESSIBLE else glyph
+    return terminal_icon(glyph)
 
 
 def permission_icon(name: str) -> str:
@@ -178,7 +179,7 @@ def tool_icon(name: str) -> str:
         return {"read_file": "R", "write_file": "W", "edit_file": "E",
                 "list_dir": "D", "glob": "S", "run_command": "$"}.get(canonical, "i")
     glyph = TOOL_ICONS.get(canonical, ICONS["info"])
-    return terminal_icon(glyph) if glyph == "🌐︎" else glyph
+    return terminal_icon(glyph)
 
 
 def file_icon(path: str) -> str:

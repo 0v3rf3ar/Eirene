@@ -67,14 +67,12 @@ def test_each_mode_describes_itself():
         assert mode.label.endswith("mode")
 
 
-@pytest.mark.parametrize("platform,expected", [
-    ("win32", "⏸\ufe0f"), ("linux", "⏸"), ("darwin", "⏸"),
-])
-def test_manual_icon_presentation_is_platform_specific(monkeypatch, platform, expected):
-    monkeypatch.setattr("eirene.core.text.sys.platform", platform)
-    assert Mode.MANUAL.icon == expected
-    assert Mode.AUTO.icon == ("⚡\ufe0f" if platform == "win32" else "⚡︎")
-    assert Mode.PLAN.icon == "☷"
+@pytest.mark.parametrize("platform", ["win32", "linux", "darwin", "android"])
+def test_mode_icons_are_monochrome_on_every_platform(monkeypatch, platform):
+    monkeypatch.setattr("sys.platform", platform)
+    assert Mode.MANUAL.icon == "Ⅱ"
+    assert Mode.AUTO.icon == "↯"
+    assert Mode.PLAN.icon == "≡"
 
 
 def test_read_only_commands_need_no_approval():

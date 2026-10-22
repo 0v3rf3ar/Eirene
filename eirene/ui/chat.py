@@ -708,6 +708,10 @@ class Transcript(VerticalScroll):
         if not self._programmatic_follow and old_value != new_value:
             self._follow_token += 1
             self._following = self.max_scroll_y - new_value <= 1
+        if self.is_mounted:
+            # The viewport already moved. Update its prompt immediately rather
+            # than leaving the old target visible until another frame renders.
+            self.refresh_navigation()
         self.call_after_refresh(self.refresh_navigation)
 
     def on_resize(self, event) -> None:
@@ -753,6 +757,13 @@ class Transcript(VerticalScroll):
         self._following = False
         return super().scroll_home(*args, **kwargs)
 
+    def scroll_to_widget(self, widget: Widget, **kwargs) -> bool:
+        # Record navigation intent before Textual's deferred scroll changes y.
+        # Pending stream-follow callbacks must not compete with a prompt jump.
+        self._follow_token += 1
+        self._following = False
+        return super().scroll_to_widget(widget, **kwargs)
+
     def _schedule_follow(self) -> None:
         # New chunks may arrive before the previous frame's callback runs.
         # Only navigation should cancel an already queued follow request.
@@ -771,7 +782,7 @@ class Transcript(VerticalScroll):
 
     def jump_to_prompt(self, prompt: UserBlock) -> None:
         """Put an exact prompt anchor at the top of the viewport."""
-        self.scroll_to_widget(prompt, top=True, animate=False)
+        self.scroll_to_widget(prompt, top=True, animate=False, immediate=True)
         self.call_after_refresh(self.refresh_navigation)
 
     async def push(self, block: Widget, live: bool = False) -> Widget:
