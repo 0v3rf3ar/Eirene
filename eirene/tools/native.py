@@ -18,6 +18,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..core.platforms import is_termux
 from ..core.errors import ToolError
 from ..core.text import safe_text
 from . import shell
@@ -60,7 +61,7 @@ async def command(box, argv, *, script=None, env=None, allowed=(0,), cap=MAX_BYT
     if policy.get("isolation", "none") != "none":
         policy["read_paths"] = [str(p) for p in box._grants.get()]
     # Fixed argv/templates on Windows are trusted reads, not arbitrary shell text.
-    if os.name == "nt":
+    if os.name == "nt" or is_termux():
         policy = {}
     result = await shell.run(
         script or shlex.join(argv),

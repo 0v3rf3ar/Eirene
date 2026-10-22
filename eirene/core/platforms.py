@@ -2,21 +2,31 @@
 from __future__ import annotations
 import os
 import platform
+import sys
 from pathlib import Path
 from dataclasses import dataclass
 import shutil
 
 
+def is_termux() -> bool:
+    """Recognize Termux, including its Android Python and container runtime."""
+    return (sys.platform == "android" or
+            os.environ.get("PREFIX", "").startswith("/data/data/com.termux/") or
+            bool(os.environ.get("TERMUX_VERSION") and os.environ.get("PREFIX")))
+
+
 def shell_name() -> str:
     if os.name == "nt":
         return "PowerShell (powershell=true; shell=cmd for batch syntax)"
-    return "bash" if Path("/bin/bash").is_file() else "sh"
+    return "bash" if shutil.which("bash") else "sh"
 
 
 def guidance(*, native: bool = False, system: str | None = None, host=None) -> str:
     system = system or platform.system()
     common = "Use the host's command syntax; never assume GNU utilities, Bash, or Unix paths exist. Use native-backed file/search tools for precise bounded reads; use edit tools for changes. Use the detected tool inventory; check availability only for additional optional programs."
-    if system == "Windows":
+    if is_termux() and system != "Windows":
+        detail = "Android Termux command profile: use Bash from PATH and pkg/apt for packages. Use $PREFIX and $TMPDIR; do not assume /bin, /usr, /tmp, sudo, systemd, or desktop services. Arbitrary commands need explicit approval because Android command isolation is unavailable. Plan mode uses fixed file/search tools."
+    elif system == "Windows":
         selector = ("Select the appropriate shell with your native command tool." if native else
                     "run_command and start_process prefer PowerShell; use shell=cmd for CMD syntax (powershell=true remains supported).")
         detail = fr"""Windows command profile. {selector}
@@ -60,10 +70,10 @@ class Host:
     @classmethod
     def detect(cls) -> "Host":
         from ..providers.local_profile import _ram_gb, _gpu_vram_gb
-        system = platform.system()
+        system = "Android" if is_termux() else platform.system()
         candidates = ("git", "rg", "node", "npm", "pytest", "cargo", "go",
                       "dnf", "dnf5", "apt-get", "yum", "pacman", "zypper", "apk",
-                      "brew", "winget", "sudo")
+                      "brew", "winget", "sudo", "pkg")
         candidates += (("pwsh", "powershell", "python", "py") if system == "Windows"
                        else ("python3", "find", "awk", "grep", "sed", "head", "tail", "base64", "make"))
         installed = tuple(name for name in candidates if shutil.which(name))
@@ -144,6 +154,8 @@ class Host:
 
 def detect_distribution(system: str, installed: tuple[str, ...]) -> tuple[str, str]:
     """Read OS metadata locally; do not execute a package manager."""
+    if system == "Android" or is_termux():
+        return "Termux", "pkg" if "pkg" in installed else "unknown"
     if system != "Linux":
         manager = "brew" if system == "Darwin" else "winget" if system == "Windows" else "unknown"
         return system, manager if manager in installed else "unknown"

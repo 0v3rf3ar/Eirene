@@ -39,7 +39,8 @@ jobs:
           for asset in "eirene-Linux-amd64-$version.tar.gz" "eirene-Linux-arm64-$version.tar.gz" "eirene-MacOS-silicon-$version.tar.gz" "eirene-Windows-amd64-$version.zip"; do
             test -f "$asset"
           done
-          sha256sum eirene-*.tar.gz eirene-*.zip > SHA256SUMS
+          shopt -s nullglob
+          sha256sum eirene-*.tar.gz eirene-*.zip eirene-Termux-*.deb > SHA256SUMS
       - name: Classify release channel
         id: channel
         env:
@@ -67,7 +68,8 @@ jobs:
           if [[ -f "$notes" ]]; then
             gh release edit "$RELEASE_TAG" --notes-file "$notes"
           fi
-          gh release upload "$RELEASE_TAG" release/*.tar.gz release/*.zip release/SHA256SUMS --clobber
+          shopt -s nullglob
+          gh release upload "$RELEASE_TAG" release/*.tar.gz release/*.zip release/*.deb release/SHA256SUMS --clobber
           if [[ "$IS_PRERELEASE" == true ]]; then
             gh release edit "$RELEASE_TAG" --prerelease --draft=false --latest=false
           else

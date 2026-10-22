@@ -12,6 +12,10 @@ from . import register
 
 @register("update", "install the latest stable release, or use edge for prereleases", "/update [edge] [check]")
 async def run(app, args: str) -> None:
+    from ..core.platforms import is_termux
+    if is_termux():
+        app.say("Experimental Termux packages must be updated using a newer Termux .deb from GitHub Releases; desktop binary updates are unavailable.")
+        return
     args = args.strip()
     if args not in {"", "check", "edge", "edge check", "check edge"}:
         app.say("usage: /update [edge] [check]", "warn")

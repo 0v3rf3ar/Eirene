@@ -16,6 +16,7 @@ from ..tools import registry as tools
 from ..tools.sandbox import Sandbox
 from . import prompt as prompts
 from . import questions
+from .platforms import is_termux
 from . import skills as skills_mod
 from .errors import Cancelled, EireneError, ProviderError, SandboxError, ToolError
 from .modes import ALLOW, ASK, BLOCK, Mode, decide
@@ -1063,11 +1064,12 @@ class Agent:
         network_tools = {"web_search", "web_fetch", "http_request", "browser_inspect", "browser_interact", "browser_screenshot"}
         if call.name in network_tools and self.config.get("isolate_network", True):
             escape = escape or "this tool requires network access outside command isolation"
-        native_windows = (platform.system() == "Windows" and
+        native_unisolated = ((platform.system() == "Windows" or is_termux()) and
                           self.config.get("execution_isolation", "auto") == "auto" and
                           call.name in {"run_command", "start_process", "language_diagnostics"})
-        if native_windows:
-            escape = "Windows native execution has no kernel filesystem or network isolation; approve this command with your user account's access"
+        if native_unisolated:
+            host = "Termux" if is_termux() else "Windows"
+            escape = f"{host} native execution has no kernel filesystem or network isolation; approve this command with your user account's access"
         from .permissions import full_access
         unrestricted = full_access(self.config) and self.mode is not Mode.PLAN
         if unrestricted:
@@ -1076,8 +1078,8 @@ class Agent:
         self.sandbox.full_access = full_access(self.config)
         if unrestricted and self.mode is Mode.AUTO:
             verdict, reason = ALLOW, ""
-        if native_windows and self.mode is Mode.PLAN:
-            verdict, reason = BLOCK, "native Windows commands cannot enforce plan mode; use portable file/search tools"
+        if native_unisolated and self.mode is Mode.PLAN:
+            verdict, reason = BLOCK, "native commands cannot enforce plan mode; use portable file/search tools"
         if verdict != BLOCK and not escape and tools.harmless(call.name, call.arguments):
             verdict, reason = ALLOW, ""
         outside = tools.escape_paths(call.name, call.arguments) if escape else []
@@ -1160,10 +1162,10 @@ class Agent:
                         timeout=float(self.config.get("shell_timeout", 120) or 120),
                         max_bytes=min(result_limit, int(self.config.get("max_output_bytes", 200_000) or 200_000)),
                         output=output, expected_file=expected_file,
-                        isolation="none" if native_windows or unrestricted else str(self.config.get("execution_isolation", "auto")),
+                        isolation="none" if native_unisolated or unrestricted else str(self.config.get("execution_isolation", "auto")),
                         isolate_network=not unrestricted and bool(self.config.get("isolate_network", True)) and call.name not in network_tools,
                         plan_scope=self.session.id,
-                        read_only=(self.mode is Mode.PLAN or kind == tools.READ) and not native_windows and not unrestricted):
+                        read_only=(self.mode is Mode.PLAN or kind == tools.READ) and not native_unisolated and not unrestricted):
                         if isinstance(item, ToolOutput):
                             yield item
                         else:

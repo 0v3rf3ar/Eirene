@@ -9,6 +9,10 @@ from .base import Backend, Task, load_tasks, save_tasks
 
 def backend() -> Backend:
     """Pick the backend for this OS."""
+    from ..core.platforms import is_termux
+    if is_termux():
+        from .base import UnsupportedBackend
+        return UnsupportedBackend()
     if sys.platform.startswith("linux"):
         from .linux_systemd import SystemdBackend
         return SystemdBackend()

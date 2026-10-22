@@ -523,7 +523,7 @@ def select_shell(name="auto", *, powershell=False):
     if powershell:
         name = "powershell"
     if name == "auto":
-        return ("powershell" if shutil.which("pwsh") or shutil.which("powershell") else "cmd") if IS_WINDOWS else ("bash" if Path("/bin/bash").is_file() else "sh")
+        return ("powershell" if shutil.which("pwsh") or shutil.which("powershell") else "cmd") if IS_WINDOWS else ("bash" if shutil.which("bash") else "sh")
     allowed = {"powershell", "cmd"} if IS_WINDOWS else {"bash", "sh"}
     if name not in allowed:
         raise ToolError(f"shell {name!r} is unavailable on this OS")
@@ -543,9 +543,9 @@ def release_process(process):
 
 def posix_argv(command: str, selected: str = "auto") -> list[str]:
     """Preserve failed pipeline stages where the installed shell supports it."""
-    if selected != "sh" and Path("/bin/bash").is_file():
-        return ["/bin/bash", "--noprofile", "--norc", "-o", "pipefail", "-c", command]
-    return ["/bin/sh", "-c", command]
+    if selected != "sh" and (bash := shutil.which("bash")):
+        return [bash, "--noprofile", "--norc", "-o", "pipefail", "-c", command]
+    return [shutil.which("sh") or "/bin/sh", "-c", command]
 
 
 def _has(name: str) -> bool:

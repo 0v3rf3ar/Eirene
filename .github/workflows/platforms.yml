@@ -83,3 +83,39 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
+
+  termux:
+    name: Experimental Termux ARM64 package
+    if: github.event_name == 'workflow_dispatch' || (github.ref_type == 'tag' && contains(github.ref_name, 'b'))
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          version: '0.13.1'
+      - name: Export locked runtime dependencies
+        run: |
+          mkdir -p termux-input termux-output
+          chmod 777 termux-output
+          uv export --locked --no-dev --no-emit-project --no-hashes --output-file termux-input/requirements.txt
+      - name: Build and test in Android Bionic userspace
+        run: |
+          docker pull termux/termux-docker:aarch64
+          docker image inspect termux/termux-docker:aarch64 --format '{{json .RepoDigests}}' > termux-output/container-image.txt
+          docker run --rm --privileged \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/termux-input,target=/input,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/termux-output,target=/output" \
+            termux/termux-docker:aarch64 bash /workspace/build/termux/build.sh
+      - name: Upload tested experimental package
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-termux-aarch64
+          path: |
+            termux-output/*.deb
+            termux-output/termux-build.txt
+            termux-output/container-image.txt
+          if-no-files-found: error
+          retention-days: 7
