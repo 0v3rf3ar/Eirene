@@ -9,7 +9,7 @@ Fully autonomous AI agent for coding, automation, and deployment.
 [![Release](https://img.shields.io/github/v/release/0v3rf3ar/Eirene?include_prereleases)](https://github.com/0v3rf3ar/Eirene/releases)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
-[![Windows](https://img.shields.io/badge/Windows-0078D4)](docs/platforms.md#windows)
+[![Windows](https://img.shields.io/badge/Windows-0078D4?logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0wIDBoMTF2MTFIMHptMTMgMGgxMXYxMUgxM3pNMCAxM2gxMXYxMUgwem0xMyAwaDExdjExSDEzeiIvPjwvc3ZnPg%3D%3D)](docs/platforms.md#windows)
 [![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)](docs/platforms.md#linux)
 [![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white)](docs/platforms.md#macos)
 [![Android / Termux beta](https://img.shields.io/badge/Android-Termux%20beta-3DDC84?logo=android&logoColor=white)](docs/android-termux.md)
