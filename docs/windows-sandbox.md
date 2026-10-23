@@ -32,7 +32,11 @@ If process cleanup fails, profile deletion is withheld and `close()` can retry.
 
 The child starts in the profile's private `LocalState` directory. `HOME`,
 `USERPROFILE`, `TEMP`, and `TMP` point there. `PATH` contains only Windows
-System32. Commands cannot yet access a project through an Eirene workspace grant.
+System32. The environment explicitly supplies the host's `LOCALAPPDATA`, which
+Windows needs to resolve and redirect AppContainer profile storage during
+`CreateProcessW`. Missing or invalid values fail before process creation with a
+message naming the variable, rather than Windows error 203. Commands cannot yet
+access a project through an Eirene workspace grant.
 The launcher does not change host filesystem ACLs, integrity labels, firewall
 rules, or loopback exemptions. It does not request network capabilities.
 

@@ -80,6 +80,7 @@ def fake(tmp_path, monkeypatch):
     api = FakeAPI(tmp_path)
     monkeypatch.setattr(sandbox, "_Win32", lambda: api)
     monkeypatch.setenv("SystemRoot", str(tmp_path))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "host-local-appdata"))
     return api
 
 
@@ -135,8 +136,27 @@ def test_environment_never_inherits_host_secrets(fake, tmp_path, monkeypatch):
         values = dict(pair.split("=", 1) for pair in fake.environment.rstrip("\0").split("\0"))
         assert values["TEMP"] == str(box.home)
         assert values["PATH"] == str(tmp_path / "System32")
+        assert values["LOCALAPPDATA"] == str(tmp_path / "host-local-appdata")
         assert "must-not-leak" not in fake.environment
         assert fake.environment.endswith("\0\0")
+
+
+@pytest.mark.parametrize("local_appdata", [None, "", "relative", "bad\0path"])
+def test_missing_or_invalid_profile_environment_fails_before_process_creation(fake, tmp_path, monkeypatch, local_appdata):
+    if local_appdata is None:
+        monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    elif "\0" in local_appdata:
+        # OS environments reject NUL, so exercise the explicit builder directly.
+        with pytest.raises(ToolError, match="LOCALAPPDATA"):
+            sandbox._environment(str(tmp_path), tmp_path, local_appdata)
+        return
+    else:
+        monkeypatch.setenv("LOCALAPPDATA", local_appdata)
+    with sandbox.AppContainer() as box:
+        with pytest.raises(ToolError, match="LOCALAPPDATA"):
+            box.spawn([str(tmp_path / "cmd.exe")])
+    assert "suspended" not in fake.events
+    assert fake.events[-1] == "remove_profile"
 
 
 def test_unicode_command_limit_counts_utf16_units(tmp_path):

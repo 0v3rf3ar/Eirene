@@ -61,10 +61,16 @@ def _command_line(argv) -> str:
     return command
 
 
-def _environment(system_root: str, home: Path) -> str:
+def _environment(system_root: str, home: Path, local_appdata: str) -> str:
     """An explicit, minimal Unicode environment; never inherit the host's secrets."""
+    # CreateProcessW needs the host profile location to resolve AppContainer
+    # storage. Omitting LOCALAPPDATA produces ERROR_ENVVAR_NOT_FOUND (203).
+    # Windows redirects LOCALAPPDATA for the AppContainer child itself.
+    if not local_appdata or "\0" in local_appdata or not Path(local_appdata).is_absolute():
+        raise ToolError("AppContainer requires an absolute LOCALAPPDATA to resolve its profile")
     values = {
         "SystemRoot": system_root, "WINDIR": system_root,
+        "LOCALAPPDATA": local_appdata,
         "PATH": str(Path(system_root) / "System32"),
         "COMSPEC": str(Path(system_root) / "System32" / "cmd.exe"),
         "HOME": str(home), "USERPROFILE": str(home),
@@ -299,7 +305,8 @@ class AppContainer:
         if not system_root or not Path(system_root).is_absolute():
             raise ToolError("AppContainer requires an absolute SystemRoot")
         info = self._api.suspended(argv, self.home,
-                                   _environment(system_root, self.home), self._sid)
+                                   _environment(system_root, self.home, os.environ.get("LOCALAPPDATA", "")),
+                                   self._sid)
         process = Process(self._api, info)
         # Retain ownership even when cleanup itself fails, so close() can retry.
         self._processes.append(process)
