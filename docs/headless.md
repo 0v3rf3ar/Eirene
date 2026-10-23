@@ -30,7 +30,7 @@ block actions because no approval callback is available. Workspace actions allow
 by Auto can proceed within the platform boundary; operations requiring an escape
 or a user choice cannot receive approval and may leave the run incomplete.
 
-On native Windows, arbitrary commands need approval, so unattended command tasks
+On native Windows, default commands use AppContainer. Tasks requiring host access
 fail closed. A full-access choice from an interactive process does not carry into
 a new headless process. Do not assume an interactive task can run unattended until
 you have checked its permission and environment requirements.

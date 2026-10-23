@@ -1,9 +1,9 @@
-"""Experimental Windows AppContainer launch primitive, not a runtime backend yet.
+"""Windows AppContainer process creation with verified kernel tokens.
 
 No command reaches ResumeThread until its kernel token has been checked and it
 belongs to a kill-on-close Job. No credentials, capabilities, or handles are
-inherited. This module deliberately does not edit host filesystem ACLs. See
-docs/windows-sandbox.md for the remaining work before enabling this in Eirene.
+inherited except explicitly supplied standard handles. Workspace grants are
+managed by windows_runtime. See docs/windows-sandbox.md for the boundary.
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ def _command_line(argv) -> str:
     return command
 
 
-def _environment(system_root: str, home: Path, local_appdata: str) -> str:
+def _environment(system_root: str, home: Path, local_appdata: str, extra=None) -> str:
     """An explicit, minimal Unicode environment; never inherit the host's secrets."""
     # CreateProcessW needs the host profile location to resolve AppContainer
     # storage. Omitting LOCALAPPDATA produces ERROR_ENVVAR_NOT_FOUND (203).
@@ -76,6 +76,14 @@ def _environment(system_root: str, home: Path, local_appdata: str) -> str:
         "HOME": str(home), "USERPROFILE": str(home),
         "TEMP": str(home), "TMP": str(home),
     }
+    protected = {key.upper() for key in values if key != "PATH"}
+    for key, value in (extra or {}).items():
+        if not isinstance(key, str) or not key or "=" in key or "\0" in key or not isinstance(value, str):
+            raise ToolError("invalid AppContainer environment entry")
+        if key.upper() not in protected:
+            # Windows environment keys are case insensitive.
+            values = {k: v for k, v in values.items() if k.upper() != key.upper()}
+            values[key] = value
     if any("\0" in value for value in values.values()):
         raise ToolError("AppContainer environment contains NUL")
     return "\0".join(f"{key}={values[key]}" for key in sorted(values, key=str.upper)) + "\0\0"
@@ -156,13 +164,14 @@ class _Win32:
             if text:
                 self.local_free(text)
 
-    def suspended(self, argv, cwd, environment, sid):
+    def suspended(self, argv, cwd, environment, sid, *, std_handles=None):
         size = SIZE()
-        self.init_attributes(None, 1, 0, C.byref(size))
+        count = 2 if std_handles else 1
+        self.init_attributes(None, count, 0, C.byref(size))
         if not size.value:
             self.check(False, "InitializeProcThreadAttributeList(size)")
         attributes = C.create_string_buffer(size.value)
-        self.check(self.init_attributes(attributes, 1, 0, C.byref(size)),
+        self.check(self.init_attributes(attributes, count, 0, C.byref(size)),
                    "InitializeProcThreadAttributeList")
         try:
             # Zero capabilities: no Internet, LAN, server, or broad file grants.
@@ -173,12 +182,19 @@ class _Win32:
             startup = StartupInfoEx()
             startup.startup.cb = C.sizeof(startup)
             startup.attributes = C.cast(attributes, PTR)
+            if std_handles:
+                handles = (PTR * len(set(std_handles)))(*dict.fromkeys(std_handles))
+                self.check(self.update_attribute(attributes, 0, 0x00020002,
+                                                 handles, C.sizeof(handles), None, None),
+                           "UpdateProcThreadAttribute(HANDLE_LIST)")
+                startup.startup.flags = 0x100  # STARTF_USESTDHANDLES
+                startup.startup.stdin, startup.startup.stdout, startup.startup.stderr = std_handles
             info = ProcessInfo()
             command = C.create_unicode_buffer(_command_line(argv))
             env = C.create_unicode_buffer(environment)
             # Suspended + Unicode environment + extended startup + no console.
             flags = 0x00000004 | 0x00000400 | 0x00080000 | 0x08000000
-            self.check(self.create_process(argv[0], command, None, None, False,
+            self.check(self.create_process(argv[0], command, None, None, bool(std_handles),
                                             flags, env, str(cwd), C.byref(startup), C.byref(info)),
                        "CreateProcessW(AppContainer)")
             return info
@@ -276,11 +292,10 @@ class Process:
 
 
 class AppContainer:
-    """One unique profile per command group, with no host path ACL changes.
+    """One unique profile per command group, used by windows_runtime.
 
-    Intended only for development/tests until workspace grants, pipe supervision,
-    cleanup recovery and application policy are integrated. Use as a context
-    manager; it kills/reaps commands before deleting the profile. Thread-confined.
+    Use as a context manager; it kills/reaps commands before deleting the profile.
+    Host path ACL grants belong to the runtime owner. Thread-confined.
     """
 
     def __init__(self):
@@ -296,7 +311,7 @@ class AppContainer:
             self._api.remove_profile(self.name, self._sid)
             raise
 
-    def spawn(self, argv):
+    def spawn(self, argv, *, cwd=None, env=None, std_handles=None):
         if self.closed:
             raise ToolError("AppContainer profile is closed")
         _command_line(argv)  # Validate before allocating any process resources.
@@ -304,9 +319,10 @@ class AppContainer:
         system_root = os.environ.get("SystemRoot")
         if not system_root or not Path(system_root).is_absolute():
             raise ToolError("AppContainer requires an absolute SystemRoot")
-        info = self._api.suspended(argv, self.home,
-                                   _environment(system_root, self.home, os.environ.get("LOCALAPPDATA", "")),
-                                   self._sid)
+        options = {"std_handles": std_handles} if std_handles else {}
+        info = self._api.suspended(argv, cwd or self.home,
+                                   _environment(system_root, self.home, os.environ.get("LOCALAPPDATA", ""), env),
+                                   self._sid, **options)
         process = Process(self._api, info)
         # Retain ownership even when cleanup itself fails, so close() can retry.
         self._processes.append(process)

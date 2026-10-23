@@ -27,9 +27,13 @@ Linux commands receive a private temporary directory and home. macOS commands us
 a private scratch directory and an allowlist of runtime paths. Both backends use
 the host kernel; neither provides virtual-machine isolation.
 
-Windows has no native kernel isolation backend. Arbitrary shell commands require
-explicit approval or an active full-access grant and run with the user's account permissions. Plan mode blocks
-arbitrary shell commands, and headless commands that require approval fail closed.
+Windows commands use AppContainer by default, with verified package identity,
+zero capabilities and explicit standard-handle inheritance. Temporary package-SID
+ACLs grant workspace access and are revoked after the Job exits. Commands are
+serialized per user/session during these grants. Network grants, reparse-point
+trees, network-share workspaces and PTYs fail closed. Plan mode blocks arbitrary
+commands. Full-access grants explicitly bypass isolation. See the Windows sandbox
+guide for remaining limitations and crash recovery behavior.
 
 Fixed native read/search templates validate paths and pass patterns as data.
 On Linux/macOS they run in the read-only command sandbox; Windows permits these

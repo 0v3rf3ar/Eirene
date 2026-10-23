@@ -477,7 +477,8 @@ async def _start(command: str, cwd: Path, env: dict[str, str] | None,
                  powershell: bool, *, stdin=subprocess.DEVNULL,
                  isolation: str = "none",
                  isolate_network: bool = False, read_paths=(), write_paths=(),
-                 read_only: bool = False, shell_name: str = "auto", argv=None, sandbox_root=None) -> asyncio.subprocess.Process:
+                 read_only: bool = False, shell_name: str = "auto", argv=None, sandbox_root=None,
+                 input_text=None) -> asyncio.subprocess.Process:
     selected = select_shell(shell_name, powershell=powershell)
     kwargs = dict(cwd=str(cwd), env=_child_env(env), stdin=stdin,
                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **_spawn_kwargs())
@@ -497,6 +498,13 @@ async def _start(command: str, cwd: Path, env: dict[str, str] | None,
                        "chcp 65001 >nul & " + command]
     else:
         launch_argv = posix_argv(command, selected)
+    if IS_WINDOWS and (isolation != "none" or read_only):
+        if isolation not in {"auto", "appcontainer"}:
+            raise ToolError(f"unsupported Windows isolation backend: {isolation}")
+        from .windows_runtime import start
+        return await start(launch_argv, sandbox_root or cwd, cwd,
+            network=not isolate_network, read_paths=read_paths, write_paths=write_paths,
+            read_only=read_only, env={**NONINTERACTIVE_ENV, **(env or {})}, input_text=input_text)
     if isolation != "none" or read_only:
         from . import isolation as environments
         launch_argv = environments.command(command, sandbox_root or cwd, backend=isolation,
@@ -535,6 +543,10 @@ def select_shell(name="auto", *, powershell=False):
 
 
 def release_process(process):
+    release = getattr(process, "release", None)
+    if release is not None:
+        release()
+        return
     job = getattr(process, "_eirene_job", None)
     if job is not None:
         job.close()

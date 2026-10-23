@@ -1,12 +1,12 @@
 """Release gate: verify the real default Agent command path on Windows.
 
-This intentionally fails until AppContainer is integrated into default execution.
 Approval refusal, an unused launcher, and ordinary host execution cannot pass.
 Only the provider is scripted; permissions and command execution stay real.
 """
 
 import ctypes as C
 import os
+import re
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -21,6 +21,32 @@ from eirene.tools import windows_appcontainer as appcontainer
 from test_agent import Script, build, drive
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows default sandbox release gate")
+
+
+class ProbeProvider(Script):
+    """Wait through the normal poll tool when execution becomes background work."""
+    def __init__(self, command):
+        super().__init__()
+        self.command = command
+        self.sent = False
+        self.polled = False
+
+    async def stream(self, messages, model, **kwargs):
+        if not self.sent:
+            self.sent = True
+            yield ToolCall("sandbox-check", "run_command", {
+                "command": self.command, "shell": "cmd", "timeout": 20,
+            })
+            yield Done("tool_use")
+            return
+        match = re.search(r"Still running as managed process ([a-f0-9]{10})", str(messages))
+        if match and not self.polled:
+            self.polled = True
+            yield ToolCall("sandbox-poll", "poll_process", {"process_id": match[1], "wait": True})
+            yield Done("tool_use")
+            return
+        yield TextDelta("checked")
+        yield Done("stop")
 
 
 @pytest.fixture
@@ -94,27 +120,22 @@ async def test_default_agent_enforces_windows_kernel_sandbox(workdir, outside, m
         script = workdir / "verify-default-sandbox.cmd"
         script.write_text(
             '@echo off\n'
-            'type inside.txt >nul || exit /b 10\n'
+            'type inside.txt >probe-read.txt 2>probe-read-error.txt || exit /b 10\n'
             'echo workspace-ok>inside-result.txt\n'
             'if errorlevel 1 exit /b 11\n'
-            f'type "{outside / "secret.txt"}" >nul 2>nul\n'
+            f'type "{outside / "secret.txt"}" >probe-outside-read.txt 2>probe-outside-read-error.txt\n'
             'if not errorlevel 1 exit /b 12\n'
-            f'(echo forbidden>"{forbidden}") 2>nul\n'
+            f'(echo forbidden>"{forbidden}") 2>probe-outside-write-error.txt\n'
             'if not errorlevel 1 exit /b 13\n'
-            '"%SystemRoot%\\System32\\curl.exe" --version >nul 2>nul\n'
+            '"%SystemRoot%\\System32\\curl.exe" --version >probe-curl.txt 2>probe-curl-error.txt\n'
             'if errorlevel 1 exit /b 14\n'
-            f'"%SystemRoot%\\System32\\curl.exe" --noproxy "*" --fail --connect-timeout 2 --max-time 3 {endpoint} >nul 2>nul\n'
+            f'"%SystemRoot%\\System32\\curl.exe" --noproxy "*" --fail --connect-timeout 2 --max-time 3 {endpoint} >probe-network.txt 2>probe-network-error.txt\n'
             'if not errorlevel 1 exit /b 15\n'
             'echo default-sandbox-verified\n'
             'exit /b 0\n',
             encoding="utf-8",
         )
-        runner = build(workdir, Script(
-            [ToolCall("sandbox-check", "run_command", {
-                "command": script.name, "shell": "cmd", "timeout": 20,
-            }), Done("tool_use")],
-            [TextDelta("checked"), Done("stop")],
-        ))
+        runner = build(workdir, ProbeProvider(script.name))
         assert runner.config.get("permissions") == "sandboxed"
         assert runner.config.get("execution_isolation") == "auto"
         assert runner.config.get("isolate_network") is True
@@ -122,7 +143,7 @@ async def test_default_agent_enforces_windows_kernel_sandbox(workdir, outside, m
         try:
             events = await drive(runner)
             finished = [event for event in events
-                        if isinstance(event, ToolFinished) and event.id == "sandbox-check"]
+                        if isinstance(event, ToolFinished) and event.id in {"sandbox-check", "sandbox-poll"}]
             assert finished, "Eirene did not execute the default command tool"
             assert all(not event.is_error for event in finished), (
                 "Eirene's default Windows command path is not sandboxed: "
@@ -133,6 +154,7 @@ async def test_default_agent_enforces_windows_kernel_sandbox(workdir, outside, m
                 f"Default commands must have an AppContainer SID and zero capabilities: {observed}"
             )
             assert result_file.read_text().strip() == "workspace-ok"
+            assert (workdir / "probe-read.txt").read_text() == "workspace input"
             assert not forbidden.exists()
             assert any("default-sandbox-verified" in event.result for event in finished)
         finally:

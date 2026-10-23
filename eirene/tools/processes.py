@@ -185,6 +185,7 @@ async def launch(
                 shell_name=shell_name,
                 argv=argv,
                 sandbox_root=sandbox_root,
+                input_text=input_text,
             ),
             spawn_limit,
         )
@@ -260,7 +261,11 @@ async def _cleanup(item):
             item.state = "failed"
     finally:
         if item.process:
-            shell.release_process(item.process)
+            try:
+                shell.release_process(item.process)
+            except (OSError, ToolError) as exc:
+                item.stop_reason += f"; sandbox release failed: {exc}"
+                item.state = "failed"
         if item.artifact:
             try:
                 item.artifact.close()

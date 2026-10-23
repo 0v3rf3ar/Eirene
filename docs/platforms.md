@@ -12,7 +12,7 @@ the binary does not install your compiler, package manager, browser, or sandbox.
 | --- | --- | --- | --- |
 | Linux | AMD64, ARM64 | Bash, with POSIX sh fallback | Bubblewrap and permitted user namespaces |
 | macOS | Apple Silicon | System Bash/sh and macOS utilities | `sandbox-exec` / Seatbelt |
-| Windows | AMD64 | PowerShell; CMD available for CMD syntax | Explicit command approval; no kernel isolation backend |
+| Windows | AMD64 | PowerShell; CMD available for CMD syntax | AppContainer and temporary package-SID workspace ACL grants |
 
 Paths and filenames follow the host's conventions. Eirene receives host guidance
 so it can choose installed utilities rather than assume every machine behaves
@@ -45,19 +45,17 @@ fallback. Ask explicitly for CMD when a task requires batch syntax. PowerShell
 5.1 does not support Bash-style `&&`; dependent commands need host-appropriate
 exit-code checks.
 
-There is no native kernel isolation backend for arbitrary commands. They require
-explicit approval and run with your user account's filesystem and network access,
-unless you have explicitly enabled full access for this process. Headless runs
-cannot answer these approvals and fail closed. Plan mode uses portable file tools
-and validated fixed search/read operations rather than arbitrary shell scripts.
+Default command execution uses AppContainer. The child token is verified before
+execution and receives temporary access to the workspace. Network grants, PTYs,
+network-share workspaces and grants containing reparse points are unsupported
+and fail closed. Commands run one at a time per user/session while temporary ACLs
+are active. Plan mode uses portable file tools and fixed read/search operations.
+Full access explicitly disables command isolation; ordinary mode approvals still
+apply. See [Windows sandbox implementation](windows-sandbox.md).
 
 Claude Code on native Windows requires approval for each normal turn without
 kernel isolation. Plan mode disables its command and edit tools. A WSL2 setup
 uses the Linux environment and its separate installation requirements.
-
-An experimental [Windows AppContainer launch primitive](windows-sandbox.md) is
-under development. It is not enabled in the command runtime and does not change
-the approval behavior described above.
 
 ## Shell profiles and PATH
 

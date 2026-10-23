@@ -33,7 +33,7 @@ has been exercised.
 | A local model is unavailable | Check the Ollama service and downloaded models before reconnecting. |
 | Commands cannot start on Linux | Check `bwrap`, user namespaces, and `/sandbox`. |
 | Commands cannot start on macOS | Check the availability of `sandbox-exec` and its reported failure. |
-| An unattended Windows command fails | It needs interactive approval; see [platform support](platforms.md). |
+| An unattended Windows command fails | Check AppContainer startup, workspace ACL access and unsupported grants; see [platform support](platforms.md). |
 | A server disappears after a response | A temporary host-access grant may have ended. See [processes](processes.md). |
 | Copying does not reach the desktop | Check terminal clipboard integration and Linux `wl-clipboard` or `xclip`. |
 | A notification does not appear | Run `/notification test` and check the desktop session and OS settings. |

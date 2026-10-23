@@ -1064,7 +1064,7 @@ class Agent:
         network_tools = {"web_search", "web_fetch", "http_request", "browser_inspect", "browser_interact", "browser_screenshot"}
         if call.name in network_tools and self.config.get("isolate_network", True):
             escape = escape or "this tool requires network access outside command isolation"
-        native_unisolated = ((platform.system() == "Windows" or is_termux()) and
+        native_unisolated = (is_termux() and
                           self.config.get("execution_isolation", "auto") == "auto" and
                           call.name in {"run_command", "start_process", "language_diagnostics"})
         if native_unisolated:
@@ -1080,6 +1080,9 @@ class Agent:
             verdict, reason = ALLOW, ""
         if native_unisolated and self.mode is Mode.PLAN:
             verdict, reason = BLOCK, "native commands cannot enforce plan mode; use portable file/search tools"
+        if (platform.system() == "Windows" and self.mode is Mode.PLAN and
+                call.name in {"run_command", "start_process", "language_diagnostics"}):
+            verdict, reason = BLOCK, "plan mode uses portable file/search tools on Windows"
         if verdict != BLOCK and not escape and tools.harmless(call.name, call.arguments):
             verdict, reason = ALLOW, ""
         outside = tools.escape_paths(call.name, call.arguments) if escape else []

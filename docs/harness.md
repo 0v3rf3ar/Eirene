@@ -40,7 +40,7 @@ external-path access, and network policy. It is a status command and does not
 accept container, image, or backend options.
 
 The [platform guide](platforms.md) explains Linux Bubblewrap, macOS Seatbelt, and
-Windows command approval. Codex and Claude Code connections own their native
+Windows AppContainer command isolation. Codex and Claude Code connections own their native
 execution environments; Eirene forwards their approvals and requests their
 sandbox controls.
 

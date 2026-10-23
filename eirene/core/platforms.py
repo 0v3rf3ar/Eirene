@@ -33,13 +33,13 @@ def guidance(*, native: bool = False, system: str | None = None, host=None) -> s
 CMD: dir /b, type "file", where program, set "NAME=value", %NAME%, and && for success chaining. Single quotes do not quote CMD arguments. Quote paths with double quotes.
 PowerShell: Get-ChildItem -LiteralPath '.', Get-Content -LiteralPath 'file' -TotalCount 80, Select-String, Get-Command, $env:NAME='value'. Use & 'C:\Program Files\tool.exe' for quoted executable paths. Windows PowerShell 5.1 has no &&; check $LASTEXITCODE for native programs. Use -LiteralPath for filenames containing brackets.
 Use python or py -3 when installed, not an assumed python3 alias. Use ping -n 4; no /dev/null, sudo, chmod, sed, or Unix environment assignments. PTY mode is unavailable in Eirene on Windows.
-Native commands require individual approval because Eirene has no Windows kernel isolation backend. In plan mode use the fixed native read/search tools."""
+Native commands use kernel-enforced AppContainer isolation; network grants and concurrent commands are currently unsupported. In plan mode use the fixed native read/search tools."""
         if host is not None and not ({"pwsh", "powershell"} & set(host.available)):
             detail = ("Windows command profile: CMD only; PowerShell was not found on host PATH. "
                       "Use dir /b, where program, set \"NAME=value\", %NAME%, and && for success chaining. "
                       "Quote paths with double quotes; use native read/search tools for bounded reads. "
                       "Use ping -n 4. PTY mode is unavailable. "
-                      "Native commands require individual approval; plan mode uses fixed native read tools.")
+                      "Native commands use AppContainer isolation; plan mode uses fixed native read tools.")
     elif system == "Darwin":
         detail = """macOS command profile: Eirene uses /bin/bash (or /bin/sh), not the interactive login shell. Use POSIX syntax and BSD utilities. Built-in Bash may be 3.2: avoid associative arrays/mapfile. sed -i requires a backup suffix (sed -i '' ...); prefer edit_file. stat uses -f, date uses -v; GNU readlink -f, timeout, and grep -P may be absent. Use command -v, printf, head/tail, and python3 if installed. Both Intel and Apple Silicon paths must be discovered, not hardcoded."""
     else:

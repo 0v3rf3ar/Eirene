@@ -176,7 +176,7 @@ and the full test suite once on Python 3.14. A separate Windows Python 3.14 gate
 checks default Agent command execution, the actual child kernel token, workspace
 access, denied outside-file access, and denied network access. It also runs the
 AppContainer launch tests. Approval refusal does not count as a working kernel
-sandbox: the gate blocks builds until default Windows integration is complete.
+sandbox: the gate requires successful kernel-isolated command execution.
 After both jobs pass, native binaries build for Linux AMD64/ARM64, macOS Apple
 Silicon, and Windows AMD64. Packaging uses Python 3.14 with an explicit interpreter
 check and `uv sync --locked --no-dev --group build`. CI passes `--skip-smoke` to

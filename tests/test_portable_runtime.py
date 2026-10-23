@@ -93,12 +93,18 @@ def test_macos_isolation_is_deny_by_default(workdir, monkeypatch):
     assert "(allow network*)" in writable and f'(allow file-write* (subpath {quoted}))' in writable
 
 
-async def test_windows_execution_requires_approval(workdir, monkeypatch):
+async def test_windows_default_execution_keeps_automatic_isolation(workdir, monkeypatch):
     monkeypatch.setattr(agent_mod.platform, "system", lambda: "Windows")
     runner = build(workdir, Script([base.ToolCall("cmd", "run_command", {"command": "echo hi"}), base.Done()], [base.TextDelta("done"), base.Done()]))
     runner.approve = None
+    policies = []
+    async def execute(*args, **kwargs):
+        policies.append(kwargs)
+        yield "isolated"
+    monkeypatch.setattr(runner, "_execute_live", execute)
     events = await drive(runner)
-    assert any(isinstance(e, ToolFinished) and e.is_error and "no one" in e.result for e in events)
+    assert any(isinstance(e, ToolFinished) and not e.is_error for e in events)
+    assert policies and policies[0]["isolation"] == "auto" and policies[0]["isolate_network"]
 
 
 async def test_windows_plan_never_launches_native_commands(workdir, monkeypatch):

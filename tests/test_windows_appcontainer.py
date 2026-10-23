@@ -179,14 +179,22 @@ def test_win32_abi_layout():
         assert C.sizeof(sandbox.ProcessInfo) == 24
 
 
-def test_native_creation_attributes_deny_network_and_handle_inheritance(tmp_path):
+@pytest.mark.parametrize("stdio", [None, (10, 20, 20)])
+def test_native_creation_attributes_deny_network_and_limit_handle_inheritance(tmp_path, stdio):
     api = sandbox._Win32.__new__(sandbox._Win32)
     events = []
     def init(attributes, count, flags, size):
+        assert count == (2 if stdio else 1)
         C.cast(size, C.POINTER(sandbox.SIZE))[0] = 128
         return bool(attributes)
     api.init_attributes = init
     def update(attributes, flags, key, value, size, previous, returned):
+        if key == 0x00020002:
+            assert stdio
+            handles = C.cast(value, C.POINTER(C.c_void_p * 2)).contents
+            assert list(handles) == [10, 20]
+            events.append("handles")
+            return True
         capabilities = C.cast(value, C.POINTER(sandbox.SecurityCapabilities)).contents
         assert key == 0x00020009
         assert capabilities.sid == 123
@@ -198,18 +206,22 @@ def test_native_creation_attributes_deny_network_and_handle_inheritance(tmp_path
     def create(executable, command, process_security, thread_security, inherit,
                flags, environment, cwd, startup, info):
         assert executable == str(tmp_path / "app.exe")
-        assert not inherit
+        assert bool(inherit) == bool(stdio)
         assert flags & 4 and flags & 0x80000 and flags & 0x400
         startup = C.cast(startup, C.POINTER(sandbox.StartupInfoEx)).contents
         assert startup.startup.cb == C.sizeof(sandbox.StartupInfoEx)
-        assert not startup.startup.flags  # No inherited stdio handles either.
+        if stdio:
+            assert startup.startup.flags == 0x100
+            assert (startup.startup.stdin, startup.startup.stdout, startup.startup.stderr) == stdio
+        else:
+            assert not startup.startup.flags
         assert startup.attributes
         events.append("create")
         return True
     api.create_process = create
     api.delete_attributes = lambda value: events.append("delete")
-    api.suspended([str(tmp_path / "app.exe")], tmp_path, "A=B\0\0", C.c_void_p(123))
-    assert events == ["attribute", "create", "delete"]
+    api.suspended([str(tmp_path / "app.exe")], tmp_path, "A=B\0\0", C.c_void_p(123), std_handles=stdio)
+    assert events == ["attribute", *(["handles"] if stdio else []), "create", "delete"]
 
 
 @pytest.mark.parametrize("is_container,equal_sid,capabilities", [(0, True, 0), (1, False, 0), (1, True, 1)])
@@ -277,10 +289,16 @@ def test_native_outside_reads_and_writes_are_denied(tmp_path):
     assert secret.read_text() == "secret"
     with sandbox.AppContainer() as box:
         (box.home / "readable.txt").write_text("readable")
-        assert box.spawn(cmd("type readable.txt >nul")).wait(15) == 0
-        read = box.spawn(script_command(box, f'type "{secret}" >nul 2>nul && exit /b 99 || exit /b 0'))
+        # This primitive has no inherited stdio handles. Capture to private
+        # files so NUL-device/stdio errors cannot masquerade as denied reads.
+        control = box.spawn(script_command(box, "type readable.txt >read-output.txt 2>read-error.txt"))
+        code = control.wait(15)
+        diagnostic = (box.home / "read-error.txt").read_text(errors="replace")
+        assert code == 0, f"Allowed read failed with exit {code}: {diagnostic}"
+        assert (box.home / "read-output.txt").read_text() == "readable"
+        read = box.spawn(script_command(box, f'type "{secret}" >outside-read.txt 2>outside-read-error.txt && exit /b 99 || exit /b 0'))
         assert read.wait(15) == 0
-        write = box.spawn(script_command(box, f'(echo forbidden>"{target}") 2>nul && exit /b 99 || exit /b 0'))
+        write = box.spawn(script_command(box, f'(echo forbidden>"{target}") 2>outside-write-error.txt && exit /b 99 || exit /b 0'))
         assert write.wait(15) == 0
         assert not target.exists()
 
@@ -292,7 +310,7 @@ def test_native_child_process_inherits_restrictions(tmp_path):
     with sandbox.AppContainer() as box:
         assert box.spawn(script_command(box, '"%COMSPEC%" /d /c exit /b 23')).wait(15) == 23
         # A second cmd.exe must keep the AppContainer token, with no escape.
-        script = f'"%COMSPEC%" /d /c type "{secret}" >nul 2>nul && exit /b 99 || exit /b 0'
+        script = f'"%COMSPEC%" /d /c type "{secret}" >child-read.txt 2>child-read-error.txt && exit /b 99 || exit /b 0'
         assert box.spawn(script_command(box, script)).wait(15) == 0
 
 

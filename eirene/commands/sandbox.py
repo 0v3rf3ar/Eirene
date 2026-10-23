@@ -16,9 +16,9 @@ async def run(app, args):
         available = bool(shutil.which("sandbox-exec"))
         notes = ["No unsandboxed fallback.", "Requires macOS sandbox-exec."]
     elif sys.platform == "win32":
-        runtime = "Windows / native commands"
-        available = False
-        notes = ["No kernel command isolation.", "Native commands require individual approval.", "Plan mode uses portable file/search tools."]
+        runtime = "Windows / AppContainer"
+        available = bool(shutil.which("icacls"))
+        notes = ["No unsandboxed fallback.", "One sandboxed command at a time; network grants unavailable.", "Plan mode uses portable file/search tools."]
     else:
         runtime = "Linux / Bubblewrap"
         available = bool(shutil.which("bwrap"))
