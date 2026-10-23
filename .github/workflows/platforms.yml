@@ -48,7 +48,6 @@ jobs:
 
   windows-sandbox:
     name: Windows default sandbox (Python 3.14)
-    needs: test
     if: github.event_name != 'workflow_dispatch' || !inputs.termux_only
     runs-on: windows-2022
     timeout-minutes: 15
