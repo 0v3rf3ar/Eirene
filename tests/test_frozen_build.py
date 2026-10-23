@@ -48,6 +48,22 @@ def test_failed_smoke_preserves_published_binary(tmp_path,monkeypatch):
     assert target.read_bytes()==b'working binary'
 
 
+def test_ci_build_can_publish_without_running_binary_smoke(tmp_path, monkeypatch):
+    build = load('build.py')
+    dist = tmp_path / 'dist'
+    name = 'eirene.exe' if os.name == 'nt' else 'eirene'
+    def assemble(argv):
+        (Path(argv[argv.index('--distpath') + 1]) / name).write_bytes(b'built binary')
+        return 0
+    def smoke(path):
+        pytest.fail('CI requested a build without per-platform smoke checks')
+    monkeypatch.setattr(build, 'run', assemble)
+    monkeypatch.setattr(build, 'smoke', smoke)
+    binary = build.freeze(Path(sys.executable), dist, tmp_path / 'work', check_binary=False)
+    assert binary == dist / name
+    assert binary.read_bytes() == b'built binary'
+
+
 @pytest.mark.skipif(not sys.platform.startswith('linux'),reason='Linux executable handle')
 def test_linux_pins_original_executable_handle():
     hook=load('build/runtime_hook.py')

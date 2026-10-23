@@ -46,9 +46,33 @@ jobs:
       - name: Run tests
         run: uv run --no-sync pytest -q
 
+  windows-sandbox:
+    name: Windows default sandbox (Python 3.14)
+    needs: test
+    if: github.event_name != 'workflow_dispatch' || !inputs.termux_only
+    runs-on: windows-2022
+    timeout-minutes: 15
+    env:
+      UV_PYTHON: '3.14'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          version: '0.13.1'
+          enable-cache: true
+      - name: Install locked development dependencies
+        run: uv sync --locked
+      - name: Verify native test runner
+        run: uv run --no-sync python -c "import os, sys; assert os.name == 'nt'; assert sys.version_info[:2] == (3, 14), sys.version"
+      - name: Verify Eirene default execution uses kernel isolation
+        run: uv run --no-sync pytest -q tests/test_windows_default_sandbox.py tests/test_windows_appcontainer.py
+
   build:
     name: Build ${{ matrix.target }} (Python 3.14)
-    needs: test
+    needs: [test, windows-sandbox]
     env:
       UV_PYTHON: '3.14'
     strategy:
@@ -78,10 +102,10 @@ jobs:
         run: uv sync --locked --no-dev --group build
       - name: Verify build interpreter
         run: uv run --no-sync python -c "import sys; assert sys.version_info[:2] == (3, 14), sys.version; print(sys.version)"
-      - name: Build and smoke-test executable
-        run: uv run --no-sync python build.py --no-install --skip-tests
-      - name: Compress and test extracted executable
-        run: uv run --no-sync python scripts/package_release.py --target ${{ matrix.target }}
+      - name: Build executable after tests
+        run: uv run --no-sync python build.py --no-install --skip-tests --skip-smoke
+      - name: Compress executable
+        run: uv run --no-sync python scripts/package_release.py --target ${{ matrix.target }} --skip-smoke
       - uses: actions/upload-artifact@v6
         with:
           name: release-${{ matrix.target }}

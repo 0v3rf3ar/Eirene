@@ -81,13 +81,16 @@ def main() -> None:
     parser.add_argument("--target", required=True, choices=TARGETS)
     parser.add_argument("--dist", type=Path, default=ROOT / "dist")
     parser.add_argument("--output", type=Path, default=ROOT / "release")
+    parser.add_argument("--skip-smoke", action="store_true",
+                        help="skip executing the extracted archive (CI runs tests before building)")
     args = parser.parse_args()
     check_host(args.target)
     binary = args.dist / ("eirene.exe" if args.target == "windows-amd64" else "eirene")
     from release_metadata import read_version
     version = read_version(ROOT / "pyproject.toml")
     archive = package(args.target, binary, args.output, version)
-    smoke_archive(archive, args.target == "windows-amd64")
+    if not args.skip_smoke:
+        smoke_archive(archive, args.target == "windows-amd64")
     print(archive)
 
 

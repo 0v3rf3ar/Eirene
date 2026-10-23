@@ -48,7 +48,8 @@ def test(python: Path) -> None:
     print("tests passed", flush=True)
 
 
-def freeze(python: Path, dist: Path | None = None, work: Path | None = None) -> Path:
+def freeze(python: Path, dist: Path | None = None, work: Path | None = None,
+           *, check_binary: bool = True) -> Path:
     dist = dist or DIST
     work = work or WORK
     dist.mkdir(parents=True, exist_ok=True)
@@ -67,7 +68,8 @@ def freeze(python: Path, dist: Path | None = None, work: Path | None = None) -> 
         built = Path(staging) / name
         if not built.exists():
             fail(f"expected {built} but it is not there")
-        smoke(built)
+        if check_binary:
+            smoke(built)
         binary = dist / name
         os.replace(built, binary)
     return binary
@@ -105,6 +107,8 @@ def main() -> int:
                         help="run the tests and stop")
     parser.add_argument("--skip-tests", action="store_true",
                         help="build without running the tests")
+    parser.add_argument("--skip-smoke", action="store_true",
+                        help="skip executable smoke checks (CI runs its tests before building)")
     parser.add_argument("--no-install", action="store_true",
                         help="use this Python environment without downloading dependencies")
     parser.add_argument("--dist-dir", type=Path, default=DIST,
@@ -128,7 +132,8 @@ def main() -> int:
     if args.test_only:
         return 0
 
-    binary = freeze(python, args.dist_dir.expanduser().resolve(), args.work_dir.expanduser().resolve())
+    binary = freeze(python, args.dist_dir.expanduser().resolve(), args.work_dir.expanduser().resolve(),
+                    check_binary=not args.skip_smoke)
     size = binary.stat().st_size / 1_000_000
     print(f"\n{binary} ({size:.1f} MB)", flush=True)
     return 0

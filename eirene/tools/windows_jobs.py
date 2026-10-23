@@ -7,6 +7,7 @@ Only imported on Windows. Python orchestrates the OS; it does not execute comman
 from __future__ import annotations
 
 import ctypes
+import time
 from ctypes import wintypes as W
 
 K = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -64,6 +65,15 @@ class THREAD(ctypes.Structure):
     ]
 
 
+class ACCOUNTING(ctypes.Structure):
+    _fields_ = [
+        ("user", ctypes.c_longlong), ("kernel", ctypes.c_longlong),
+        ("period_user", ctypes.c_longlong), ("period_kernel", ctypes.c_longlong),
+        ("page_faults", W.DWORD), ("total", W.DWORD),
+        ("active", W.DWORD), ("terminated", W.DWORD),
+    ]
+
+
 def api(name, result, args):
     function = getattr(K, name)
     function.restype = result
@@ -81,6 +91,8 @@ open_process = api("OpenProcess", W.HANDLE, [W.DWORD, W.BOOL, W.DWORD])
 assign = api("AssignProcessToJobObject", W.BOOL, [W.HANDLE, W.HANDLE])
 close = api("CloseHandle", W.BOOL, [W.HANDLE])
 terminate = api("TerminateJobObject", W.BOOL, [W.HANDLE, W.UINT])
+query = api("QueryInformationJobObject", W.BOOL,
+            [W.HANDLE, ctypes.c_int, ctypes.c_void_p, W.DWORD, ctypes.c_void_p])
 snapshot = api("CreateToolhelp32Snapshot", W.HANDLE, [W.DWORD, W.DWORD])
 first = api("Thread32First", W.BOOL, [W.HANDLE, ctypes.POINTER(THREAD)])
 next_thread = api("Thread32Next", W.BOOL, [W.HANDLE, ctypes.POINTER(THREAD)])
@@ -101,8 +113,21 @@ class Job:
             close(self.handle)
             self.handle = None
 
+    def wait_empty(self, timeout=5):
+        """Confirm all descendants exited before revoking sandbox resources."""
+        deadline = time.monotonic() + timeout
+        while self.handle:
+            accounting = ACCOUNTING()
+            if not query(self.handle, 1, ctypes.byref(accounting), ctypes.sizeof(accounting), None):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if not accounting.active:
+                return
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Windows Job still contains running processes")
+            time.sleep(0.01)
 
-def own(pid: int) -> Job:
+
+def own(pid: int, *, resume: bool = True) -> Job:
     job = Job(create_job(None, None))
     if not job.handle:
         raise ctypes.WinError(ctypes.get_last_error())
@@ -119,6 +144,8 @@ def own(pid: int) -> Job:
                 raise ctypes.WinError(ctypes.get_last_error())
         finally:
             close(process)
+        if not resume:
+            return job
         snap = snapshot(0x00000004, 0)  # TH32CS_SNAPTHREAD
         if snap == ctypes.c_void_p(-1).value:
             raise ctypes.WinError(ctypes.get_last_error())

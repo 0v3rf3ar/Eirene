@@ -55,6 +55,10 @@ Claude Code on native Windows requires approval for each normal turn without
 kernel isolation. Plan mode disables its command and edit tools. A WSL2 setup
 uses the Linux environment and its separate installation requirements.
 
+An experimental [Windows AppContainer launch primitive](windows-sandbox.md) is
+under development. It is not enabled in the command runtime and does not change
+the approval behavior described above.
+
 ## Shell profiles and PATH
 
 The Bash installer configures detected Sh/Dash, Bash, Zsh, Fish, Ksh, Csh/Tcsh,

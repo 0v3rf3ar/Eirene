@@ -23,6 +23,25 @@ def checksum_entry(archive):
     return f'{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n'
 
 
+def test_ci_archive_can_skip_smoke(tmp_path, monkeypatch):
+    dist = tmp_path / 'dist'
+    dist.mkdir()
+    (dist / 'eirene.exe').write_bytes(b'Windows binary fixture')
+    output = tmp_path / 'release'
+    monkeypatch.syspath_prepend(str(ROOT / 'scripts'))
+    monkeypatch.setattr(packager, 'check_host', lambda target: None)
+    def smoke(*args):
+        pytest.fail('CI requested packaging without archive smoke checks')
+    monkeypatch.setattr(packager, 'smoke_archive', smoke)
+    monkeypatch.setattr(sys, 'argv', ['package_release.py', '--target', 'windows-amd64',
+                                    '--dist', str(dist), '--output', str(output), '--skip-smoke'])
+    packager.main()
+    archives = list(output.glob('*.zip'))
+    assert len(archives) == 1
+    with zipfile.ZipFile(archives[0]) as bundle:
+        assert bundle.read('eirene.exe') == b'Windows binary fixture'
+
+
 @pytest.mark.parametrize('target', packager.TARGETS)
 def test_release_archives_preserve_binary_and_license(target, tmp_path):
     binary = tmp_path / 'binary'
