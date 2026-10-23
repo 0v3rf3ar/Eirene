@@ -2763,11 +2763,12 @@ async def test_a_picker_without_descriptions_still_works(workdir):
         await context.__aexit__(None, None, None)
 
 
-async def test_skills_lists_user_installed_examples(workdir):
-    import shutil
-    from eirene.core import skills, paths
-    for example in skills.examples_dir().glob("*.md"):
-        shutil.copy2(example, paths.skills_dir() / example.name)
+async def test_skills_lists_user_installed_guidance(workdir):
+    from eirene.core import paths
+    for name, description in [('Review', 'Review project changes.'),
+                              ('Deploy', 'Deploy this project.')]:
+        (paths.skills_dir() / f'{name.lower()}.md').write_text(
+            f'---\nname: {name}\ndescription: {description}\n---\n\nFollow project instructions.\n')
     from eirene import commands
     from eirene.ui.skill_picker import SkillPickerScreen
     from eirene.ui.picker import Picker
@@ -2784,8 +2785,8 @@ async def test_skills_lists_user_installed_examples(workdir):
         picker = app.screen.query_one(Picker)
         assert picker.waiting, "the skill list should open"
         shown = content(picker)
-        assert "systemd" in shown.lower()
-        assert "python" in shown.lower()
+        assert "review" in shown.lower()
+        assert "deploy" in shown.lower()
         from rich.cells import cell_len
         token_rows = [line for line in shown.splitlines() if line.endswith("tokens")]
         assert token_rows

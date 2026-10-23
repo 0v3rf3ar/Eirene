@@ -34,6 +34,9 @@ environment of your current terminal.
 
 ## Android / Termux
 
+See the [Android / Termux guide](android-termux.md) for supported workflows,
+command sandbox limitations, and graphical companion requirements.
+
 In the standard F-Droid/GitHub `com.termux` app on ARM64, run:
 
 ```sh

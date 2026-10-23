@@ -210,35 +210,32 @@ def test_a_broken_header_is_treated_as_body(eirene_home):
     assert "never closed" in skills_mod.load(skill)
 
 
-def test_the_examples_ship_with_the_source():
-    from eirene.core import skills as skills_mod
-
-    found = sorted(skills_mod.examples_dir().glob("*.md"))
-    assert len(found) >= 2
-    for path in found:
-        fields, body = skills_mod.split_front_matter(
-            path.read_text(encoding="utf-8"))
-        assert fields.get("name"), f"{path.name} needs a name"
-        assert fields.get("description"), f"{path.name} needs a description"
-        assert body.strip(), f"{path.name} needs a body"
+@pytest.fixture
+def legacy_examples(monkeypatch):
+    import hashlib
+    examples = {'old-one.md': '# Old one\nLegacy guidance.\n',
+                'old-two.md': '# Old two\nOther legacy guidance.\n'}
+    monkeypatch.setattr(skills, '_LEGACY_EXAMPLES', {
+        name: hashlib.sha256(body.encode()).hexdigest() for name, body in examples.items()})
+    return examples
 
 
-def test_old_seeded_examples_are_removed_without_touching_custom_skills():
+def test_old_seeded_examples_are_removed_without_touching_custom_skills(legacy_examples):
     target = paths.skills_dir()
     (target / skills.SEED_MARKER).write_text("examples copied once; delete to get them again\n")
-    for path in skills.examples_dir().glob("*.md"):
-        (target / path.name).write_text(path.read_text())
+    for name, body in legacy_examples.items():
+        (target / name).write_text(body)
     (target / "custom.md").write_text("# Custom\nUser instructions")
     assert skills.remove_seeded_examples() == 2
     assert {skill.name for skill in skills.discover()} == {"custom"}
     assert skills.remove_seeded_examples() == 0
 
 
-def test_edited_or_manually_added_examples_are_preserved():
+def test_edited_or_manually_added_examples_are_preserved(legacy_examples):
     target = paths.skills_dir()
-    source = skills.examples_dir() / "python-project.md"
-    copied = target / source.name
-    copied.write_text(source.read_text())
+    name, body = next(iter(legacy_examples.items()))
+    copied = target / name
+    copied.write_text(body)
     assert skills.remove_seeded_examples() == 0
     (target / skills.SEED_MARKER).write_text("examples copied once; delete to get them again\n")
     copied.write_text(copied.read_text() + "\nMy custom rule")

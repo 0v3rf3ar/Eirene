@@ -29,6 +29,9 @@ Place a Markdown file in `~/.local/share/eirene/skills`, or the corresponding di
 under `EIRENE_HOME`. Both flat `.md` files and a directory containing `SKILL.md`
 are discovered.
 
+Eirene ships without bundled example skills. Add your own files when needed or
+install a plugin that provides skills.
+
 ```text
 skills/
 |-- concise-reviews.md
@@ -89,5 +92,5 @@ four, not a tokenizer measurement.
 A loaded body is bounded to 60000 characters. Inline guidance has a 24000-character
 body budget and lists deferred skills with their paths. Tool-capable managed
 models instead receive a catalog and can request `load_skill`. Discovery does
-not install dependencies or execute support scripts. First launch does not copy
-the example files from the source `skills/` directory into your data directory.
+not install dependencies or execute support scripts. First launch leaves the
+user skills directory empty until you add guidance.

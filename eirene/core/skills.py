@@ -173,12 +173,10 @@ def inline_block(skills: list[Skill], budget: int = SKILL_BUDGET) -> str:
             "matches it.\n\n" + "\n\n".join(parts))
 
 
-def examples_dir() -> Path:
-    """Where the shipped example skills live."""
-    import sys
-    if getattr(sys, "frozen", False):
-        return Path(getattr(sys, "_MEIPASS", ".")) / "skills"
-    return Path(__file__).resolve().parents[2] / "skills"
+_LEGACY_EXAMPLES = {
+    "python-project.md": "636d81ec966512172a1968150b6311ac85f4728eebc0ae6c81c0105d527d6088",
+    "systemd-service.md": "926136e946b8b221bed386e27683a224b2d6b2281c6fcb73f5828c77b3a5af46",
+}
 
 
 def remove_seeded_examples() -> int:
@@ -190,12 +188,8 @@ def remove_seeded_examples() -> int:
             return 0
     except (OSError, UnicodeError):
         return 0
-    original = {
-        "python-project.md": "636d81ec966512172a1968150b6311ac85f4728eebc0ae6c81c0105d527d6088",
-        "systemd-service.md": "926136e946b8b221bed386e27683a224b2d6b2281c6fcb73f5828c77b3a5af46",
-    }
     removed = 0
-    for name, digest in original.items():
+    for name, digest in _LEGACY_EXAMPLES.items():
         path = target / name
         try:
             if not path.is_symlink() and hashlib.sha256(path.read_text(encoding="utf-8").encode()).hexdigest() == digest:

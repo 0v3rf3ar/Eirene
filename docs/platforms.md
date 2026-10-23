@@ -102,6 +102,9 @@ runtime. For server mounts/env, see [MCP fields](config-file.md#standalone-mcp-d
 
 ## Experimental Android / Termux beta
 
+See the [Android / Termux guide](android-termux.md) for installation, supported
+features, command permissions, and companion requirements.
+
 Beta tags also attempt an optional ARM64 Termux `.deb` build. The job runs in
 the official Termux Docker image and uploads a package only after native import,
 command, file-read, CLI, and PTY UI checks pass. This tests Android/Bionic

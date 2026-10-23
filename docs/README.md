@@ -14,6 +14,7 @@ an action or the [plugin catalog](plugin-catalog.md) to choose a workflow.
 | Guide | What you will learn |
 | --- | --- |
 | [Installation](installation.md) | Install, choose a version, configure PATH, and download manually. |
+| [Android / Termux](android-termux.md) | Install and update on Android, understand command permissions, and use the companion with a graphical terminal. |
 | [Providers and models](providers.md) | Connect API, local, custom, and subscription providers. |
 | [Platform support](platforms.md) | Supported releases, shells, isolation, and OS requirements. |
 | [Configuration](configuration.md) | Overview of settings, credentials and environment variables. |

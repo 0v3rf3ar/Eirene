@@ -55,6 +55,10 @@ The companion is disabled by default. Use `/companion on` to enable her or
 `/companion off` to hide her. The command is listed only in image-capable
 terminals, and the preference is saved in configuration.
 
+The standard Termux terminal cannot display the companion. On Android, use a GUI
+environment and a compatible image-capable terminal; see the
+[Termux companion requirements](android-termux.md#companion-and-graphical-terminals).
+
 `accessible_icons: true` is another configuration preference for accessible icon
 presentation. See [configuration](configuration.md) for editing these settings.
 

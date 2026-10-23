@@ -40,12 +40,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/insta
 irm https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.ps1 | iex
 ```
 
-**Android / Termux** · ARM64 · experimental
-
-Run the Bash installer above in the standard `com.termux` app. It installs or
-updates the newest compatible Android package, including betas, and its dependencies
-through Termux APT. Rerun the same command to update.
-
 <details>
 <summary><strong>Edge / beta</strong> — try the latest prerelease</summary>
 
@@ -65,7 +59,7 @@ $installer = irm https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/instal
 & ([scriptblock]::Create($installer)) -Edge
 ```
 
-Already installed? Run `/update edge` inside Eirene. On Termux, rerun the installer.
+Already installed? Run `/update edge` inside Eirene.
 
 </details>
 
@@ -75,13 +69,6 @@ terminal after installation, run `eirene` from your project directory, and use
 
 [Documentation](docs/README.md) · [Installation options](docs/installation.md) ·
 [Release downloads](https://github.com/0v3rf3ar/Eirene/releases)
-
-To run from a source checkout with [uv](https://docs.astral.sh/uv/):
-
-```sh
-uv sync --locked
-uv run --locked eirene
-```
 
 [Configuration reference](docs/config-file.md) · [Data and source layout](docs/data-layout.md) ·
 [Standalone MCP setup](docs/mcp.md#declare-a-standalone-server)
