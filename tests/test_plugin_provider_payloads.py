@@ -1,5 +1,11 @@
 """All API provider factories carry plugin instructions and portable tool schemas."""
 import json
+import sys
+
+if sys.version_info >= (3, 14):
+    from compression.zstd import decompress as zstd_decompress
+else:
+    from zstandard import decompress as zstd_decompress
 
 import httpx
 import pytest
@@ -9,6 +15,13 @@ from eirene.core.plugin_install import install
 from eirene.core.session import Session
 from eirene.providers import base, registry
 from eirene.providers.local_profile import LocalProfile
+
+
+def request_json(request):
+    content = request.content
+    if request.headers.get("Content-Encoding") == "zstd":
+        content = zstd_decompress(content)
+    return json.loads(content)
 
 
 @pytest.mark.parametrize("key", [key for key, spec in registry.SPECS.items()
@@ -21,7 +34,7 @@ async def test_plugin_command_reaches_each_api_provider(key, config, box, tmp_pa
     config.set_provider(key, api_key="test-key-for-mock", base_url="https://mock.invalid/v1")
     requests = []
     def respond(request):
-        requests.append(json.loads(request.content))
+        requests.append(request_json(request))
         protocol = registry.SPECS[key].protocol
         if protocol == "chatgpt-responses":
             data = "data: " + json.dumps({"type": "response.completed", "response": {

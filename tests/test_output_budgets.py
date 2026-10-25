@@ -227,7 +227,7 @@ async def test_background_completions_share_budget_and_keep_artifacts(workdir, m
         writer.feed(evidence)
         writer.close()
         items.append(SimpleNamespace(id=str(index), running=False, state="failed",
-                     artifact=writer, call_id=str(index), command="test command",
+                     artifact=writer, call_id=str(index), command="test command", cwd=workdir,
                      started=time.monotonic(), notified=False))
 
     async def poll(*args, **kwargs):

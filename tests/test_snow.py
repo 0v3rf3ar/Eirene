@@ -136,6 +136,9 @@ async def test_snow_enters_at_top_before_falling_and_restarts_above_screen(
                    for child in app.transcript.children if child.display), default=0)
         available = app.transcript.content_size.height - top
         entry = available * 0.5
+        # A zero origin keeps elapsed exact; small real clocks (fresh CI VMs)
+        # round (start + elapsed) - start below frame boundaries.
+        snow._started = 0.0
         now = [snow._started]
         monkeypatch.setattr("eirene.ui.snow.monotonic", lambda: now[0])
 

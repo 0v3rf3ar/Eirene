@@ -1,8 +1,14 @@
 """Host-origin context never masquerades as signed model activity."""
 import copy
 import json
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+
+if sys.version_info >= (3, 14):
+    from compression.zstd import decompress as zstd_decompress
+else:
+    from zstandard import decompress as zstd_decompress
 
 import httpx
 import pytest
@@ -12,6 +18,13 @@ from eirene.core.session import Message, Session, export_session, import_session
 from eirene.providers import base, registry
 from eirene.providers.history import complete_tail, provider_history
 from eirene.providers.preflight import validate_history
+
+
+def request_json(request):
+    content = request.content
+    if request.headers.get("Content-Encoding") == "zstd":
+        content = zstd_decompress(content)
+    return json.loads(content)
 
 KEYS = ['chatgpt', 'chatgpt-plan', 'anthropic', 'gemini', 'groq', 'deepseek',
         'kimi', 'ollama', 'ollama-local', 'perplexity', 'omniroute',
@@ -58,7 +71,7 @@ async def test_all_api_providers_keep_background_context_through_lifecycle(key, 
         if request.url.path.endswith('/api/show'):
             return httpx.Response(200, json={'model_info': {'llama.context_length': 32768},
                                             'details': {'parameter_size': '70B'}})
-        body = json.loads(request.content)
+        body = request_json(request)
         captures.append(body)
         encoded = json.dumps(body)
         assert 'BACKGROUND_EVIDENCE' in encoded
@@ -208,7 +221,7 @@ async def test_saved_model_poll_updates_original_command_without_synthetic_poll(
     artifact.feed('command failed')
     artifact.close()
     item = SimpleNamespace(id='p', owner=session.id, running=False, notified=False,
-                           call_id='original-command', command='echo result', state='failed',
+                           call_id='original-command', command='echo result', cwd=workdir, state='failed',
                            started=time.monotonic(), artifact=artifact, background=True, service=False)
     monkeypatch.setattr(processes, '_processes', {'p': item})
     monkeypatch.setattr(processes, 'poll', AsyncMock(return_value='p: exited 1; failed\ncommand failed'))

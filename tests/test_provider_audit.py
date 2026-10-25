@@ -216,7 +216,7 @@ async def test_deepseek_background_completion_survives_resume(workdir, config, m
     writer.feed('process finished')
     writer.close()
     item = SimpleNamespace(id='p', running=False, state=state, artifact=writer,
-                           call_id='model-call', command='echo ok', started=time.monotonic(), notified=False)
+                           call_id='model-call', command='echo ok', cwd=workdir, started=time.monotonic(), notified=False)
     monkeypatch.setattr(processes, 'pending', lambda *args: [item])
     async def poll(*args, **kwargs):
         return 'process finished'
@@ -269,7 +269,7 @@ async def test_gemini_background_completion_uses_observation(workdir, config, mo
     writer.feed('exit 0\nok')
     writer.close()
     item = SimpleNamespace(id='p', running=False, state='succeeded', artifact=writer,
-                           call_id='model-call', command='echo ok', started=time.monotonic(), notified=False)
+                           call_id='model-call', command='echo ok', cwd=workdir, started=time.monotonic(), notified=False)
     monkeypatch.setattr(processes, 'pending', lambda *args: [item])
     async def poll(*args, **kwargs):
         return 'exit 0\nok'

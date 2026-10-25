@@ -136,7 +136,7 @@ class ChatGPTPlan(Provider):
                               "tools": [{"type": "function", **spec, "strict": False} for spec in tools]}]
         content = json.dumps(body, ensure_ascii=False, allow_nan=False,
                              separators=(",", ":")).encode("utf-8")
-        headers = await self._headers()
+        headers = dict(await self._headers())
         # Small bodies rarely benefit enough to justify compression overhead.
         if len(content) >= 1024:
             compressed = zstd_compress(content, level=3)
