@@ -46,6 +46,8 @@ def prepare_renderer(config):
 def emotion(status, idle_seconds: float, waiting_for_user: bool = False) -> str:
     if waiting_for_user:
         return "sleepy" if idle_seconds >= SLEEP_AFTER else "question"
+    if status.active and status.phase == "idle":
+        return "sleepy" if idle_seconds >= SLEEP_AFTER else "idle"
     if status.active:
         if status.writing_files:
             return "writing"

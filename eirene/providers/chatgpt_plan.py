@@ -4,6 +4,12 @@ from __future__ import annotations
 
 import json
 import ssl
+import sys
+
+if sys.version_info >= (3, 14):
+    from compression.zstd import compress as zstd_compress
+else:
+    from zstandard import compress as zstd_compress
 
 import httpx
 
@@ -128,6 +134,15 @@ class ChatGPTPlan(Provider):
             body["tools"] = [{"type": "namespace", "name": "eirene",
                               "description": "Eirene workspace tools",
                               "tools": [{"type": "function", **spec, "strict": False} for spec in tools]}]
+        content = json.dumps(body, ensure_ascii=False, allow_nan=False,
+                             separators=(",", ":")).encode("utf-8")
+        headers = await self._headers()
+        # Small bodies rarely benefit enough to justify compression overhead.
+        if len(content) >= 1024:
+            compressed = zstd_compress(content, level=3)
+            if len(compressed) < len(content):
+                content = compressed
+                headers["Content-Encoding"] = "zstd"
         completed = None
         items = {}
         text_parts = {}
@@ -155,8 +170,8 @@ class ChatGPTPlan(Provider):
             return result
         try:
             async with self._client() as client:
-                async with client.stream("POST", self.base_url + "/responses", json=body,
-                                         headers=await self._headers()) as response:
+                async with client.stream("POST", self.base_url + "/responses", content=content,
+                                         headers=headers) as response:
                     if response.status_code >= 400:
                         await response.aread()
                         self._status(response, model)

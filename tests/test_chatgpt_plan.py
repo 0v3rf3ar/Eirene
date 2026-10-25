@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import ssl
+import sys
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -13,6 +14,11 @@ import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
+
+if sys.version_info >= (3, 14):
+    from compression.zstd import decompress as zstd_decompress
+else:
+    from zstandard import decompress as zstd_decompress
 
 from eirene.core.errors import AuthError, ProviderError
 from eirene.core.session import Session
@@ -193,6 +199,58 @@ def sse(*events):
     return "".join("data: " + json.dumps(event) + "\n\n" for event in events)
 
 
+def request_json(request):
+    content = request.content
+    if request.headers.get("Content-Encoding") == "zstd":
+        content = zstd_decompress(content)
+    return json.loads(content)
+
+
+@pytest.mark.parametrize("prompt, compressed", [("hello", False), ("سلام 🌍\n" * 1000, True)])
+async def test_request_compression_preserves_input_and_streaming(prompt, compressed):
+    provider = ChatGPTPlan()
+    save_account(provider.auth)
+    messages = [{"role": "user", "content": prompt}]
+    def handler(req):
+        assert req.headers["Authorization"] == "Bearer access-secret"
+        assert req.headers["Content-Type"] == "application/json"
+        assert req.headers.get("Content-Encoding") == ("zstd" if compressed else None)
+        assert int(req.headers["Content-Length"]) == len(req.content)
+        assert request_json(req) == {
+            "model": "test", "input": to_responses_input(messages),
+            "store": False, "stream": True, "include": ["reasoning.encrypted_content"]}
+        return httpx.Response(200, text=sse(
+            {"type": "response.output_text.delta", "delta": "answer"},
+            {"type": "response.completed", "response": {"status": "completed", "output": [],
+                "usage": {"input_tokens": 1234, "output_tokens": 1}}}))
+    base.set_transport(httpx.MockTransport(handler))
+    try:
+        events = [event async for event in provider.stream(messages, "test")]
+        assert "".join(e.text for e in events if isinstance(e, base.TextDelta)) == "answer"
+        assert any(isinstance(e, base.Usage) and e.input_tokens == 1234 for e in events)
+        assert isinstance(events[-1], base.Done)
+    finally:
+        await provider.close()
+
+
+async def test_request_stays_uncompressed_when_zstd_would_increase_size(monkeypatch):
+    provider = ChatGPTPlan()
+    save_account(provider.auth)
+    monkeypatch.setattr("eirene.providers.chatgpt_plan.zstd_compress",
+                        lambda content, **kwargs: content + b"overhead")
+    def handler(req):
+        assert "Content-Encoding" not in req.headers
+        assert request_json(req)["instructions"] == "rules\n" * 1000
+        return httpx.Response(200, text=sse(
+            {"type": "response.output_text.delta", "delta": "answer"},
+            {"type": "response.completed", "response": {"status": "completed", "output": []}}))
+    base.set_transport(httpx.MockTransport(handler))
+    try:
+        _ = [event async for event in provider.stream([], "test", system="rules\n" * 1000)]
+    finally:
+        await provider.close()
+
+
 TOOLS = [{"name": "read_file", "description": "Read a file", "parameters": {
     "type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}]
 
@@ -284,7 +342,7 @@ async def test_responses_tool_round_trip_and_session_resume(workdir):
         if req.url.path == "/v1/models":
             return httpx.Response(200, json={"models": [{"slug": "model-b", "visibility": "list"},
                 {"slug": "hidden", "visibility": "hide"}, {"slug": "model-a", "visibility": "list"}]})
-        body = json.loads(req.content)
+        body = request_json(req)
         assert body["store"] is False and body["stream"] is True
         assert "max_output_tokens" not in body and "max_tokens" not in body
         assert body["tools"][0]["type"] == "namespace"
@@ -351,7 +409,7 @@ async def test_agent_executes_own_tools_and_sends_results(workdir, config, box):
         if req.method == "GET":
             return httpx.Response(200, json={"models": [
                 {"slug": "test-model", "visibility": "list", "context_window": 32768}]})
-        body = json.loads(req.content)
+        body = request_json(req)
         calls.append(body)
         # Title generation is a separate inference call without tools.
         if not body.get("tools"):
@@ -515,7 +573,7 @@ async def test_reasoning_catalog_picker_and_wire_payload(config):
     def handler(req):
         if req.method == "GET":
             return httpx.Response(200, json=catalog)
-        captured.append(json.loads(req.content))
+        captured.append(request_json(req))
         return httpx.Response(200, text=sse({"type": "response.output_text.delta", "delta": "answer"},
             {"type": "response.completed", "response": {"status": "completed", "output": []}}))
     base.set_transport(httpx.MockTransport(handler))

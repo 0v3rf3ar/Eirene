@@ -141,6 +141,11 @@ instructions, conversation history, permissions, file edits, commands, and MCP
 tools. It does not require the Codex CLI. The existing `/connect codex` connection
 continues to use Codex's own agent loop.
 
+ChatGPT plan requests of at least 1 KiB use lossless zstd compression when it
+reduces the body size. The server decompresses the request before the model
+receives it, preserving the full context and token counts. Smaller requests are
+sent uncompressed. This applies only to the direct ChatGPT plan connection.
+
 Run `/connect chatgpt-plan` again to choose a saved account, add an account,
 reauthorize, or sign out. Credentials are stored separately from project files
 and `config.json`, in `chatgpt/auth.json` under Eirene's data directory (or

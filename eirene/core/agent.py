@@ -48,6 +48,7 @@ DEFAULT_ITERATIONS = 0
 THINKING = "thinking"
 WRITING = "writing"
 RUNNING = "running"
+IDLE = "idle"
 ANSWERING = "answering"
 WAITING = "waiting for confirmation"
 
@@ -699,21 +700,8 @@ class Agent:
                     from ..tools import processes
                     pending = processes.pending(self.sandbox.root, self.session.id)
                     if pending:
-                        yield Phase(RUNNING)
-                        yield Notice("waiting for background commands", transient=True, phase="running")
-                        waits = [asyncio.create_task(p.done.wait()) for p in pending]
-                        changed = asyncio.create_task(self._input_arrived.wait())
-                        try:
-                            all_done = asyncio.gather(*waits)
-                            await asyncio.wait({all_done, changed}, return_when=asyncio.FIRST_COMPLETED)
-                            if self.pending_input:
-                                continue
-                        finally:
-                            changed.cancel()
-                            all_done.cancel()
-                            for wait in waits:
-                                wait.cancel()
-                            await asyncio.gather(all_done, changed, *waits, return_exceptions=True)
+                        async for event in self._wait_for_background(pending):
+                            yield event
                         continue
                     if self.pending_input:
                         continue
@@ -761,6 +749,18 @@ class Agent:
                 if stop:
                     yield Notice("waiting for required user input" if status == "blocked" else "stopped by you")
                     break
+
+                # A poll-only batch means the model has no independent work.
+                # Wait locally even when it forgot wait=true, rather than calling
+                # the provider repeatedly to rediscover the same running state.
+                if not stop and all(c.name == "poll_process" for c in calls):
+                    from ..tools import processes
+                    ids = {str(c.arguments.get("process_id", "")) for c in calls}
+                    pending = [p for p in processes.pending(self.sandbox.root, self.session.id)
+                               if p.id in ids and p.running]
+                    if pending and not self.pending_input:
+                        async for event in self._wait_for_background(pending):
+                            yield event
 
         except asyncio.CancelledError:
             from ..tools import processes
@@ -1138,6 +1138,18 @@ class Agent:
         attachment_id = (str(call.arguments.get("attachment_id") or "")
                          if call.name == "read_attachment" else "")
         yield ToolStarted(call.id, call.name, label, kind, attachment_id)
+        execution_arguments = call.arguments
+        if call.name == "poll_process" and call.arguments.get("wait"):
+            pending = [p for p in processes.pending(self.sandbox.root, self.session.id)
+                       if p.id == str(call.arguments.get("process_id", "")) and p.running]
+            if pending:
+                async for event in self._wait_for_background(pending):
+                    yield event
+                # A user message may have interrupted the local wait. Return the
+                # current state so the next provider call can act on that input.
+                execution_arguments = {**call.arguments, "wait": False}
+            else:
+                yield Phase(IDLE)
         self.session.add_note("tool_state", call_id=call.id, tool=call.name,
                               state="started", approved=True)
         output = artifacts.Writer()
@@ -1161,7 +1173,7 @@ class Agent:
                         raise ToolError(f"skill '{wanted}' is disabled or unavailable")
                 with self.sandbox.permit(*outside):
                     async for item in self._execute_live(call,
-                        call.name, call.arguments, self.sandbox,
+                        call.name, execution_arguments, self.sandbox,
                         timeout=float(self.config.get("shell_timeout", 120) or 120),
                         max_bytes=min(result_limit, int(self.config.get("max_output_bytes", 200_000) or 200_000)),
                         output=output, expected_file=expected_file,
@@ -1283,6 +1295,20 @@ class Agent:
         available = max(0, budget - overhead - self.context_size() - 64 * share)
         return min(ceiling, available * 4 // max(1, share))
 
+    async def _wait_for_background(self, pending):
+        """Sleep locally until any command completes or the user steers the turn."""
+        yield Phase(IDLE)
+        yield Notice("waiting for background commands", transient=True, phase=IDLE)
+        waits = [asyncio.create_task(p.done.wait()) for p in pending]
+        changed = asyncio.create_task(self._input_arrived.wait())
+        try:
+            if not self.pending_input:
+                await asyncio.wait([*waits, changed], return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in [*waits, changed]:
+                task.cancel()
+            await asyncio.gather(*waits, changed, return_exceptions=True)
+
     async def _background_completions(self):
         from ..tools import processes
         completed = [item for item in processes.pending(self.sandbox.root, self.session.id)
@@ -1292,6 +1318,7 @@ class Agent:
         remaining = await self._tool_output_limit()
         for item in completed:
             result = await processes.poll(item.id, all_output=True)
+            result += f"\nCommand: {item.command}\nWorking directory: {item.cwd}"
             call_id = "background_" + item.id
             self.session.add_assistant("", [{"id": call_id, "name": "poll_process", "arguments": {"process_id": item.id}}], host_generated=True)
             limit = min(remaining, await self._tool_output_limit())

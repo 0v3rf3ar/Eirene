@@ -761,7 +761,7 @@ async def test_tool_calls_appear_as_cards(workdir):
         cards = blocks(app, CommandBlock)
         assert cards and "echo made" in content(cards[0])
         assert "made" in content(cards[0])
-        assert "Ran(echo made)" in content(cards[0])
+        assert "Ran (echo made)" in content(cards[0])
         assert not cards[0].is_error
     finally:
         await context.__aexit__(None, None, None)
@@ -774,24 +774,24 @@ async def test_command_card_has_running_success_and_error_states(workdir):
     try:
         card = CommandBlock("run_command", "pytest -q")
         await app.push(card)
-        assert "• Running(pytest -q)" in content(card)
+        assert "• Running (pytest -q)" in content(card)
         assert card._Static__content.get_style_at_offset(app.console, 0).color.name == palette.YELLOW
         assert not any(span.style == "underline" for span in card._Static__content.spans)
 
         card.expanded = True
         card.flush()
-        assert "• Running(pytest -q)" in content(card)
+        assert "• Running (pytest -q)" in content(card)
         assert not any(span.style == "underline" for span in card._Static__content.spans)
         card.expanded = False
 
         card.finish("Still running as managed process p1", False, 1.0)
         card.flush()
-        assert "• Working(pytest -q)" in content(card)
+        assert "• Running (pytest -q)" in content(card)
         assert card._Static__content.get_style_at_offset(app.console, 0).color.name == palette.YELLOW
 
         card.finish("12 passed\nsecond line", False, 2.0)
         card.flush()
-        assert "• Ran(pytest -q)" in content(card)
+        assert "• Ran (pytest -q)" in content(card)
         assert card._Static__content.get_style_at_offset(app.console, 0).color.name == palette.GREEN
         assert content(card).splitlines()[1:] == ["  └ 12 passed", "    second line"]
 
@@ -799,7 +799,7 @@ async def test_command_card_has_running_success_and_error_states(workdir):
         await app.push(failed)
         failed.finish("exit 3", True, 1.0)
         failed.flush()
-        assert "• Ran(exit 3)" in content(failed)
+        assert "• Failed (exit 3)" in content(failed)
         assert failed._Static__content.get_style_at_offset(app.console, 0).color.name == palette.RED
         assert failed.is_error
     finally:
@@ -1452,7 +1452,7 @@ async def test_resume_redraws_saved_command_state(workdir):
     try:
         await pilot.pause()
         card = blocks(app, CommandBlock)[0]
-        assert "• Ran(pytest -q)" in content(card)
+        assert "• Ran (pytest -q)" in content(card)
         assert "└ 12 passed" in content(card)
         assert card.finished and not card.is_error and card.seconds == 3.0
     finally:
@@ -3989,7 +3989,7 @@ async def test_long_command_is_abbreviated_but_expansion_and_approval_show_it_al
         assert "…" in card.render().plain
         card.expanded = True
         card.flush()
-        assert f"Running({command})" in card.render().plain
+        assert f"Running ({command})" in card.render().plain
         assert "…" not in card.render().plain
         card.expanded = False
         card.flush()
@@ -4161,7 +4161,8 @@ async def test_resume_background_completion_updates_original_card(workdir, autom
         cards = blocks(app, ToolBlock)
         assert len(cards) == 1
         card = cards[0]
-        assert 'Ran(example)' in content(card)
+        action = 'Failed' if exit_code else 'Ran'
+        assert f'{action} (example)' in content(card)
         assert 'finished output' in content(card)
         assert card.is_error == (exit_code != 0)
         colour = palette.GREEN if exit_code == 0 else palette.RED
@@ -4214,7 +4215,9 @@ async def test_live_background_completion_updates_original_card(workdir, python_
         assert len(cards) == 1
         card = cards[0]
         assert card.finished and card.is_error == (exit_code != 0), card.result
-        assert 'Working(' not in content(card)
+        action = 'Failed' if exit_code else 'Ran'
+        assert f'{action} (' in content(card)
+        assert 'Running (' not in content(card)
         colour = palette.GREEN if exit_code == 0 else palette.RED
         assert card._Static__content.get_style_at_offset(app.console, 0).color.name == colour
     finally:

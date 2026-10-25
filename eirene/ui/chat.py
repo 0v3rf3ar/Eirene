@@ -564,15 +564,15 @@ class CommandBlock(ToolBlock):
         if not self.finished:
             color, action = palette.YELLOW, "Running"
         elif self.is_error:
-            color, action = palette.RED, "Ran"
+            color, action = palette.RED, "Failed"
         elif self.result.startswith("Still running as managed process"):
-            color, action = palette.YELLOW, "Working"
+            color, action = palette.YELLOW, "Running"
         else:
             color, action = palette.GREEN, "Ran"
         marker = art.icon("bullet")
         body.append(f"{marker} ", style=f"bold {color}")
         body.append(action, style="bold")
-        body.append("(")
+        body.append(" (")
         label = self.label
         if not self.expanded:
             label = " ".join(label.split())

@@ -202,7 +202,7 @@ class ShellResult:
     def summary(self) -> str:
         if self.process_id:
             return (f"Still running as managed process {self.process_id}. It has not finished. "
-                    "Continue independent work, then use poll_process to check the outcome; do not restart this command.\n"
+                    "Continue independent work if any remains. Otherwise use poll_process wait=true or end your response to idle locally. Completion, output and exit code will be delivered automatically; do not poll repeatedly or restart this command.\n"
                     + self.output).rstrip()
         if self.refused:
             return f"refused: {self.refused}"

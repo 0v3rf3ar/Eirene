@@ -37,12 +37,12 @@ def test_counts_the_lines(workdir):
     change = make(workdir)
     assert change.added == 2
     assert change.removed == 1
-    assert change.summary == "Added 2 lines, removed 1 line"
+    assert change.summary == "(+2 -1)"
 
 
-def test_one_line_each_reads_singular(workdir):
+def test_one_line_each_uses_signed_counts(workdir):
     change = make(workdir, before="a\n", after="b\n")
-    assert change.summary == "Added 1 line, removed 1 line"
+    assert change.summary == "(+1 -1)"
 
 
 def test_rows_carry_line_numbers(workdir):
@@ -61,7 +61,7 @@ def test_the_header_names_the_file(workdir):
     out = render(change)
     assert "• Update(" in out and "notes.txt)" in out
     assert "▤" not in out
-    assert "Added 2 lines, removed 1 line" in out
+    assert "(+2 -1)" in out
 
 
 @pytest.mark.parametrize("name", [
@@ -214,7 +214,13 @@ def test_the_header_matches_the_layout(workdir):
     lines = render(change).splitlines()
     assert lines[0].startswith("• Update(")
     assert lines[0].endswith("notes.txt)")
-    assert lines[1].startswith("  └ Added 2 lines, removed 1 line")
+    assert lines[1].startswith("  └ (+2 -1)")
+    summary = diff.ChangeView(change).lines(60)[1]
+    console = Console()
+    assert summary.get_style_at_offset(console, summary.plain.index("+2")).color.name == palette.GREEN
+    assert summary.get_style_at_offset(console, summary.plain.index("-1")).color.name == palette.RED
+    assert summary.get_style_at_offset(console, summary.plain.index("(")).dim
+    assert summary.get_style_at_offset(console, summary.plain.index(")")).dim
 
 
 def test_plain_text_lines_up_with_the_gutter(workdir):

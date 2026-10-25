@@ -175,6 +175,10 @@ class StatusLine(Static):
             self.update(body)
             return
 
+        if self.phase == "idle":
+            self.update(Text("  • idle · waiting for background commands  esc to stop", style="dim"))
+            return
+
         elapsed = time.monotonic() - self.started
         body = Text()
         config = getattr(self.app, "config", None) if self.is_mounted else None

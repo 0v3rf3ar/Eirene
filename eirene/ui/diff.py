@@ -87,9 +87,7 @@ class Change:
 
     @property
     def summary(self) -> str:
-        parts = [f"Added {self.added} line{'' if self.added == 1 else 's'}"]
-        parts.append(f"removed {self.removed} line{'' if self.removed == 1 else 's'}")
-        return ", ".join(parts)
+        return f"(+{self.added} -{self.removed})"
 
 
 def parse(path: str, diff: str, action: str = "") -> Change:
@@ -232,12 +230,11 @@ class ChangeView:
         change = self.change
         summary = Text()
         summary.append(f"  {art.icon('corner')} ", style="dim")
-        summary.append("Added ", style="dim")
-        summary.append(str(change.added), style="bold")
-        summary.append(" line" if change.added == 1 else " lines", style="dim")
-        summary.append(", removed ", style="dim")
-        summary.append(str(change.removed), style="bold")
-        summary.append(" line" if change.removed == 1 else " lines", style="dim")
+        summary.append("(", style="dim")
+        summary.append(f"+{change.added}", style=f"bold {palette.GREEN}")
+        summary.append(" ", style="dim")
+        summary.append(f"-{change.removed}", style=f"bold {palette.RED}")
+        summary.append(")", style="dim")
         return summary
 
     def __rich_console__(self, console: Console,

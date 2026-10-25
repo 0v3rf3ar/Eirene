@@ -141,3 +141,16 @@ async def test_shades_follow_theme_and_reduced_motion(workdir, theme_name):
         assert body.spans[0].style == styles[-1]
     finally:
         await context.__aexit__(None, None, None)
+
+
+def test_background_idle_has_no_spinner_and_resumes_on_thinking(clocked_status, monkeypatch):
+    status, clock, frames = clocked_status
+    status.set_phase("idle")
+    with monkeypatch.context() as patch:
+        patch.setattr(status_mod.art, "spinner_frame", lambda *args: pytest.fail("idle animated"))
+        clock.now += 10
+        status._refresh()
+    assert status.active
+    assert frames[-1].plain == "  • idle · waiting for background commands  esc to stop"
+    status.set_phase("thinking")
+    assert "waiting for background commands" not in frames[-1].plain

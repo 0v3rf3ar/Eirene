@@ -42,7 +42,9 @@ the background without restarting. Builds and tests may start there immediately.
 The background line appears below the model name while work is active.
 
 Press Ctrl+B or select that line to view output, see state, or stop a command.
-Ask Eirene to wait for the result before treating a check as complete. Silence
+When only background commands remain, Eirene shows a static idle status and waits
+locally without sending API requests. A completion or timeout wakes the model with
+the process output and exit code; new user input can also interrupt the wait. Silence
 from a command is not a successful exit or evidence of a hang.
 
 ## Start a server or watcher

@@ -28,6 +28,9 @@ def test_parallel_writes_hold_expression_until_last_write_finishes(monkeypatch):
     assert emotion(status, 61) == "sleepy"
     status.start()
     assert emotion(status, 61) == "thinking"
+    status.set_phase("idle")
+    assert emotion(status, 0) == "idle"
+    assert emotion(status, 61) == "sleepy"
 
 
 def test_plain_output_does_not_probe_terminal(monkeypatch):

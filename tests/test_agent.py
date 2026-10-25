@@ -1284,3 +1284,88 @@ async def test_context_budget_uses_profile_updated_during_prepare(workdir):
     expected = estimate_tokens(provider.profile.system(runner.system_prompt()))
     expected += estimate_tokens(json.dumps(provider.profile.tools(runner.tool_specs())))
     assert runner._context_overhead == expected
+
+
+@pytest.mark.parametrize("poll_wait", [None, False, True])
+async def test_background_idle_makes_no_api_calls_until_completion(workdir, python_command, poll_wait):
+    from eirene.tools import processes, shell
+
+    provider = Script()
+    runner = build(workdir, provider)
+    result = await shell.run(
+        python_command("import time; print('process output', flush=True); time.sleep(30)"),
+        workdir, owner=runner.session.id, execution="background", timeout=60,
+    )
+    first = ([TextDelta("waiting"), Done("stop")] if poll_wait is None else
+             [ToolCall("poll", "poll_process", {"process_id": result.process_id, "wait": poll_wait}),
+              Done("tool_use")])
+    provider.turns = [first, [TextDelta("finished"), Done("stop")]]
+    idle = asyncio.Event()
+    events = []
+
+    async def consume():
+        async for event in runner.run("go"):
+            events.append(event)
+            if isinstance(event, agent_mod.Phase) and event.name == "idle":
+                idle.set()
+
+    task = asyncio.create_task(consume())
+    try:
+        await asyncio.wait_for(idle.wait(), 5)
+        await asyncio.sleep(.05)
+        assert provider.calls == 1
+        assert not task.done()
+        await processes.stop(result.process_id)
+        await asyncio.wait_for(task, 5)
+        assert provider.calls == 2
+        completion = next(e for e in events if isinstance(e, ToolFinished) and e.name == "run_command")
+        assert completion.is_error
+        assert "exited" in completion.result and "cancelled" in completion.result
+        assert "process output" in completion.result
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await processes.stop(result.process_id)
+
+
+@pytest.mark.parametrize("wake", ["completion", "input"])
+async def test_idle_wakes_on_first_background_completion_or_input(workdir, wake):
+    from eirene.tools.processes import ManagedProcess
+
+    runner = build(workdir, Script([TextDelta("done"), Done("stop")]))
+    first = ManagedProcess("first", "one", workdir)
+    second = ManagedProcess("second", "two", workdir)
+    waiter = runner._wait_for_background([first, second])
+    assert (await anext(waiter)).name == "idle"
+    await anext(waiter)
+    task = asyncio.create_task(anext(waiter))
+    if wake == "completion":
+        first.done.set()
+    else:
+        runner.steer("inspect the current output")
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(task, 1)
+    assert not second.done.is_set()
+
+
+async def test_background_timeout_wakes_model_with_process_result(workdir, python_command):
+    from eirene.tools import processes, shell
+
+    provider = Script([TextDelta("waiting"), Done("stop")],
+                      [TextDelta("timed out"), Done("stop")])
+    runner = build(workdir, provider)
+    result = await shell.run(
+        python_command("import time; print('before timeout', flush=True); time.sleep(30)"),
+        workdir, owner=runner.session.id, execution="background", timeout=.3,
+    )
+    try:
+        events = await asyncio.wait_for(drive(runner), 5)
+        completion = next(e for e in events if isinstance(e, ToolFinished) and e.name == "run_command")
+        assert completion.is_error
+        assert "timed_out" in completion.result and "time limit reached" in completion.result
+        assert "exited" in completion.result and "before timeout" in completion.result
+        assert "Command:" in completion.result and str(workdir) in completion.result
+        assert provider.calls == 2
+        assert any(isinstance(e, agent_mod.Phase) and e.name == "idle" for e in events)
+    finally:
+        await processes.stop(result.process_id)
