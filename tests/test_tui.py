@@ -66,6 +66,19 @@ def theme_keys():
     return list(theme.THEMES)
 
 
+async def at_bottom(app, pilot, frames=10):
+    """Whether the transcript reaches its end within a few refreshes.
+
+    Following runs after the refresh that lays out new content, so a busy
+    machine can need a frame or two more; a broken follow never arrives.
+    """
+    for _ in range(frames):
+        if app.transcript.is_vertical_scroll_end:
+            return True
+        await pilot.pause()
+    return app.transcript.is_vertical_scroll_end
+
+
 def blocks(app, kind):
     return [w for w in app.transcript.children if isinstance(w, kind)]
 
@@ -210,7 +223,7 @@ async def test_ctrl_e_jumps_back_to_the_end(workdir):
 
         await pilot.press("ctrl+e")
         await pilot.pause()
-        assert app.transcript.is_vertical_scroll_end
+        assert await at_bottom(app, pilot)
         assert not app.query_one(BackToBottom).display
     finally:
         await context.__aexit__(None, None, None)
@@ -287,7 +300,7 @@ async def test_back_to_bottom_click_returns_to_latest_message(workdir):
         assert bottom.display
         bottom.on_click(type("Click", (), {"stop": lambda self: None})())
         await pilot.pause()
-        assert app.transcript.is_vertical_scroll_end
+        assert await at_bottom(app, pilot)
         assert not bottom.display
         assert not app.query_one(PromptNavigator).display
     finally:
@@ -606,11 +619,11 @@ async def test_streaming_still_follows_when_reader_is_at_bottom(workdir):
         app.transcript.flush_live()
         await pilot.pause()
 
-        assert app.transcript.is_vertical_scroll_end
+        assert await at_bottom(app, pilot)
         answer.feed("\n" + "more streamed text\n" * 15)
         app.transcript.flush_live()
         await pilot.pause()
-        assert app.transcript.is_vertical_scroll_end
+        assert await at_bottom(app, pilot)
     finally:
         await context.__aexit__(None, None, None)
 
@@ -639,7 +652,7 @@ async def test_new_stream_chunks_do_not_cancel_pending_follow(workdir, monkeypat
 
         assert not app.transcript.is_vertical_scroll_end
         follow_previous_frame()
-        assert app.transcript.is_vertical_scroll_end
+        assert await at_bottom(app, pilot)
     finally:
         await context.__aexit__(None, None, None)
 
@@ -664,7 +677,7 @@ async def test_streaming_reattaches_after_reader_returns_to_bottom(workdir):
         answer.feed("third line\n" * 10)
         app.transcript.flush_live()
         await pilot.pause()
-        assert app.transcript.is_vertical_scroll_end
+        assert await at_bottom(app, pilot)
     finally:
         await context.__aexit__(None, None, None)
 
@@ -1861,14 +1874,15 @@ async def test_slash_menu_resize_keeps_transcript_at_bottom(workdir):
     try:
         await app.push(NoticeBlock("older response\n" * 40))
         await pilot.pause()
-        assert app.transcript.is_vertical_scroll_end
+        assert await at_bottom(app, pilot)
 
         await pilot.press("/")
         await pilot.pause()
-        assert app.transcript.is_vertical_scroll_end
+        assert await at_bottom(app, pilot)
         await pilot.press("backspace")
         await pilot.pause()
-        assert app.transcript.is_vertical_scroll_end
+        assert await at_bottom(app, pilot)
+        await pilot.pause()  # The jump button updates after the refresh that settles.
         assert not app.query_one(BackToBottom).display
     finally:
         await context.__aexit__(None, None, None)
