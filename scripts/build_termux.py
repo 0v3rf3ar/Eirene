@@ -24,10 +24,8 @@ def run(*argv, **kwargs):
 
 
 def main():
-    from release_metadata import read_version, is_prerelease
+    from release_metadata import read_version
     version = read_version(ROOT / 'pyproject.toml')
-    if not is_prerelease(version):
-        raise SystemExit('Termux packaging is experimental: use a prerelease version')
     prefix = Path(os.environ['PREFIX'])
     if str(prefix) != '/data/data/com.termux/files/usr':
         raise SystemExit('Only the standard com.termux prefix is supported')
@@ -35,7 +33,7 @@ def main():
         raise SystemExit('The experimental package currently targets aarch64 only')
     python_version = f'{sys.version_info.major}.{sys.version_info.minor}'
     if python_version != '3.14':
-        raise SystemExit('This beta targets Termux Python 3.14')
+        raise SystemExit('The Termux package targets Termux Python 3.14')
     # Termux targets Android API 24; its container cannot infer this from an
     # Android system runtime, so maturin needs an explicit wheel platform level.
     os.environ.setdefault('ANDROID_API_LEVEL', '24')
@@ -92,7 +90,7 @@ def main():
             f'Package: eirene\nVersion: {deb_version}\nArchitecture: aarch64\n'
             'Maintainer: Eirene maintainers <noreply@github.com>\n'
             'Homepage: https://github.com/0v3rf3ar/Eirene\n'
-            'Description: Experimental Eirene beta for Termux (Android ARM64)\n'
+            'Description: Eirene terminal AI agent for Termux (Android ARM64)\n'
             f'Depends: {", ".join(dependencies)}\n')
         package = output / f'eirene-Termux-aarch64-{version}.deb'
         run('dpkg-deb', '--build', '--root-owner-group', stage, package)
