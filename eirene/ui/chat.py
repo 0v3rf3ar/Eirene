@@ -440,9 +440,8 @@ class AnswerBlock(Block):
 
     def get_selection(self, selection):
         """Copy what is on screen, without the panel padding."""
-        shown = markup.Markdown(self.buffer[:self._visible].rstrip(), self._width()).plain()
-        picked = selection.extract(shown)
-        return (markup.trim(picked), "\n") if picked is not None else None
+        shown = markup.Markdown(self.buffer[:self._visible].rstrip(), self._width())
+        return shown.copy(selection), "\n"
 
     @property
     def empty(self) -> bool:

@@ -56,14 +56,17 @@ TOOLS: list[Tool] = [
          }),
     Tool("delegate_tasks", EXEC,
          "Run isolated specialist tasks on the current provider/model and return their reports. "
+         "Use it when the user asks for agents or subagents, or for independent research or "
+         "review that can run at once; do the follow-up edits yourself from the reports. "
          "Up to 4 read-only tasks run in parallel; any write task makes the batch sequential. "
          "Fresh contexts receive only the task you provide plus enabled host/plugin guidance. "
          "Profiles use plugin:agent-name; omit agent for general tasks. Child agents cannot delegate.", {
              "type": "object", "properties": {
                  "tasks": {"type": "array", "items": {"type": "object", "properties": {
+                     "name": {"type": "string", "description": "Short unique name for this subagent's job, e.g. football-historian."},
                      "prompt": {"type": "string"}, "agent": {"type": "string"},
                      "read_only": {"type": "boolean", "description": "Default true. Set false only for authorized implementation."},
-                 }, "required": ["prompt"]}},
+                 }, "required": ["name", "prompt"]}},
              }, "required": ["tasks"],
          }),
     Tool("request_full_access", EXEC,

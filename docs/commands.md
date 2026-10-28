@@ -43,7 +43,7 @@ support dragging. Close a popup with Esc, or use `[x]` when shown.
 
 | Command | Action | Guide |
 | --- | --- | --- |
-| `/skills` | Enable or disable individual Markdown skills. | [Skills](skills.md) |
+| `/skills` | Enable or disable Markdown skills, one at a time or by folder. | [Skills](skills.md) |
 | `/plugins` | Open a floating catalog to install predefined bundles and manage installed plugins. | [Plugins](plugins.md) |
 | `/plugins browse` | List named installation shortcuts. | [Catalog](plugin-catalog.md) |
 | `/plugins install SOURCE` | Install a shortcut, GitHub bundle, or local directory. | [Plugins](plugins.md) |
@@ -70,6 +70,7 @@ when a short alias is ambiguous. Built-in names always take precedence.
 | `/notification [on\|off\|test]` | Toggle, set, or test desktop notifications. | [Notifications](notifications.md) |
 | `/prompt-suggest [on\|off]` | Show controls or set optional follow-up suggestions. | [Suggestions](prompt-suggestions.md) |
 | `/keybindings` | Show keyboard shortcuts. | [Terminal interface](terminal-interface.md) |
+| `/config` | Open `config.json` in your editor: the `editor` setting, then nvim, vim, or the system default. Terminal editors return to Eirene when closed. | [Configuration file](config-file.md) |
 | `/help` | Show commands, shortcuts, and usage tips. | [Terminal interface](terminal-interface.md) |
 | `/update check` | Check for a newer stable release without installing it. | [Updates](updates.md) |
 | `/update` | Download and install the latest stable release. | [Updates](updates.md) |

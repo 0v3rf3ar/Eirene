@@ -41,6 +41,16 @@ def github_source(source: str) -> tuple[str, str, str, str | None]:
     return owner, repository, subdirectory, ref
 
 
+# Windows cannot create files or folders with these names, with or without an extension.
+WINDOWS_RESERVED = {"con", "prn", "aux", "nul", *(f"com{n}" for n in range(1, 10)),
+                    *(f"lpt{n}" for n in range(1, 10))}
+
+
+def _require_portable(name: str) -> None:
+    if name.split(".", 1)[0].casefold() in WINDOWS_RESERVED or name.endswith("."):
+        raise ValueError(f"plugin name {name!r} cannot be used as a folder name on Windows")
+
+
 def install(source: str) -> tuple[str, int]:
     """Install a local or GitHub portable plugin bundle."""
     source = source.strip()
@@ -61,8 +71,10 @@ def install(source: str) -> tuple[str, int]:
             environment = external_environment()
             environment["GIT_TERMINAL_PROMPT"] = "0"
             try:
+                # Keep files byte-for-byte as published: Git for Windows would
+                # otherwise convert hook scripts to CRLF, which bash cannot run.
                 result = subprocess.run(
-                    ["git", "-c", "core.hooksPath=", "clone", "--depth", "1",
+                    ["git", "-c", "core.hooksPath=", "-c", "core.autocrlf=false", "clone", "--depth", "1",
                      *(["--branch", ref] if ref else []), "--",
                      f"https://github.com/{owner}/{name}.git", str(root)],
                     capture_output=True, text=True, timeout=120, env=environment,
@@ -87,12 +99,14 @@ def install(source: str) -> tuple[str, int]:
 
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
             raise ValueError("repository directory must have a simple alphanumeric name")
+        _require_portable(name)
         # Preserve relative references and licenses, but never follow repository symlinks.
         for directory, dirs, files in os.walk(root, followlinks=False):
             dirs[:] = [entry for entry in dirs if entry != ".git"]
             if any((Path(directory) / entry).is_symlink() for entry in dirs + files):
                 raise ValueError("repositories containing symlinks are not supported")
         manifest = normalize(root, name)
+        _require_portable(manifest["name"])
         shortcut = next((slug for slug, _, _ in BUNDLES if slug.casefold() == source.casefold()), "")
         if shortcut:
             manifest["catalog_shortcut"] = shortcut
@@ -100,12 +114,62 @@ def install(source: str) -> tuple[str, int]:
         destination = paths.plugins_dir() / name
         if destination.exists() or destination.is_symlink():
             raise ValueError(f"{name} is already installed; existing files were preserved")
+        skill_folder = paths.skills_dir() / name
+        if manifest["skills"] and (skill_folder.exists() or skill_folder.is_symlink()):
+            raise ValueError(f"skills folder {skill_folder} already exists; existing files were preserved")
         if not any(manifest[key] for key in ("skills", "commands", "agents", "lifecycle", "mcp_servers")):
             raise ValueError("no skills, commands, hooks, or MCP servers found")
         paths.plugins_dir().mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".install-", dir=paths.plugins_dir()) as staging:
             copied = Path(staging) / "plugin"
             shutil.copytree(root, copied, ignore=shutil.ignore_patterns(".git"))
+            if manifest["skills"]:
+                manifest["skills_exported"] = True
             (copied / ".eirene-plugin.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
             copied.rename(destination)
+        if manifest["skills"]:
+            export_skills(name, destination, manifest["skills"])
         return name, len(manifest["skills"])
+
+
+def export_skills(name: str, root: Path, skills: list[str]) -> Path:
+    """Copy a bundle's skills into skills/<name>/; the bundle keeps its own copy for hooks."""
+    target = paths.skills_dir() / name
+    if target.exists() or target.is_symlink():
+        raise ValueError(f"skills folder {target} already exists; existing files were preserved")
+    paths.skills_dir().mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".install-", dir=paths.skills_dir()) as staging:
+        folder = Path(staging) / name
+        folder.mkdir()
+        for relative in skills:
+            source = root / relative
+            if source.name == "SKILL.md":
+                copy = folder / source.parent.name
+                if not copy.exists():
+                    shutil.copytree(source.parent, copy,
+                                    ignore=shutil.ignore_patterns(".git", ".eirene-plugin.json"))
+            elif not (folder / source.name).exists():
+                shutil.copy2(source, folder / source.name)
+        folder.rename(target)
+    return target
+
+
+def export_installed_skills() -> list[str]:
+    """Give plugins installed before skill folders existed their skills/<name>/ group."""
+    moved = []
+    for root in sorted(paths.plugins_dir().glob("*/.eirene-plugin.json")):
+        try:
+            manifest = json.loads(root.read_text(encoding="utf-8"))
+            if manifest.get("skills_exported") or not manifest.get("skills"):
+                continue
+            name = str(manifest.get("name") or root.parent.name)
+            if not (paths.skills_dir() / name).exists():
+                export_skills(name, root.parent, manifest["skills"])
+                moved.append(name)
+            manifest["skills_exported"] = True
+            temporary = root.with_name(".plugin.json.tmp")
+            temporary.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+            temporary.replace(root)
+        except (OSError, TypeError, ValueError):
+            continue
+    return moved

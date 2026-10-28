@@ -24,6 +24,7 @@ def commands(config=None) -> list[Command]:
             entries.append((None, False))
         seen = set()
         for path, agent in entries:
+            is_skill = path in plugin.skills
             if path is None:
                 fields = {"description": plugin.description or f"Use {plugin.name}"}
                 slug = plugin.name
@@ -33,6 +34,8 @@ def commands(config=None) -> list[Command]:
                 else:
                     body = entry_instructions(plugin, config)
             else:
+                if is_skill:
+                    path = skills.group_copy(plugin.name, path)
                 fields, body = skills.split_front_matter(path.read_text(encoding="utf-8"))
                 slug = path.parent.name if path.name == "SKILL.md" else path.stem
             if agent:
@@ -40,7 +43,7 @@ def commands(config=None) -> list[Command]:
             name = f"{plugin.name}:{slug}".lower()
             if name in seen or fields.get("user-invocable", "true").lower() == "false":
                 continue
-            if path in plugin.skills and not config.skill_enabled(f"{plugin.name}:{slug}", True):
+            if is_skill and not config.skill_enabled(f"{plugin.name}:{slug}", True):
                 continue
             seen.add(name)
             summary = fields.get("description", "") or f"{plugin.name} {slug}"

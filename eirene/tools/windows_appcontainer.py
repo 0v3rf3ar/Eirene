@@ -61,7 +61,7 @@ def _command_line(argv) -> str:
     return command
 
 
-def _environment(system_root: str, home: Path, local_appdata: str, extra=None) -> str:
+def _environment(system_root: str, home: Path, local_appdata: str, extra=None, temp=None) -> str:
     """An explicit, minimal Unicode environment; never inherit the host's secrets."""
     # CreateProcessW needs the host profile location to resolve AppContainer
     # storage. Omitting LOCALAPPDATA produces ERROR_ENVVAR_NOT_FOUND (203).
@@ -74,7 +74,7 @@ def _environment(system_root: str, home: Path, local_appdata: str, extra=None) -
         "PATH": str(Path(system_root) / "System32"),
         "COMSPEC": str(Path(system_root) / "System32" / "cmd.exe"),
         "HOME": str(home), "USERPROFILE": str(home),
-        "TEMP": str(home), "TMP": str(home),
+        "TEMP": str(temp or home), "TMP": str(temp or home),
     }
     protected = {key.upper() for key in values if key != "PATH"}
     for key, value in (extra or {}).items():
@@ -311,7 +311,7 @@ class AppContainer:
             self._api.remove_profile(self.name, self._sid)
             raise
 
-    def spawn(self, argv, *, cwd=None, env=None, std_handles=None):
+    def spawn(self, argv, *, cwd=None, env=None, std_handles=None, temp=None):
         if self.closed:
             raise ToolError("AppContainer profile is closed")
         _command_line(argv)  # Validate before allocating any process resources.
@@ -321,7 +321,7 @@ class AppContainer:
             raise ToolError("AppContainer requires an absolute SystemRoot")
         options = {"std_handles": std_handles} if std_handles else {}
         info = self._api.suspended(argv, cwd or self.home,
-                                   _environment(system_root, self.home, os.environ.get("LOCALAPPDATA", ""), env),
+                                   _environment(system_root, self.home, os.environ.get("LOCALAPPDATA", ""), env, temp),
                                    self._sid, **options)
         process = Process(self._api, info)
         # Retain ownership even when cleanup itself fails, so close() can retry.

@@ -43,7 +43,7 @@ def lookup(name: str, app=None) -> Command | None:
 
 
 def _load() -> None:
-    from . import (agents, btw, clear, compact, companion, connect, exit as exit_cmd, plan, plugins,
+    from . import (agents, btw, clear, compact, companion, config, connect, exit as exit_cmd, plan, plugins,
                    help as help_cmd, keybindings, mcp, model, notification, schedule, sessions, skills,
                    permissions, review, sandbox, search_api, snow, subagents, prompt_suggest, tasks, theme, think, update, usage)  # noqa: F401
 

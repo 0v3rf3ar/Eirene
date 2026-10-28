@@ -88,3 +88,8 @@ async def run(app, args: str) -> None:
         # Stop existing stdio processes before returning control to the user.
         await stop_connections(app)
         app.say(f"{chosen}: {'enabled' if active else 'disabled'}; takes effect on the next normal turn")
+        from ..core.permissions import isolation
+        from ..core.platforms import is_termux
+        if active and is_termux() and isolation(app.config) == "none":
+            app.say("Android has no Eirene sandbox: this server runs with your Termux "
+                    "account's access", "warn")

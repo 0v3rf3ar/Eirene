@@ -19,6 +19,7 @@ PROTOCOL_VERSION = "2025-03-26"
 REQUEST_TIMEOUT = 30.0
 # Gateway catalogues can contain hundreds of tools in a single JSON line.
 MESSAGE_LIMIT = 4 * 1024 * 1024
+WINDOWS = os.name == "nt"
 
 
 @dataclass
@@ -28,6 +29,7 @@ class MCPTool:
     name: str
     description: str
     schema: dict[str, Any]
+
 
 
 class MCPClient:
@@ -60,6 +62,10 @@ class MCPClient:
         if isinstance(configured_env, dict):
             env.update({str(k): str(v) for k, v in configured_env.items()})
         backend = self.definition.get("_isolation", "none")
+        if backend != "none" and WINDOWS:
+            # Windows' AppContainer runtime does not wrap MCP stdio yet; fail closed.
+            raise ToolError(f"MCP server {self.name} cannot start in the Windows sandbox yet; "
+                            "use /permissions full-access to run MCP servers with your account's access")
         if backend != "none":
             from ..tools import isolation
             command = isolation.command(shlex.join(command), cwd, backend=backend,

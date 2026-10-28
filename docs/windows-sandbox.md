@@ -58,8 +58,12 @@ arbitrary Windows commands and uses application-validated fixed file/search tool
 Those fixed tools are trusted operations, not arbitrary model-supplied scripts.
 
 MCP stdio launch wrapping is not integrated with this runtime. Sandboxed Windows
-MCP startup fails closed; existing full-access/provider-owned execution has its own
-boundary. Runtime compatibility still depends on whether its executable, DLLs and
+MCP startup fails closed with "cannot start in the Windows sandbox yet"; plugin MCP
+servers such as Playwright and Serena need `/permissions full-access` on Windows,
+and `/plugins doctor` says so. Existing full-access/provider-owned execution has its
+own boundary. Trusted plugin hooks run in this runtime through `cmd`, which expands
+the `%PLUGIN_ROOT%`-style variables Eirene substitutes and runs `.cmd` wrappers
+such as Superpowers' Git Bash launcher. Runtime compatibility still depends on whether its executable, DLLs and
 configuration are accessible through the granted paths. User-installed toolchains
 may require specific read grants.
 

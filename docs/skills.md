@@ -13,10 +13,15 @@ or permissions by themselves.
 /skills
 ```
 
-Select a skill to toggle it. The picker shows its description and approximate
-token size. Installed plugins can contribute skills as well as your own files.
-A disabled bundle's skills are unavailable even when the individual skill's
-preference is enabled.
+`/skills` opens an inline menu, like `/connect`. Select a skill to toggle it;
+the menu shows its description and approximate token size. Folders are listed
+first with how many of their skills are enabled. Open a folder to enable or
+disable all of its skills at once, or toggle them one by one; Esc returns to the
+folder list.
+
+Installing a plugin copies its skills into a folder named after the plugin,
+such as `skills/superpowers/`. A disabled bundle's skills are unavailable even
+when the individual skill's preference is enabled.
 
 Eirene-managed tool-capable models receive a compact catalog and load relevant
 skills as needed. Native CLI and text-only connections can receive guidance
@@ -27,7 +32,8 @@ work, particularly with a small local model.
 
 Place a Markdown file in `~/.local/share/eirene/skills`, or the corresponding directory
 under `EIRENE_HOME`. Both flat `.md` files and a directory containing `SKILL.md`
-are discovered.
+are discovered. A subfolder without its own `SKILL.md` is a folder of skills that
+`/skills` can enable or disable together.
 
 Eirene ships without bundled example skills. Add your own files when needed or
 install a plugin that provides skills.
@@ -35,8 +41,15 @@ install a plugin that provides skills.
 ```text
 skills/
 |-- concise-reviews.md
-`-- release-check/
-    `-- SKILL.md
+|-- release-check/
+|   `-- SKILL.md
+|-- writing/                 a folder of skills
+|   |-- tone.md
+|   `-- headlines/
+|       `-- SKILL.md
+`-- superpowers/             copied when the plugin was installed
+    `-- systematic-debugging/
+        `-- SKILL.md
 ```
 
 A simple file can use a heading and instructions:
@@ -68,7 +81,10 @@ they do not automatically become plugin slash commands.
 
 Some upstream skills intentionally declare themselves non-user-invocable. Those
 are available as guidance where appropriate but do not appear as slash commands.
-Imported supporting rules and templates remain with the bundle. Script execution
+Each plugin skill's folder, with its supporting files, is copied into
+`skills/<plugin>/`; that copy is what `load_skill` and `/plugin:skill` read.
+The bundle keeps its own files for hooks and other resources. Plugins installed
+before skill folders existed are moved over on the next launch. Script execution
 and dependencies still need the normal environment and approvals.
 
 See [plugins](plugins.md) for installation, [Anthropic Skills](plugins/anthropic-skills.md)
@@ -77,10 +93,11 @@ workflows. Put project-specific rules in [project instructions](project-instruct
 
 ## Discovery identifiers and parsing limits
 
-Local discovery checks `skills/*.md` and `skills/*/SKILL.md`; it does not recurse
-through arbitrarily deep local directories. Flat-file IDs use the filename
-stem, and directory skill IDs use the parent directory name. Plugin skill IDs
-add `plugin:`. These IDs are the keys of the `skills` activation map in
+Local discovery checks `skills/*.md` and `skills/*/SKILL.md`, then, in each
+folder without its own `SKILL.md`, `skills/FOLDER/*.md` and
+`skills/FOLDER/*/SKILL.md`; it does not recurse deeper. Flat-file IDs use the
+filename stem, and directory skill IDs use the parent directory name. Skills in
+a folder add `FOLDER:`, so plugin skill IDs are `plugin:skill`. These IDs are the keys of the `skills` activation map in
 [config.json](config-file.md#skill-and-plugin-maps); the display title can differ.
 
 The front-matter parser reads simple `key: value` pairs and folded/indented

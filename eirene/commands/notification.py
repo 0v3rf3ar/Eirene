@@ -45,6 +45,9 @@ def _test(app) -> None:
         raise CommandError(f"no notification tool here - {_missing()}")
     if notify.send("Eirene", "this is what a notification looks like"):
         app.say(f"{art.icon('ok')} sent one")
+        if notify.IS_MAC and not notify.shutil.which("terminal-notifier"):
+            app.say("install terminal-notifier (brew install terminal-notifier) so notifications "
+                    "replace each other and clicking one opens the terminal")
         return
     app.say("could not send it", "warn")
 

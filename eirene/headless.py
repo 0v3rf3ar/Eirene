@@ -167,11 +167,14 @@ async def _drive(text: str, cwd: Path, provider_key: str, model: str,
                  inputs: list[str] | None = None) -> int:
     paths.ensure_tree()
     from .core.skills import remove_seeded_examples
+    from .core.plugin_install import export_installed_skills
     remove_seeded_examples()
+    export_installed_skills()
     config = Config.load()
     runtime_logging.configure(config)
     box = Sandbox(cwd)
     session = Session.create(box.root)
+    paths.use_session_temp(box.root, session.id)
     runner = agent_mod.Agent(session, config, box)
     runner.mode = Mode(mode) if mode in Mode._value2member_map_ else Mode.AUTO
     runner.reload_skills()

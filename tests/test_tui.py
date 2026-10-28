@@ -115,6 +115,8 @@ async def test_process_bar_only_appears_for_running_commands(workdir, python_com
 
         assert app.process_bar.display
         assert "1 background" in content(app.process_bar)
+        # Its icon lines up with the mode line's.
+        assert content(app.process_bar).index("●") == content(app.mode_line).index(app.agent.mode.icon)
 
         assert app.process_bar.region.y == app.mode_line.region.bottom
         bar = app.process_bar.region
@@ -124,10 +126,22 @@ async def test_process_bar_only_appears_for_running_commands(workdir, python_com
         assert process_id in content(app.picker)
         assert command in content(app.picker)
 
-        await pilot.press("down", "enter")
+        # One entry per command; stopping happens inside its view.
+        assert len(app.picker.options) == 1
+        await pilot.press("enter")
+        await pilot.pause()
+        from eirene.ui.output import OutputScreen
+        assert isinstance(app.screen, OutputScreen)
+        assert "S stop" in content(app.screen.query_one("#output-help"))
+        await pilot.press("s")
         await asyncio.sleep(0.25)
         await pilot.pause()
+        assert isinstance(app.screen, OutputScreen)
+        assert "S stop" not in content(app.screen.query_one("#output-help"))
         assert not app.process_bar.display
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, OutputScreen)
     finally:
         await context.__aexit__(None, None, None)
 
@@ -317,7 +331,7 @@ async def test_bottom_dock_is_in_the_right_order(workdir):
         composer = app.query_one("Composer")
         names = [type(child).__name__ for child in composer.children]
         assert names == ["Picker", "PermissionBar", "SlashMenu", "StatusLine",
-                         "TaskList", "ContextIndicator", "Rule", "PromptRow", "Rule", "ModeLine", "ProcessBar"]
+                         "TaskList", "ContextIndicator", "Rule", "PromptRow", "Rule", "ModeLine", "SubagentLine", "ProcessBar"]
         row = [type(child).__name__ for child in app.query_one("PromptRow").children]
         assert row == ["Marker", "Prompt"]
         assert content(app.query_one("Marker")) == "❯"
@@ -689,14 +703,12 @@ async def test_idle_double_esc_asks_before_exit(workdir, monkeypatch):
 async def test_ctrl_c_and_ctrl_period_never_exit(workdir):
     app, pilot, context = await start(workdir)
     try:
-        actions = {b.key: b.action for b in app.BINDINGS}
+        actions = {key: b.action for b in app.BINDINGS for key in b.key.split(",")}
         assert "ctrl+full_stop" not in actions
-        assert actions.get("ctrl+c") == "copy_selection(True)"
+        assert actions.get("ctrl+c") == "copy_selection"
         await pilot.press("ctrl+c")
         await pilot.pause()
         assert app.is_running
-        assert not any("nothing selected" in content(b)
-                       for b in blocks(app, NoticeBlock))
     finally:
         await context.__aexit__(None, None, None)
 
@@ -729,6 +741,40 @@ async def test_ctrl_d_exits(workdir):
     await pilot.pause()
     assert not app.is_running
     await context.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("key", ["ctrl+d", "ctrl+q"])
+async def test_exit_while_working_needs_a_second_press(workdir, key):
+    app, pilot, context = await start(workdir)
+    try:
+        app.turn = asyncio.get_running_loop().create_future()  # The agent is working.
+        said = []
+        app.say = lambda text, *args: said.append(text)
+        await pilot.press(key)
+        await pilot.pause()
+        assert app.is_running
+        assert said and said[0].startswith("the agent is still running")
+        app._exit_armed -= app.EXIT_CONFIRM_SECONDS + 1  # The confirmation expires.
+        await pilot.press(key)
+        await pilot.pause()
+        assert app.is_running
+        await pilot.press(key)
+        await pilot.pause()
+        assert not app.is_running
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_exit_counts_background_commands_as_work(workdir, python_command):
+    app, pilot, context = await start(workdir)
+    try:
+        await processes.start(python_command("import time; time.sleep(10)"), workdir)
+        await asyncio.sleep(0.1)
+        assert app._running_work() == ["1 command"]
+        await processes.stop_all()
+        assert app._running_work() == []
+    finally:
+        await context.__aexit__(None, None, None)
 
 
 async def test_a_turn_streams_into_the_transcript(workdir):
@@ -1209,7 +1255,7 @@ async def test_clear_destroys_the_session(workdir):
     assert not app.session.path.exists()
 
 
-async def test_right_click_copies_the_selection(workdir):
+async def test_right_click_does_not_copy(workdir):
     app, pilot, context = await start(workdir)
     try:
         await pilot.pause()
@@ -1217,11 +1263,10 @@ async def test_right_click_copies_the_selection(workdir):
         await pilot.hover(app.transcript, offset=(2, 1))
         await pilot.mouse_up(app.transcript, offset=(12, 1))
         await pilot.pause()
-        selected = app.screen.get_selected_text()
-        assert selected
+        assert app.screen.get_selected_text()
         await pilot.mouse_down(app.transcript, offset=(6, 1), button=3)
         await pilot.pause()
-        assert app.clipboard == selected
+        assert not app.clipboard
     finally:
         await context.__aexit__(None, None, None)
 
@@ -2215,19 +2260,21 @@ async def test_dragged_popup_is_clamped_after_resize_and_can_select_body(workdir
         await context.__aexit__(None, None, None)
 
 
-@pytest.mark.parametrize("kind", ["output", "skills"])
-async def test_modal_popups_can_be_dragged(workdir, kind):
+async def test_modal_popups_can_be_dragged(workdir):
     from types import SimpleNamespace
     from eirene.ui.output import OutputScreen
-    from eirene.ui.skill_picker import SkillPickerScreen
     from eirene.ui.window import DraggableWindow
     app, pilot, context = await start(workdir, size=(100, 40))
     try:
-        screen = (OutputScreen(SimpleNamespace(label="Output", finished=True,
+        screen = OutputScreen(SimpleNamespace(label="Output", finished=True,
                     result="Saved output", is_error=False, seconds=0))
-                  if kind == "output" else SkillPickerScreen([("one", "One", "", "Description")]))
         await app.push_screen(screen)
         await pilot.pause()
+        # Keyboard hints like the other windows, not Textual buttons.
+        from textual.widgets import Button
+        assert not screen.query(Button)
+        assert "Esc close" in content(screen.query_one("#output-help"))
+        assert "Saved output" in content(screen.query_one("#output-body"))
         window = screen.query_one(DraggableWindow)
         original = window.region
         assert original.x == (app.size.width - original.width) // 2
@@ -2658,6 +2705,41 @@ async def test_sent_user_messages_use_the_darker_grey_background(workdir):
         await context.__aexit__(None, None, None)
 
 
+async def test_subagent_line_counts_agents_and_opens_subagents(workdir):
+    import time
+    from eirene.ui.composer import Composer, ModeLine, SubagentLine
+    app, pilot, context = await start(workdir)
+    try:
+        line = app.query_one(SubagentLine)
+        children = list(app.query_one(Composer).children)
+        assert children.index(line) == children.index(app.query_one(ModeLine)) + 1
+        line.refresh_subagents()
+        await pilot.pause()
+        assert not line.display
+        app.agent.session.subagents["child"] = dict(
+            name="football-historian", status="running", activity="web_search",
+            tools=1, started=time.time(), seconds=0.0)
+        line.refresh_subagents()
+        await pilot.pause()
+        assert line.display
+        # Working agents turn the diamond.
+        shapes = set()
+        for _ in range(25):  # The line's own 0.5s timer drives the frames.
+            await pilot.pause(0.1)
+            shapes.add(content(line).strip()[0])
+        assert shapes == {"◇", "◈", "◆"}
+        app.agent.session.subagents["child"]["status"] = "completed"
+        line.refresh_subagents()
+        await pilot.pause()
+        assert content(line).strip() == "◆ 1 subagent"
+        started = []
+        app._start_command = started.append
+        await pilot.click(SubagentLine)
+        assert started == ["/subagents"]
+    finally:
+        await context.__aexit__(None, None, None)
+
+
 async def test_the_picker_shows_the_highlighted_description(workdir):
     app, pilot, context = await start(workdir)
     try:
@@ -2677,6 +2759,30 @@ async def test_the_picker_shows_the_highlighted_description(workdir):
         assert "The second skill, for beta work." in shown
         assert "The first skill, for doing alpha things." not in shown
 
+        await pilot.press("escape")
+        assert await asking is None
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_picker_height_stays_fixed_across_descriptions(workdir):
+    app, pilot, context = await start(workdir)
+    try:
+        picker = app.picker
+        asking = asyncio.create_task(picker.choose("pick one", [
+            ("a", "alpha", "on", "Short."),
+            ("b", "beta", "off", "A much longer description that wraps " * 6),
+            ("c", "gamma", "off", ""),
+        ]))
+        # Measure after the post-layout redraw, which wraps at the real width.
+        await pilot.pause()
+        await pilot.pause()
+        heights = set()
+        for _ in range(3):
+            heights.add(len(content(picker).splitlines()))
+            await pilot.press("down")
+            await pilot.pause()
+        assert len(heights) == 1
         await pilot.press("escape")
         assert await asking is None
     finally:
@@ -2770,20 +2876,19 @@ async def test_skills_lists_user_installed_guidance(workdir):
         (paths.skills_dir() / f'{name.lower()}.md').write_text(
             f'---\nname: {name}\ndescription: {description}\n---\n\nFollow project instructions.\n')
     from eirene import commands
-    from eirene.ui.skill_picker import SkillPickerScreen
-    from eirene.ui.picker import Picker
-    from textual.containers import Vertical
 
     app, pilot, context = await start(workdir)
     try:
+        screen = app.screen
         listing = asyncio.create_task(commands.dispatch(app, "/skills"))
         for _ in range(40):
             await pilot.pause()
-            if isinstance(app.screen, SkillPickerScreen) and app.screen.query_one(Picker).waiting:
+            if app.picker.waiting and app.picker.content_size.width > 1:
                 break
-        assert isinstance(app.screen, SkillPickerScreen)
-        picker = app.screen.query_one(Picker)
+        await pilot.pause()  # The post-layout redraw wraps at the real width.
+        picker = app.picker
         assert picker.waiting, "the skill list should open"
+        assert app.screen is screen  # Inline like /connect, not a floating popup.
         shown = content(picker)
         assert "review" in shown.lower()
         assert "deploy" in shown.lower()
@@ -2791,25 +2896,65 @@ async def test_skills_lists_user_installed_guidance(workdir):
         token_rows = [line for line in shown.splitlines() if line.endswith("tokens")]
         assert token_rows
         assert all(cell_len(line) == picker.content_size.width for line in token_rows)
-        assert all("on ·" not in row[2] and "off ·" not in row[2] for row in picker.options)
-        panel = app.screen.query_one(Vertical)
-        assert abs(panel.region.center[0] - app.size.width / 2) <= 1
-        assert abs(panel.region.center[1] - app.size.height / 2) <= 1
         description = picker.options[picker.index][3]
-        assert description in content(app.screen.query_one("#skill-description"))
-        assert description not in shown
+        assert description in " ".join(shown.split())
         await pilot.press("down")
-        assert picker.options[picker.index][3] in content(app.screen.query_one("#skill-description"))
         selected = picker.options[picker.index][0]
-        before = app.config.skill_enabled(selected, True)
+        name = selected.partition(":")[2]
+        before = app.config.skill_enabled(name, True)
         await pilot.press("enter")
         await pilot.pause()
-        assert app.config.skill_enabled(selected, True) != before
-        assert isinstance(app.screen, SkillPickerScreen)
-        assert app.screen.query_one(Picker).options[app.screen.query_one(Picker).index][0] == selected
+        assert app.config.skill_enabled(name, True) != before
+        assert picker.waiting
+        assert picker.options[picker.index][0] == selected
         await pilot.press("escape")
         await listing
-        assert not isinstance(app.screen, SkillPickerScreen)
+        assert not picker.waiting
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_skills_folders_toggle_together_or_one_by_one(workdir):
+    from eirene.core import paths
+    from eirene import commands
+    group = paths.skills_dir() / "writing"
+    group.mkdir()
+    for name in ("tone", "edit"):
+        (group / f"{name}.md").write_text(f"# {name}\nDo {name}.")
+    (paths.skills_dir() / "solo.md").write_text("# Solo\nAlone.")
+
+    async def choose(key):
+        for _ in range(40):
+            await pilot.pause()
+            if app.picker.waiting and any(row[0] == key for row in app.picker.options):
+                break
+        app.picker.index = next(i for i, row in enumerate(app.picker.options) if row[0] == key)
+        await pilot.press("enter")
+        await pilot.pause()
+
+    app, pilot, context = await start(workdir)
+    try:
+        listing = asyncio.create_task(commands.dispatch(app, "/skills"))
+        await choose("group:writing")
+        assert [row[0] for row in app.picker.options] == [
+            "all:on", "all:off", "skill:writing:edit", "skill:writing:tone"]
+        await choose("all:off")
+        assert not app.config.skill_enabled("writing:edit", True)
+        assert not app.config.skill_enabled("writing:tone", True)
+        assert app.config.skill_enabled("solo", True)
+        await choose("skill:writing:tone")
+        assert app.config.skill_enabled("writing:tone", True)
+        assert "1/2 enabled" in app.picker.title
+        await pilot.press("escape")  # Back to the folder list.
+        for _ in range(40):
+            await pilot.pause()
+            if app.picker.waiting and any(row[0] == "group:writing" for row in app.picker.options):
+                break
+        row = next(row for row in app.picker.options if row[0] == "group:writing")
+        assert row[2] == "1/2 enabled"
+        assert app.picker.options[app.picker.index][0] == "group:writing"
+        await pilot.press("escape")
+        await listing
     finally:
         await context.__aexit__(None, None, None)
 
@@ -4066,7 +4211,7 @@ async def test_session_edit_permission_is_cleared_with_session(workdir, action):
         await context.__aexit__(None, None, None)
 
 
-async def test_selecting_transcript_automatically_copies_without_clearing(workdir, monkeypatch):
+async def test_selecting_transcript_does_not_copy(workdir, monkeypatch):
     copied = []
     monkeypatch.setattr("eirene.app.copy_to_system", lambda text: copied.append(text) or "test")
     app, pilot, context = await start(workdir)
@@ -4075,20 +4220,14 @@ async def test_selecting_transcript_automatically_copies_without_clearing(workdi
         await pilot.hover(app.transcript, offset=(2, 1))
         await pilot.mouse_up(app.transcript, offset=(12, 1))
         await pilot.pause(0.25)
-        selected = app.screen.get_selected_text()
-        assert selected
-        assert app.clipboard == selected
-        assert copied == [selected]
-        app.screen.clear_selection()
-        await pilot.pause(0.25)
-        assert app.clipboard == selected
-        assert copied == [selected]
+        assert app.screen.get_selected_text()
+        assert not app.clipboard
+        assert copied == []
     finally:
         await context.__aexit__(None, None, None)
 
 
-@pytest.mark.parametrize("automatic", [False, True])
-async def test_copy_shows_character_count_in_bottom_right(workdir, monkeypatch, automatic):
+async def test_copy_shows_character_count_in_bottom_right(workdir, monkeypatch):
     from textual.document._document import Selection
     from eirene.ui.copy_notice import CopyNotice
 
@@ -4097,8 +4236,7 @@ async def test_copy_shows_character_count_in_bottom_right(workdir, monkeypatch, 
     try:
         app.prompt.value = "aé\n🦊"
         app.prompt.selection = Selection((0, 0), (1, 1))
-        if not automatic:
-            app.action_copy_selection()
+        app.action_copy_selection()
         await pilot.pause(0.25)
         notice = app.query_one(CopyNotice)
         assert notice.display

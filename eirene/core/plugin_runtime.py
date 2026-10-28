@@ -4,8 +4,10 @@ from .permissions import isolation, isolate_network
 
 import json
 import os
+from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 
 from . import paths, plugins
@@ -63,18 +65,22 @@ class PluginRuntime:
                     if plugin.name == "ponytail" and "PONYTAIL_DEFAULT_MODE" in os.environ:
                         env["PONYTAIL_DEFAULT_MODE"] = os.environ["PONYTAIL_DEFAULT_MODE"]
                     command = hook["command"]
-                    if os.name == "nt":
+                    if shell.IS_WINDOWS:
                         for key in env:
                             command = command.replace("${" + key + "}", "%" + key + "%")
+                    # Hooks are written for cmd on Windows (%VAR% above, .cmd wrappers);
+                    # the default shell there is PowerShell, which expands neither.
                     result = await shell.run(
                         command, sandbox.root,
+                        shell_name="cmd" if shell.IS_WINDOWS else "auto",
                         timeout=hook.get("timeout", 30), max_bytes=60_000,
                         env=env, input_text=json.dumps({"session_id": self.session_id,
                             "cwd": str(sandbox.root), "hook_event_name": event,
                             "source": "startup", "prompt": prompt}),
                         isolation=isolation(config),
                         isolate_network=isolate_network(config),
-                        read_paths=[str(plugin.path)], write_paths=[str(data), str(settings)])
+                        read_paths=[str(plugin.path), *tool_dirs(command)],
+                        write_paths=[str(data), str(settings)])
                     if not result.ok:
                         raise ToolError(f"{plugin.name} {event} hook failed: {result.summary()}")
                     context, notice = parse_output(result.output)
@@ -104,19 +110,39 @@ class PluginRuntime:
                         script = ("process.stdout.write(require(process.env.PLUGIN_ROOT + "
                                   "'/hooks/ponytail-instructions.js').getPonytailInstructions("
                                   "process.env.EIRENE_PONYTAIL_MODE))")
-                        argv = ["node", "-e", script]
+                        argv = [shutil.which("node") or "node", "-e", script]
+                        # Launch node directly so no shell's quoting rules apply.
                         result = await shell.run(
-                            subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv),
-                            sandbox.root, timeout=10, max_bytes=60_000,
+                            subprocess.list2cmdline(argv) if shell.IS_WINDOWS else shlex.join(argv),
+                            sandbox.root, argv=argv, timeout=10, max_bytes=60_000,
                             env={"PLUGIN_ROOT": str(plugin.path), "EIRENE_PONYTAIL_MODE": mode},
                             isolation=isolation(config),
-                            isolate_network=isolate_network(config), read_paths=[str(plugin.path)])
+                            isolate_network=isolate_network(config),
+                            read_paths=[str(plugin.path), *tool_dirs(argv[0])])
                         if not result.ok:
                             raise ToolError(f"Ponytail rules could not load: {result.summary()}")
                         rules = result.output.strip()
                     self.context[plugin.name, "SessionStart"] = rules
                     self.ponytail_mode = mode
         return notices
+
+
+def tool_dirs(command: str) -> list[str]:
+    """Let a sandboxed hook reach its interpreter when it lives outside system folders.
+
+    nvm, asdf and per-user installs keep node in the home directory, which the
+    Linux and macOS sandboxes do not expose; Windows grants it automatically.
+    """
+    try:
+        program = shlex.split(command)[0] if command.strip() else ""
+    except ValueError:
+        return []
+    executable = shutil.which(program) if program else None
+    if shell.IS_WINDOWS or not executable:
+        return []
+    folder = Path(executable).resolve().parent
+    system = (Path("/usr"), Path("/bin"), Path("/sbin"), Path("/opt/homebrew"))
+    return [] if any(folder == root or root in folder.parents for root in system) else [str(folder)]
 
 
 def parse_output(output: str) -> tuple[str, str]:

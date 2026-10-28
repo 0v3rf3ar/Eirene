@@ -1,8 +1,8 @@
 """Paged command output, available during execution and after session resume."""
 from rich.text import Text
 from textual.screen import ModalScreen
-from textual.containers import VerticalScroll, Horizontal
-from textual.widgets import Button, Static
+from textual.containers import VerticalScroll
+from textual.widgets import Static
 from ..core import artifacts
 from .format import strip_escapes
 from .window import DraggableWindow
@@ -11,13 +11,17 @@ from .window import DraggableWindow
 class OutputScreen(ModalScreen):
     DEFAULT_CSS = """
     OutputScreen { align: center middle; }
-    OutputScreen > DraggableWindow { width: 90%; height: 85%; border: round $accent; background: $surface; padding: 1; }
-    OutputScreen VerticalScroll { height: 1fr; }
-    OutputScreen Horizontal { height: 3; }
-    OutputScreen #output-title { height: auto; max-height: 4; }
+    OutputScreen > DraggableWindow {
+        width: 90%; max-width: 140; height: 85%;
+        border: round $primary; background: $surface; padding: 1;
+    }
+    OutputScreen VerticalScroll { height: 1fr; margin-top: 1; background: $surface; }
+    OutputScreen #output-title { height: auto; max-height: 4; text-style: bold; }
+    OutputScreen #output-state { height: auto; color: $text-muted; }
+    OutputScreen #output-help { height: auto; margin-top: 1; color: $text-muted; }
     """
     BINDINGS = [("escape", "close", "Close"), ("pagedown", "next", "Next page"),
-                ("pageup", "previous", "Previous page")]
+                ("pageup", "previous", "Previous page"), ("s", "stop", "Stop command")]
     PAGE = 50000
 
     def __init__(self, card):
@@ -28,17 +32,15 @@ class OutputScreen(ModalScreen):
     def compose(self):
         with DraggableWindow():
             yield Static(Text(self.card.label), id="output-title")
-            yield Static("", id="output-state")
+            yield Static("", id="output-state", markup=False)
             with VerticalScroll():
                 yield Static("", id="output-body", markup=False)
-            with Horizontal():
-                yield Button("Previous", id="previous")
-                yield Button("Next", id="next")
-                yield Button("Close", id="close")
+            yield Static("", id="output-help", markup=False)
 
     def on_mount(self):
         self.refresh_output()
         self.set_interval(0.25, self.refresh_output)
+        self.query_one(VerticalScroll).focus()
 
     def refresh_output(self):
         artifact_id = getattr(self.card, "artifact_id", "")
@@ -51,7 +53,11 @@ class OutputScreen(ModalScreen):
         else:
             body = body[self.byte_offset:self.byte_offset + self.PAGE]
         state = "Running" if not self.card.finished else ("Failed" if self.card.is_error else "Finished")
-        self.query_one("#output-state", Static).update(f"{state} · offset {self.byte_offset} · {self.card.seconds:.1f}s")
+        stoppable = hasattr(self.card, "stop") and not self.card.finished
+        self.query_one("#output-help", Static).update(
+            "↑/↓ scroll · PgUp/PgDn page" + (" · S stop" if stoppable else "") + " · Esc close")
+        page = f" · page {self.byte_offset // self.PAGE + 1}" if self.byte_offset else ""
+        self.query_one("#output-state", Static).update(f"{state} · {self.card.seconds:.0f}s{page}")
         self.query_one("#output-body", Static).update(Text(strip_escapes(body) or "(no output)"))
 
     def action_next(self):
@@ -65,6 +71,8 @@ class OutputScreen(ModalScreen):
     def action_close(self):
         self.dismiss()
 
-    def on_button_pressed(self, event):
-        {"next": self.action_next, "previous": self.action_previous,
-         "close": self.action_close}[event.button.id]()
+    async def action_stop(self):
+        """Stop a running command shown here; the view stays open on its final output."""
+        if hasattr(self.card, "stop") and not self.card.finished:
+            self.app.say(await self.card.stop())
+            self.refresh_output()

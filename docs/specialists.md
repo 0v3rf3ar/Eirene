@@ -47,6 +47,22 @@ read-only Plan mode, without imported hooks or MCP. Authorized implementation
 passes can use a normal mode, but still follow the parent policy. Child tasks
 cannot delegate again.
 
+Delegation is available on tool-capable API connections whether or not a plugin
+is enabled; compact and balanced local profiles offer it only with an enabled
+plugin. The main agent names every subagent for its job, such as
+`football-historian`; names are unique within a batch and appear in the tool
+output, the result, and `/subagents`.
+
+Once a session has subagents, a line under the mode line shows how many, such as
+`◆ 4 subagents`. While any of them is working the diamond turns
+(`◇ ◈ ◆ ◈`); with `reduce_motion` it stays still. Click it to
+open `/subagents`. The count is rebuilt from the
+session log when you resume.
+
+Approval answers are shared: choosing "yes, and don't ask again for this tool"
+in the main agent or any subagent stops the prompt for that tool everywhere in
+the session, including subagents already waiting to ask.
+
 ## Provider and runtime limits
 
 Use `/subagents` to open a draggable popup tree with the mother session and its

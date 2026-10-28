@@ -80,12 +80,13 @@ or answer questions from the model.
 
 ```sh
 eirene -p "/agents" --choice plan
-eirene -p "/skills" --choice SKILL_NAME
+eirene -p "/skills" --choice skill:SKILL_NAME
+eirene -p "/skills" --choice group:FOLDER --choice all:off
 eirene -p "/mcp" --choice SERVER_KEY
 ```
 
 Interface-only commands such as `/btw`, `/snow`, `/clear`, `/exit`,
-`/prompt-suggest`, and `/keybindings` report an error in headless mode.
+`/prompt-suggest`, `/keybindings`, and `/config` report an error in headless mode.
 Session switching/resume and live steering are not exposed.
 
 ## JSON results

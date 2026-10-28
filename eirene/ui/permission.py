@@ -13,6 +13,8 @@ from . import art
 
 CHOICES = [(YES, "yes"), (ALWAYS, "yes, and don't ask again for this tool"),
            (NO, "no, stop here")]
+# Full host access is granted one response at a time, never standing.
+ONCE_ONLY = {"request_full_access"}
 
 
 class PermissionBar(Static):
@@ -61,8 +63,13 @@ class PermissionBar(Static):
 
     async def ask(self, title: str, reason: str, *, edits: bool = False, tool: str = "") -> str:
         """Show the prompt and wait for a choice."""
-        self.choices = [(YES, "yes"), (ALWAYS, "allow edits for this session"),
-                        (NO, "no, stop here")] if edits else CHOICES
+        if edits:
+            self.choices = [(YES, "yes"), (ALWAYS, "allow edits for this session"),
+                            (NO, "no, stop here")]
+        elif tool in ONCE_ONLY:
+            self.choices = [(YES, "yes"), (NO, "no, stop here")]
+        else:
+            self.choices = CHOICES
         self.title = title
         self.reason = reason
         self.tool = tool
@@ -119,9 +126,11 @@ class PermissionBar(Static):
             self._draw()
         elif key == "enter":
             self._resolve(self.choices[self.index][0])
-        elif key in ("y", "1"):
+        elif key == "y":
             self._resolve(YES)
-        elif key in ("a", "2"):
+        elif key == "a" and any(value == ALWAYS for value, _ in self.choices):
             self._resolve(ALWAYS)
-        elif key in ("n", "3", "escape"):
+        elif key in ("n", "escape"):
             self._resolve(NO)
+        elif key.isdigit() and 1 <= int(key) <= len(self.choices):
+            self._resolve(self.choices[int(key) - 1][0])

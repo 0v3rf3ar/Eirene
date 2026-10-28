@@ -9,7 +9,6 @@ from textual.widgets import Tree
 from eirene.app import Eirene
 from eirene.commands import dispatch
 from eirene.core.session import Session
-from eirene.ui.choice_popup import ChoicePopup
 from eirene.ui.session_tree import SessionTreeScreen
 
 
@@ -90,7 +89,15 @@ async def test_tree_escape_preserves_session_and_active_work(workdir):
         await asyncio.gather(app.turn,return_exceptions=True)
 
 
-async def test_plugin_catalog_popup_install_and_toggle(workdir, tmp_path, monkeypatch):
+async def wait_for_choice(app, pilot, key):
+    # Installation runs in a thread, so wait for the inline menu to offer the row.
+    async with asyncio.timeout(5):
+        while not app.picker.waiting or all(row[0] != key for row in app.picker.options):
+            await asyncio.sleep(0.01)
+    await pilot.pause()
+
+
+async def test_plugin_catalog_inline_install_and_toggle(workdir, tmp_path, monkeypatch):
     # Use the real local importer while avoiding a network dependency.
     from eirene.core.plugin_install import install as local_install
     from eirene.commands import plugins as command
@@ -106,26 +113,23 @@ async def test_plugin_catalog_popup_install_and_toggle(workdir, tmp_path, monkey
     app = Eirene(workdir)
     async with app.run_test(size=(110,36)) as pilot:
         await pilot.pause()
+        screen=app.screen
         task=asyncio.create_task(dispatch(app,'/plugins'))
-        await pilot.pause()
-        assert isinstance(app.screen,ChoicePopup)
-        assert any(row[0]=='install:ponytail' for row in app.screen.options)
-        picker=app.screen.query_one('Picker')
-        picker.index=next(i for i,row in enumerate(picker.options) if row[0]=='install:ponytail')
+        await wait_for_choice(app, pilot, 'install:ponytail')
+        assert app.screen is screen  # Inline like /connect, not a floating popup.
+        app.picker.index=next(i for i,row in enumerate(app.picker.options) if row[0]=='install:ponytail')
         await pilot.press('enter')
-        await wait_for_popup(app, pilot, ChoicePopup)
+        await wait_for_choice(app, pilot, 'installed:ponytail')
         assert sources == ['ponytail']
-        assert isinstance(app.screen,ChoicePopup)
-        row=next(row for row in app.screen.options if row[0]=='installed:ponytail')
-        assert row[2]=='enabled'
+        row=next(row for row in app.picker.options if row[0]=='installed:ponytail')
+        assert row[2]=='enabled' and row[3]=='Focused work'
         assert not app.config.get('plugin_trust',{}).get('ponytail')
-        picker=app.screen.query_one('Picker')
-        picker.index=next(i for i,row in enumerate(picker.options) if row[0]=='installed:ponytail')
+        app.picker.index=next(i for i,row in enumerate(app.picker.options) if row[0]=='installed:ponytail')
         await pilot.press('enter')
-        await pilot.pause()
-        assert isinstance(app.screen,ChoicePopup)
+        await wait_for_choice(app, pilot, 'toggle')
         await pilot.press('enter')  # Disable the installed plugin.
-        await pilot.pause()
+        await wait_for_choice(app, pilot, 'installed:ponytail')
         assert not app.config.plugin_enabled('ponytail')
         await pilot.press('escape')
         await task
+        assert app.screen is screen

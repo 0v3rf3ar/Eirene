@@ -1,4 +1,9 @@
-"""Markdown skills from ~/.local/share/eirene/skills."""
+"""Markdown skills from ~/.local/share/eirene/skills.
+
+A subfolder without its own SKILL.md is a group: its skills are named
+"<folder>:<skill>". Installed plugins put their skills in a group named after
+the plugin.
+"""
 
 from __future__ import annotations
 
@@ -22,6 +27,7 @@ class Skill:
     summary: str
     size: int
     enabled: bool = True
+    group: str = ""
 
     @property
     def tokens(self) -> int:
@@ -57,19 +63,44 @@ def split_front_matter(text: str) -> tuple[dict[str, str], str]:
 
 
 def discover() -> list[Skill]:
-    """Read every .md in the skills dir."""
+    """Read every .md in the skills dir, then each group folder."""
     directory = paths.skills_dir()
     skills = []
     for path in sorted([*directory.glob("*.md"), *directory.glob("*/SKILL.md")]):
         _append_skill(skills, path)
+    groups = set()
+    for folder in sorted(group_folders()):
+        groups.add(folder.name)
+        for path in sorted([*folder.glob("*.md"), *folder.glob("*/SKILL.md")]):
+            _append_skill(skills, path, prefix=folder.name)
     try:
+        # Bundles whose skills have not been copied into a group folder yet.
         from .plugins import discover as discover_plugins
         for plugin in discover_plugins():
-            for path in plugin.skills:
-                _append_skill(skills, path, prefix=plugin.name)
+            if plugin.name not in groups:
+                for path in plugin.skills:
+                    _append_skill(skills, path, prefix=plugin.name)
     except (ImportError, OSError):
         pass
     return skills
+
+
+def group_folders() -> list[Path]:
+    """Skill folders that hold other skills rather than being one."""
+    directory = paths.skills_dir()
+    if not directory.is_dir():
+        return []
+    return [folder for folder in directory.iterdir()
+            if folder.is_dir() and not folder.name.startswith(".")
+            and not (folder / "SKILL.md").is_file()]
+
+
+def group_copy(group: str, path: Path) -> Path:
+    """The skills/<group>/ copy of a bundled skill file, when it has one."""
+    folder = paths.skills_dir() / group
+    copy = (folder / path.parent.name / "SKILL.md" if path.name == "SKILL.md"
+            else folder / path.name)
+    return copy if copy.is_file() else path
 
 
 def _append_skill(skills: list[Skill], path: Path, prefix: str = "") -> None:
@@ -84,7 +115,7 @@ def _append_skill(skills: list[Skill], path: Path, prefix: str = "") -> None:
     summary = fields.get("description") or _summary(head)
     slug = path.parent.name if path.name == "SKILL.md" else path.stem
     name = f"{prefix}:{slug}" if prefix else slug
-    skills.append(Skill(name, path, title, summary, size))
+    skills.append(Skill(name, path, title, summary, size, group=prefix))
 
 
 def _title(text: str, fallback: str) -> str:

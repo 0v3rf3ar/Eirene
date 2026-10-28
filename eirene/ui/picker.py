@@ -173,8 +173,14 @@ class Picker(Static):
             footer.truncate(room, overflow="ellipsis")
             body.append_text(footer)
             body.append("\n")
-        elif detail and self.show_detail:
-            for line in _wrap(detail, max(self.size.width - 6, 30)):
+        elif self.show_detail:
+            width = max(self.size.width - 6, 30)
+            lines = _wrap(detail, width) if detail else []
+            # Reserve room for the longest detail so the menu keeps its height
+            # while the highlight moves.
+            reserved = max((len(_wrap(row[3], width)) for row in self.options
+                            if len(row) > 3 and row[3]), default=0)
+            for line in lines + [""] * (reserved - len(lines)):
                 body.append(f"   {line}\n", style="dim italic")
         if self.filter:
             body.append(f"  Filter: {self.filter}\n", style="dim")

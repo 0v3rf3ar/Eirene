@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import paths
 
-INSTRUCTION_FILES = ("AGENTS.md", "EIRENE.md", ".eirene.md", "CLAUDE.md",
+INSTRUCTION_FILES = ("EIRENE.md", "AGENT.md", "AGENTS.md", ".eirene.md", "CLAUDE.md",
                      ".github/copilot-instructions.md")
 MANIFESTS = {
     "pyproject.toml": ("Python", ["python -m pytest", "python -m ruff check ."]),
@@ -63,8 +63,14 @@ class ProjectProfile:
         if self.instructions:
             rows.append("- instruction files: " + ", ".join(self.instructions))
         if self.instruction_text:
-            rows.extend(["", "Project instructions:", self.instruction_text])
+            rows.extend(["", self.instruction_block()])
         return "\n".join(rows)
+
+    def instruction_block(self) -> str:
+        if not self.instruction_text:
+            return ""
+        return ("Project instructions from the working directory. Follow them for the whole "
+                "session unless the user says otherwise:\n" + self.instruction_text)
 
 
 def discover(root: Path, *, refresh: bool = False) -> ProjectProfile:

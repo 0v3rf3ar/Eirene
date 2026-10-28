@@ -72,7 +72,8 @@ class LocalProfile:
         if not specs or self.tier == "full":
             return specs
         allowed = set(COMPACT_TOOLS if self.tier == "compact" else BALANCED_TOOLS)
-        if any(spec.get("name") in {"load_plugin_resource", "delegate_tasks"} for spec in specs):
+        # load_plugin_resource is sent only while a plugin is enabled.
+        if any(spec.get("name") == "load_plugin_resource" for spec in specs):
             allowed |= PLUGIN_TOOLS
         else:
             # The host only sends load_skill when an enabled skill exists.

@@ -233,10 +233,10 @@ async def test_placeholder_follows_light_and_dark_themes_and_hides_for_secrets(w
         await context.__aexit__(None, None, None)
 
 
-async def test_suggestion_is_prepared_during_answer_and_revealed_at_completion(workdir, monkeypatch):
+async def test_suggestion_waits_for_the_completed_answer(workdir, monkeypatch):
     from test_tui import type_line
-    started = asyncio.Event()
     release = asyncio.Event()
+    calls = []
     class Streaming(Script):
         async def stream(self, *args, **kwargs):
             yield TextDelta("Here is the explanation so far. ")
@@ -245,25 +245,47 @@ async def test_suggestion_is_prepared_during_answer_and_revealed_at_completion(w
             yield Done("stop")
     app, pilot, context = await start(workdir, Streaming())
     async def suggest(*args):
-        started.set()
+        calls.append(args)
         return "Add regression tests for this behavior."
     monkeypatch.setattr(app.agent, "suggest_prompt", suggest)
     try:
         app.config.set("prompt_suggest", True)
         app._titled = True
         await type_line(pilot, "Explain this behavior")
-        await asyncio.wait_for(started.wait(), 2)
         await pilot.pause()
         assert app.turn and not app.turn.done()
-        assert "Prepared" in app._suggestion_status
-        assert app.prompt.placeholder == ""
+        assert calls == [], "no suggestion request while the answer is streaming"
         release.set()
         await asyncio.wait_for(app.turn, 2)
         await pilot.pause()
+        await pilot.pause()
+        assert len(calls) == 1
         assert app.prompt.placeholder == "Add regression tests for this behavior."
         assert app.prompt.text == ""
     finally:
         release.set()
+        await context.__aexit__(None, None, None)
+
+
+async def test_answer_with_choices_never_requests_a_suggestion(workdir, monkeypatch):
+    from test_tui import type_line
+    calls = []
+    reply = "Which approach should I take?\n\n1. Patch the parser\n2. Rewrite the module\n"
+    app, pilot, context = await start(workdir, Script([TextDelta(reply), Done("stop")]))
+    async def suggest(*args):
+        calls.append(args)
+        return "Patch the parser."
+    monkeypatch.setattr(app.agent, "suggest_prompt", suggest)
+    try:
+        app.config.set("prompt_suggest", True)
+        app._titled = True
+        await type_line(pilot, "Fix the bug")
+        await asyncio.wait_for(app.turn, 2)
+        await pilot.pause()
+        assert calls == []
+        assert not app.prompt.placeholder
+        assert "already offers choices" in app._suggestion_status
+    finally:
         await context.__aexit__(None, None, None)
 
 
@@ -301,9 +323,10 @@ async def test_placeholder_has_neutral_gray_not_theme_accent(workdir, name):
         await context.__aexit__(None, None, None)
 
 
-async def test_cancelled_answer_never_reveals_prepared_suggestion(workdir, monkeypatch):
+async def test_cancelled_answer_never_requests_a_suggestion(workdir, monkeypatch):
     from test_tui import type_line
     release = asyncio.Event()
+    calls = []
     class Streaming(Script):
         async def stream(self, *args, **kwargs):
             yield TextDelta("Working on the answer.")
@@ -311,20 +334,39 @@ async def test_cancelled_answer_never_reveals_prepared_suggestion(workdir, monke
             yield Done("stop")
     app, pilot, context = await start(workdir, Streaming())
     async def suggest(*args):
+        calls.append(args)
         return "Review the tests."
     monkeypatch.setattr(app.agent, "suggest_prompt", suggest)
     try:
         app.config.set("prompt_suggest", True)
         await type_line(pilot, "Explain the change")
         await pilot.pause()
-        assert "Prepared" in app._suggestion_status
         app.turn.cancel()
         await asyncio.gather(app.turn, return_exceptions=True)
         await pilot.pause()
+        assert calls == []
         assert not app.prompt.placeholder
         assert app._suggestion_task is None
     finally:
         release.set()
+        await context.__aexit__(None, None, None)
+
+
+async def test_arrow_keys_switch_the_popup_toggle_right_away(workdir):
+    from eirene.ui.aside import TextToggle
+    app, pilot, context = await start(workdir)
+    try:
+        await dispatch(app, "/prompt-suggest")
+        await pilot.pause()
+        toggle = app.aside.query_one("#aside-toggle", TextToggle)
+        assert app.focused is toggle
+        await pilot.press("right")
+        await pilot.pause()
+        assert app.config.get("prompt_suggest") and content(toggle) == "<  ON  >"
+        await pilot.press("left")
+        await pilot.pause()
+        assert not app.config.get("prompt_suggest") and content(toggle) == "<  OFF  >"
+    finally:
         await context.__aexit__(None, None, None)
 
 

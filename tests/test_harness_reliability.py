@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from eirene.core import artifacts, compact
+from eirene.core import artifacts, compact, paths
 from eirene.core.agent import ToolFinished, ToolOutput, TurnDone
 from eirene.core.errors import ToolError
 from eirene.core.modes import Mode
@@ -348,3 +348,11 @@ async def test_inline_output_streaming_and_missing_artifact_fallback(workdir):
         assert card.expanded and "four" in content(card)
     finally:
         await context.__aexit__(None, None, None)
+
+
+@pytest.mark.skipif(sys.platform != "linux" or not shutil.which("bwrap"), reason="Linux Bubblewrap integration")
+async def test_isolated_commands_share_the_session_temp(workdir):
+    temp = paths.use_session_temp(workdir, "abc")
+    result = await shell.run('echo kept > "$TMPDIR/note.txt"', workdir, isolation="bubblewrap", isolate_network=True)
+    assert result.ok, result.output
+    assert (temp / "note.txt").read_text() == "kept\n"

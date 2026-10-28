@@ -18,6 +18,8 @@ You are a terminal coding and automation agent. You act through tools, not prose
 
 Sandbox: {sandbox}
 OS: {os} | Shell: {shell} | Date: {date}
+Temp: {temp} (also $TMPDIR, %TEMP%). Put scratch and intermediate files here,
+not in the workspace or elsewhere in the system temp directory.
 
 Rules:
 - Before any task action, use the supplied environment preflight: OS distribution,
@@ -224,8 +226,9 @@ for input.
 
 def build(sandbox: str, mode: str, os_name: str, shell: str, date: str, *, host=None) -> str:
     """Fill the prompt template."""
+    from . import paths
     from .platforms import guidance, Host
     host = host or Host.detect()
     system = {"macOS": "Darwin"}.get(os_name, os_name)
-    return SYSTEM_PROMPT.format(sandbox=sandbox, mode=mode, os=os_name,
+    return SYSTEM_PROMPT.format(sandbox=sandbox, mode=mode, os=os_name, temp=paths.temp_dir(),
                                 shell=shell, date=date, tool_approval_guidance=TOOL_APPROVAL_GUIDANCE) + "\n\n" + host.prompt_block() + "\n" + guidance(system=system, host=host) + "\nBounded read commands: " + host.read_commands()

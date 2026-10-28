@@ -5,9 +5,9 @@ import os
 import json
 import shutil
 import sys
-import tempfile
 from pathlib import Path
 
+from ..core import paths
 from ..core.errors import ToolError
 
 
@@ -39,6 +39,8 @@ def command(command: str, root: Path, *, backend: str = "auto",
             raise ToolError("grant a specific directory, not the filesystem root")
     mounts = [(root, not read_only), *((p, False) for p in reads),
               *((p, True) for p in writes)]
+    if not read_only:
+        mounts.append((paths.temp_dir(), True))
     # Parent mounts must precede children; otherwise a parent hides the child.
     mounts.sort(key=lambda item: len(item[0].parts))
     if backend == "seatbelt":
@@ -50,8 +52,8 @@ def command(command: str, root: Path, *, backend: str = "auto",
                    '(allow file-read-metadata)',
                    '(allow file-read* (subpath "/System") (subpath "/usr") (subpath "/bin") (subpath "/sbin") (subpath "/Library") (subpath "/private/etc") (subpath "/dev"))',
                    '(allow file-write* (literal "/dev/null") (literal "/dev/tty"))']
-        scratch = _mac_scratch()
-        mounts.append((scratch, True))
+        if read_only:
+            mounts.append((_mac_scratch(), True))
         if Path("/opt/homebrew").is_dir():
             mounts.append((Path("/opt/homebrew"), False))
         for path, writable in mounts:
@@ -82,7 +84,8 @@ def command(command: str, root: Path, *, backend: str = "auto",
         for path, writable in mounts:
             argv += ["--bind" if writable else "--ro-bind", str(path), str(path)]
         argv += ["--setenv", "HOME", str(home_path) if home_path else "/tmp/eirene-home",
-                 "--setenv", "TMPDIR", "/tmp", "--chdir", str(workdir or root)]
+                 "--setenv", "TMPDIR", "/tmp" if read_only else str(paths.temp_dir()),
+                 "--chdir", str(workdir or root)]
         return argv + launch_argv
     raise ToolError(f"unknown isolation backend: {backend}")
 
@@ -103,9 +106,4 @@ def environment(extra=None) -> dict[str, str]:
 
 def _mac_scratch() -> Path:
     """Private temporary storage for sandboxed tools and caches."""
-    path = Path(tempfile.gettempdir()) / f"eirene-sandbox-{os.getuid()}"
-    path.mkdir(mode=0o700, exist_ok=True)
-    if path.is_symlink() or path.stat().st_uid != os.getuid():
-        raise ToolError("unsafe macOS sandbox temporary directory")
-    path.chmod(0o700)
-    return path.resolve()
+    return paths.temp_dir()

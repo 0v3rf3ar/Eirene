@@ -60,10 +60,19 @@ def normalize(root: Path, fallback: str) -> dict:
     if agents:
         warnings.append("agent profiles use the selected provider/model through delegate_tasks; native CLIs use their own delegation tools")
     raw_hooks = body.get("hooks", "hooks/hooks.json")
-    if isinstance(raw_hooks, str):
-        hook_path = inside(root, raw_hooks)
-        raw_hooks = read_object(hook_path) if hook_path.is_file() else {}
-    hooks = raw_hooks.get("hooks", raw_hooks) if isinstance(raw_hooks, dict) else {}
+    # Manifests may declare one hook file, several, or the hooks inline.
+    hooks = {}
+    for entry in raw_hooks if isinstance(raw_hooks, list) else [raw_hooks]:
+        if isinstance(entry, str):
+            hook_path = inside(root, entry)
+            entry = read_object(hook_path) if hook_path.is_file() else {}
+        if not isinstance(entry, dict):
+            warnings.append("unsupported hooks declaration")
+            continue
+        declared = entry.get("hooks", entry)
+        for event, groups in (declared.items() if isinstance(declared, dict) else ()):
+            hooks.setdefault(event, [])
+            hooks[event] += groups if isinstance(groups, list) else [groups]
     lifecycle = {}
     for event, groups in hooks.items():
         if event not in SUPPORTED_EVENTS:

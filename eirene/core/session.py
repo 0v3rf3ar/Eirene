@@ -97,6 +97,8 @@ class Session:
         self.messages: list[Message] = []
         self.file_attachments: dict[str, dict] = {}
         self.transcript_messages: list[Message] | None = None
+        # Delegated agents started from this session, keyed by their session id.
+        self.subagents: dict[str, dict[str, Any]] = {}
         self.started = time.time()
         self.name = ""
         self._handle = None
@@ -130,6 +132,7 @@ class Session:
         """Forget the history and delete the log."""
         self.messages.clear()
         self.file_attachments.clear()
+        self.subagents.clear()
         self.transcript_messages = None
         self.close()
         self._closed = False
@@ -156,6 +159,15 @@ class Session:
                     session.file_attachments[item["id"]] = item
             if record.get("t") == "rename" and record.get("name"):
                 session.name = str(record["name"])
+            if record.get("t") == "subagent" and record.get("session_id"):
+                session.subagents[record["session_id"]] = dict(
+                    name=str(record.get("agent") or "subagent"), status="interrupted",
+                    read_only=bool(record.get("read_only", True)), activity="", tools=0,
+                    started=float(record.get("ts") or 0), seconds=0.0)
+            if record.get("t") == "subagent_status" and record.get("session_id") in session.subagents:
+                session.subagents[record["session_id"]].update(
+                    status=str(record.get("status") or "completed"),
+                    tools=int(record.get("tools") or 0), seconds=float(record.get("seconds") or 0))
         session.messages = replay(records)
         session.transcript_messages = replay(records, apply_compaction=False)
         if not session.name:

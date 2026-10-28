@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import os
+import re
+import tempfile
 from pathlib import Path
 
 ENV_HOME = "EIRENE_HOME"
+# Child Eirene processes inherit a session TMPDIR; keep nesting under the real one.
+_SYSTEM_TEMP = os.environ.get("EIRENE_SYSTEM_TEMP") or tempfile.gettempdir()
+_session_temp: Path | None = None
 
 
 def home() -> Path:
@@ -72,6 +77,37 @@ def ensure_tree() -> None:
                  task_locks_dir()):
         path.mkdir(parents=True, exist_ok=True)
     _tighten(home())
+
+
+def temp_root() -> Path:
+    """Eirene's private folder in the OS temp directory, e.g. /tmp/eirene-1000."""
+    name = f"eirene-{os.getuid()}" if hasattr(os, "getuid") else "eirene"
+    return _private(Path(_SYSTEM_TEMP) / name)
+
+
+def temp_dir() -> Path:
+    """The active session's temp folder, or the shared root before one starts."""
+    return _session_temp or temp_root()
+
+
+def use_session_temp(workspace: Path, session_id: str) -> Path:
+    """Send every temp file of Eirene and its commands to this session's folder."""
+    global _session_temp
+    folder = _private(temp_root() / re.sub(r"[^A-Za-z0-9]", "-", str(workspace)))
+    _session_temp = _private(folder / session_id)
+    os.environ["EIRENE_SYSTEM_TEMP"] = _SYSTEM_TEMP
+    for key in ("TMPDIR", "TEMP", "TMP"):
+        os.environ[key] = str(_session_temp)
+    tempfile.tempdir = str(_session_temp)
+    return _session_temp
+
+
+def _private(path: Path) -> Path:
+    path.mkdir(mode=0o700, exist_ok=True)
+    if path.is_symlink() or (hasattr(os, "getuid") and path.stat().st_uid != os.getuid()):
+        raise OSError(f"unsafe temporary directory: {path}")
+    _tighten(path)
+    return path.resolve()
 
 
 def _tighten(path: Path) -> None:

@@ -53,6 +53,7 @@ DEFAULTS: dict[str, Any] = {
     "credential_store": "file",
     "search_api": {},
     "check_updates": True,
+    "editor": "",
 }
 
 VALID_MODES = {"auto", "manual", "plan"}
@@ -86,6 +87,23 @@ class Config:
         data = _read(path)
         merged = _merge_defaults(data)
         return cls(merged, path)
+
+    def reload(self) -> str:
+        """Pick up edits made to the file; on bad JSON keep the live settings and say why."""
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8") or "{}")
+        except OSError as exc:
+            return f"cannot read {self.path}: {exc}"
+        except ValueError as exc:
+            return f"{self.path} is not valid JSON ({exc})"
+        if not isinstance(data, dict):
+            return f"{self.path} must contain a JSON object"
+        permissions = self.data.get("permissions")
+        self.data = _merge_defaults(data)
+        # Full access is process-local and is never read back from the file.
+        if permissions is not None:
+            self.data["permissions"] = permissions
+        return ""
 
     def save(self) -> None:
         # Full access is an explicit process-local choice, never a startup default.

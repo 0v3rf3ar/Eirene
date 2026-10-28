@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import time
 
 from .config import Config
 from .errors import ToolError
@@ -17,7 +18,7 @@ def validate_tasks(raw, config):
     if not isinstance(raw, list) or not 1 <= len(raw) <= 8:
         raise ToolError("delegate_tasks needs 1 to 8 tasks")
     profiles = agent_definitions(config)
-    tasks = []
+    tasks, names = [], set()
     for task in raw:
         if not isinstance(task, dict) or not isinstance(task.get("prompt"), str) or not task["prompt"].strip():
             raise ToolError("each delegated task needs a nonempty prompt")
@@ -29,7 +30,14 @@ def validate_tasks(raw, config):
         read_only = task.get("read_only", True)
         if not isinstance(read_only, bool):
             raise ToolError("task read_only must be a boolean")
-        tasks.append({"prompt": task["prompt"], "agent": name, "read_only": read_only})
+        title = task.get("name")
+        if not isinstance(title, str) or not title.strip():
+            raise ToolError("each delegated task needs a name describing its job, such as 'football-historian'")
+        title = " ".join(title.split())[:40]
+        if title.casefold() in names:
+            raise ToolError(f"delegated task names must be unique; '{title}' is used twice")
+        names.add(title.casefold())
+        tasks.append({"prompt": task["prompt"], "agent": name, "name": title, "read_only": read_only})
     return tasks, profiles
 
 
@@ -48,9 +56,14 @@ async def run_tasks(parent, raw, on_output=None):
     semaphore = asyncio.Semaphore(4 if all(t["read_only"] for t in tasks) else 1)
     dialog = asyncio.Lock()
 
-    async def approve(*args):
+    async def approve(name, *args):
         async with dialog:
-            return await parent.approve(*args)
+            # Another subagent may have been told "don't ask again" while this one waited.
+            from .agent import ALWAYS, CHANGE_TOOLS
+            key = "session_edits" if name in CHANGE_TOOLS else name
+            if key in parent.always and name != "request_full_access":
+                return ALWAYS
+            return await parent.approve(name, *args)
 
     async def choose(*args):
         async with dialog:
@@ -58,19 +71,25 @@ async def run_tasks(parent, raw, on_output=None):
 
     async def worker(index, task):
         async with semaphore:
-            label = task["agent"] or f"task-{index + 1}"
+            label = task["name"]
             config = Config(copy.deepcopy(parent.config.data), parent.config.path)
             config.set("mode", Mode.PLAN.value if task["read_only"] else parent.mode.value)
             config.set("max_iterations", min(parent.iteration_limit or 40, 40))
             session = Session.create(parent.sandbox.root)
             session.start()
             session.add_note("delegation", parent_id=parent.session.id, agent=label,
-                             read_only=task["read_only"], status="running")
+                             profile=task["agent"], read_only=task["read_only"], status="running")
             parent.session.start()
             parent.session.add_note("subagent", session_id=session.id, agent=label,
+                                    profile=task["agent"], read_only=task["read_only"],
                                     status="running")
+            info = parent.session.subagents[session.id] = dict(
+                name=label, status="running", read_only=task["read_only"], activity="",
+                tools=0, started=time.time(), seconds=0.0)
             child = Agent(session, config, Sandbox(parent.sandbox.root))
             child._delegation_depth = parent._delegation_depth + 1
+            # "Don't ask again" answers hold for the whole session, subagents included.
+            child.always = parent.always
             child.approve = approve if parent.approve else None
             child.choose = choose if parent.choose else None
             child.reload_skills()
@@ -82,7 +101,7 @@ async def run_tasks(parent, raw, on_output=None):
                 plugin, path, _, body = profiles[task["agent"]]
                 from .plugins import expand_definition
                 body = expand_definition(body, plugin.path)
-                text = (f"Specialist profile: {label}\nPlugin directory: {plugin.path}\n"
+                text = (f"Specialist profile: {task['agent']}\nPlugin directory: {plugin.path}\n"
                         f"Profile directory: {path.parent}\n{body}\n\nTask:\n{text}")
             text += ("\n\nReturn your completed findings with file references, verification evidence, "
                      "and any blockers. Follow the parent task's scope and host permissions.")
@@ -97,8 +116,10 @@ async def run_tasks(parent, raw, on_output=None):
                             replies.append(event.text)
                         elif isinstance(event, Failed):
                             failures.append(event.text)
-                        elif isinstance(event, ToolStarted) and on_output:
-                            on_output(f"[{label}] {event.name}: {event.label}\n")
+                        elif isinstance(event, ToolStarted):
+                            info.update(activity=event.name, tools=info["tools"] + 1)
+                            if on_output:
+                                on_output(f"[{label}] {event.name}: {event.label}\n")
                         elif isinstance(event, TurnDone):
                             status = event.status
                             parent._delegated_usage.input_tokens += event.usage.input_tokens
@@ -114,6 +135,9 @@ async def run_tasks(parent, raw, on_output=None):
                 if failures:
                     status = "failed"
                 session.add_note("delegation_status", status=status)
+                info.update(status=status, activity="", seconds=time.time() - info["started"])
+                parent.session.add_note("subagent_status", session_id=session.id, status=status,
+                                        tools=info["tools"], seconds=round(info["seconds"], 1))
                 try:
                     await child.close()
                 finally:
@@ -123,7 +147,7 @@ async def run_tasks(parent, raw, on_output=None):
                 status = "failed"
             if on_output:
                 on_output(f"[{label}] {status}\n")
-            return {"agent": label, "status": status, "report": "\n".join(replies),
+            return {"agent": label, "profile": task["agent"], "status": status, "report": "\n".join(replies),
                     "errors": failures, "session_id": session.id}
 
     pending = [asyncio.create_task(worker(index, task)) for index, task in enumerate(tasks)]

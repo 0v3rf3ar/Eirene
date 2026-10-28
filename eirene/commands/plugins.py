@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 
-from ..core import plugins
-from ..core.plugin_install import install
+from ..core import paths, plugins
+from ..core.plugin_install import export_skills, install
 from ..core.plugin_catalog import BUNDLES
 from . import register
 
@@ -70,6 +70,11 @@ async def run(app, args: str) -> None:
                 manifest["name"] = plugin.name
                 if plugin.catalog_shortcut:
                     manifest["catalog_shortcut"] = plugin.catalog_shortcut
+                folder = paths.skills_dir() / plugin.name
+                if manifest["skills"] and not folder.exists():
+                    export_skills(plugin.name, plugin.path, manifest["skills"])
+                if manifest["skills"]:
+                    manifest["skills_exported"] = True
                 temporary = plugin.path / ".plugin.json.tmp"
                 temporary.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
                 temporary.replace(plugin.path / ".eirene-plugin.json")
@@ -112,16 +117,15 @@ async def run(app, args: str) -> None:
                 catalog_installed.add(installed.name)
                 state = 'enabled' if app.config.plugin_enabled(installed.name) else 'disabled'
                 options.append(("installed:" + installed.name, slug, state,
-                                describe(installed, app.config)))
+                                installed.description or purpose))
             else:
-                options.append(("install:" + slug, slug, "available",
-                                purpose + "\nSource: " + source + "\nChoose to install this bundle."))
+                options.append(("install:" + slug, slug, "available", f"{purpose} · {source}"))
         for plugin in found:
             if plugin.name not in catalog_installed:
                 state = 'enabled' if app.config.plugin_enabled(plugin.name) else 'disabled'
                 options.append(("installed:" + plugin.name, plugin.name, state,
-                                describe(plugin, app.config)))
-        chosen = await app.ask_choice("Plugins — choose to install or manage", options, popup=True)
+                                plugin.description))
+        chosen = await app.ask_choice("Plugins — choose to install or manage", options, right_hint=True)
         if not chosen:
             return
         turn = getattr(app, "turn", None)
@@ -142,7 +146,7 @@ async def run(app, args: str) -> None:
             ("doctor", "Check prerequisites", "read-only diagnostics"),
             ("trust", "Trust hooks", "review and confirm executable hook access"),
             ("untrust", "Revoke hook trust", "also disables this plugin's MCP servers"),
-        ], popup=True)
+        ])
         if operation == "toggle":
             app.config.set_plugin(name, not enabled)
             app._save_config()

@@ -8,11 +8,11 @@ capabilities, and activate only the executable parts you intend to use.
 
 ## Find and install
 
-`/plugins` opens a draggable popup containing the predefined catalog (including
+`/plugins` opens an inline menu, like `/connect`, listing the predefined catalog (including
 Ponytail) and any other installed bundles. Use Up/Down or type to filter, then
 Enter to install an available bundle. Choosing an installed bundle opens its
 enable/disable, inspection, diagnostic, and hook-trust actions. Esc closes the
-popup. Changes are blocked while an agent turn is running. Installing a bundle
+menu. Changes are blocked while an agent turn is running. Installing a bundle
 does not automatically grant hook trust or enable MCP servers.
 
 ```text
@@ -55,7 +55,8 @@ install bundle
 ```
 
 Installed bundles are enabled by default unless a saved preference disables them.
-Use `/plugins` to select and enable/disable the bundle and `/skills` for individual skills. Changes
+Use `/plugins` to select and enable/disable the bundle and `/skills` for its skills, which
+are copied into `skills/<plugin>/` at install. Changes
 apply on the next turn. Turning a bundle off removes its guidance and commands;
 it also prevents its executable integrations from being active.
 

@@ -324,6 +324,8 @@ class Markdown:
     def lines(self) -> list[Text]:
         """Every rendered line, in order."""
         out: list[Text] = []
+        # Rendered row -> its code source line; None marks a box border.
+        self.code: dict[int, str | None] = {}
         source = self.body.splitlines() or [""]
         index = 0
         previous_list = False
@@ -332,6 +334,13 @@ class Markdown:
             line = source[index]
             if FENCE.match(line):
                 rendered, used = code_block(source, index, self.width)
+                body = source[index + 1:index + used]
+                if body and FENCE.match(body[-1]):
+                    body = body[:-1]
+                first = len(out)
+                self.code[first] = self.code[first + len(rendered) - 1] = None
+                for offset, code in enumerate(body or [""]):
+                    self.code[first + 1 + offset] = code
                 out.extend(rendered)
                 index += used
                 previous_list = False
@@ -372,6 +381,26 @@ class Markdown:
     def plain(self) -> str:
         """What the block reads as, for copying."""
         return "\n".join(line.plain for line in self.lines())
+
+    def copy(self, selection) -> str:
+        """Selected text, with code taken from its source and no box."""
+        picked = []
+        for y, line in enumerate(self.lines()):
+            span = selection.get_span(y)
+            if span is None:
+                continue
+            start, end = span
+            if y not in self.code:
+                picked.append(trim(line.plain[start:] if end == -1 else line.plain[start:end]))
+                continue
+            code = self.code[y]
+            if code is None:
+                continue
+            # Reaching the right edge copies the whole line, even if it was cut off.
+            end = -1 if end == -1 or end >= len(line.plain) - 3 else max(end - 2, 0)
+            start = max(start - 2, 0)
+            picked.append(code[start:] if end == -1 else code[start:end])
+        return "\n".join(picked)
 
     def __rich_console__(self, console: Console,
                          options: ConsoleOptions) -> RenderResult:

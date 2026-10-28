@@ -15,6 +15,7 @@ import stat
 import subprocess
 from pathlib import Path
 
+from ..core import paths
 from ..core.errors import ToolError
 from .windows_appcontainer import AppContainer, BOOL, DWORD, PTR, WSTR
 
@@ -185,6 +186,9 @@ async def start(argv, root, cwd, *, network=False, read_paths=(), write_paths=()
         for path, writable in [(root, not read_only), *((p, False) for p in reads),
                                *((p, True) for p in writes)]:
             owner.grant(path, writable)
+        temp = None if read_only else paths.temp_dir()
+        if temp:
+            owner.grant(temp, True)
         runtime = Path(executable).resolve().parent
         system_dirs = [Path(os.environ[key]).resolve() for key in ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)")
                        if os.environ.get(key)]
@@ -205,7 +209,7 @@ async def start(argv, root, cwd, *, network=False, read_paths=(), write_paths=()
                 os.set_handle_inheritable(handle, True)
             owner.native = owner.box.spawn(argv, cwd=cwd,
                 env={"PATH": os.environ.get("PATH", ""), **(env or {})},
-                std_handles=(handles[0], handles[1], handles[1]))
+                std_handles=(handles[0], handles[1], handles[1]), temp=temp)
         finally:
             for handle in handles:
                 os.set_handle_inheritable(handle, False)

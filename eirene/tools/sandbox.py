@@ -8,6 +8,7 @@ from pathlib import Path
 from contextvars import ContextVar
 from typing import Iterator
 
+from ..core import paths
 from ..core.errors import SandboxError
 
 
@@ -44,9 +45,9 @@ class Sandbox:
         return resolved
 
     def permitted(self, resolved: Path) -> bool:
-        """True while the user has approved this path for the running tool."""
+        """True for the session temp folder, or while the user has approved this path."""
         return self.full_access or any(resolved == allowed or allowed in resolved.parents
-                   for allowed in self._grants.get())
+                   for allowed in (paths.temp_dir(), *self._grants.get()))
 
     @contextmanager
     def permit(self, *paths: str) -> Iterator[None]:

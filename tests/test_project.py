@@ -63,3 +63,21 @@ def test_find_symbol_locates_definitions(workdir, box):
     result = find_symbol(box, "target")
     assert "code.py:1" in result
     assert "mention.py" not in result
+
+
+def test_eirene_and_agent_files_guide_the_whole_session(workdir):
+    import os
+    import time
+    from test_agent import Script, build
+    (workdir / "EIRENE.md").write_text("Answer in French.\n", encoding="utf-8")
+    (workdir / "AGENT.md").write_text("Never use tabs.\n", encoding="utf-8")
+    runner = build(workdir, Script([]))
+    prompt = runner.system_prompt()
+    assert "Answer in French." in prompt and "Never use tabs." in prompt
+    assert "for the whole session" in prompt
+    rules = workdir / "AGENT.md"
+    rules.write_text("Use two spaces.\n", encoding="utf-8")
+    later = time.time() + 5
+    os.utime(rules, (later, later))
+    prompt = runner.system_prompt()
+    assert "Use two spaces." in prompt and "Never use tabs." not in prompt

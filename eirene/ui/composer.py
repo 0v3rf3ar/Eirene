@@ -75,6 +75,59 @@ class ModeLine(Static):
         self.update(body)
 
 
+# The diamond turns while subagents work: outline, half, solid, half.
+DIAMOND_FRAMES = ("◇", "◈", "◆", "◈")
+
+
+def describe_subagents(subagents: dict[str, dict], tick: int | None = None) -> Text:
+    """How many subagents this session has started; the icon turns while any is working."""
+    count = len(subagents)
+    working = any(row["status"] == "running" for row in subagents.values())
+    icon = art.icon("agent")
+    if working and tick is not None and not art.ACCESSIBLE:
+        icon = DIAMOND_FRAMES[tick % len(DIAMOND_FRAMES)]
+    return Text(f"  {icon} {count} subagent{'s' if count != 1 else ''}",
+                style="" if working else "dim")
+
+
+class SubagentLine(Static):
+    """This session's subagent count, under the mode line; click for /subagents."""
+
+    DEFAULT_CSS = """
+    SubagentLine {
+        width: 1fr;
+        height: 1;
+        padding: 0 1;
+        background: transparent;
+        display: none;
+    }
+    """
+
+    def __init__(self) -> None:
+        super().__init__(Text(""))
+        self._shown: str | None = None
+        self._tick = 0
+
+    def on_mount(self) -> None:
+        self.set_interval(0.5, self.refresh_subagents)
+
+    def refresh_subagents(self) -> None:
+        agent = getattr(self.app, "agent", None)
+        subagents = getattr(getattr(agent, "session", None), "subagents", None) or {}
+        config = getattr(agent, "config", None)
+        still = config is not None and config.get("reduce_motion", False)
+        self._tick += 1
+        line = describe_subagents(subagents, None if still else self._tick) if subagents else Text("")
+        if line.markup != self._shown:
+            self._shown = line.markup
+            self.display = bool(subagents)
+            self.update(line)
+
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
+        self.app._start_command("/subagents")
+
+
 class Marker(Static):
     """The ❯ in front of the input."""
 
@@ -182,6 +235,7 @@ class Prompt(TextArea):
         self._silent: str | None = None
         self._pastes: list[tuple[str, str]] = []
         self._files: dict[str, dict] = {}
+        self._command_length = 0
 
     # value
 
@@ -212,11 +266,20 @@ class Prompt(TextArea):
         self._line_cache.clear()
         self.refresh()
 
+    def mark_command(self, length: int) -> None:
+        """Bold the first `length` characters: a complete slash command name."""
+        if length != self._command_length:
+            self._command_length = length
+            self._line_cache.clear()
+            self.refresh()
+
     def get_line(self, line_index: int):
         """Mask the text while a secret is wanted."""
         line = super().get_line(line_index)
         if not self._secret:
             line = line.copy()
+            if line_index == 0 and self._command_length:
+                line.stylize("bold", 0, self._command_length)
             for token in self._files:
                 column = line.plain.find(token)
                 while column >= 0:
@@ -300,14 +363,6 @@ class Prompt(TextArea):
                             end = max(end, token_end)
                         column = line.find(token, column + len(token))
         return super()._delete_via_keyboard(start, end)
-
-    async def _on_mouse_down(self, event: events.MouseDown) -> None:
-        if event.button == 3:
-            event.stop()
-            event.prevent_default()
-            self.app.action_copy_selection()
-            return
-        await super()._on_mouse_down(event)
 
     def _load(self, text: str) -> None:
         """Set the text without reopening the menu."""
@@ -466,6 +521,7 @@ class Composer(Container):
             yield Prompt()
         yield Rule()
         yield ModeLine()
+        yield SubagentLine()
         from .processes import ProcessBar
         yield ProcessBar()
 

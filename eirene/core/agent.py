@@ -366,15 +366,16 @@ class Agent:
         active_skills = self.skills
         if self.plugin_runtime.ponytail_mode == "off":
             active_skills = [s for s in self.skills if s.name != "ponytail:ponytail"]
+        self.project = project_mod.discover(self.sandbox.root)
         if getattr(self.provider, "owns_context", False):
-            # The CLI owns its tools and sandbox; contribute only host guidance
-            # and enabled skills, without Eirene tool instructions.
+            # The CLI owns its tools and sandbox; contribute only host guidance,
+            # enabled skills and project instructions, without Eirene tool instructions.
             from .platforms import guidance
             return (self.host.prompt_block() + "\n" + guidance(native=True, host=self.host)
                     + "\n" + self._permission_guidance(native=True)
                     + "\n" + prompts.TOOL_APPROVAL_GUIDANCE + "\n\n"
-                    + skills_mod.inline_block(active_skills))
-        self.project = project_mod.discover(self.sandbox.root)
+                    + skills_mod.inline_block(active_skills)
+                    + "\n\n" + self.project.instruction_block())
         text = prompts.build(sandbox=str(self.sandbox.root), mode=self.mode.value,
                              os_name={"Darwin": "macOS"}.get(self.host.system, self.host.system),
                              shell=self.host.shell, date=date.today().isoformat(), host=self.host)
@@ -414,7 +415,7 @@ class Agent:
         specs = tools.specs(include_exec=self.mode is not Mode.PLAN)
         from .plugins import discover
         if not any(self.config.plugin_enabled(plugin.name) for plugin in discover()):
-            specs = [spec for spec in specs if spec["name"] not in {"delegate_tasks", "load_plugin_resource"}]
+            specs = [spec for spec in specs if spec["name"] != "load_plugin_resource"]
         if not any(skill.enabled for skill in self.skills):
             specs = [spec for spec in specs if spec["name"] != "load_skill"]
         if self._delegation_depth:
@@ -500,11 +501,15 @@ class Agent:
             return NO
         edit = name in {"native_write_file", "native_edit_file"}
         approval_key = "session_edits" if edit else name
-        if (self.mode is Mode.AUTO and full_access(self.config)) or approval_key in self.always:
+        if self.mode is Mode.AUTO and full_access(self.config):
+            return YES
+        host_approval = not edit and not full_access(self.config)
+        if approval_key in self.always:
+            if host_approval:
+                self._grant_turn_access()
             return YES
         if self.approve is None:
             return NO
-        host_approval = not edit and not full_access(self.config)
         if host_approval:
             reason = (reason + "; " if reason else "") + "Yes allows full host access until this response finishes; sandboxing then returns. Manual approvals still apply."
         answer = await self.approve(name, label, preview, reason)
@@ -1112,15 +1117,22 @@ class Agent:
             return
 
         approval_key = "session_edits" if call.name in CHANGE_TOOLS else call.name
-        if verdict == ASK and (escape or approval_key not in self.always):
+        host_approval = verdict == ASK and self.mode is not Mode.PLAN and bool(escape)
+        if verdict == ASK and approval_key in self.always:
+            # The user chose "don't ask again for this tool" earlier in this session;
+            # that answer stands in for the same yes. Network tools run in-process and
+            # need no host access, so only path and host escapes widen this response.
+            if host_approval and call.name not in network_tools and self.approve is not None:
+                self._grant_turn_access()
+                unrestricted = full_access(self.config)
+        elif verdict == ASK:
             yield Phase(WAITING)
-            host_approval = self.mode is not Mode.PLAN and bool(escape)
             if host_approval:
                 reason = (reason + "; " if reason else "") + "Yes allows full host access until this response finishes; sandboxing then returns. Manual approvals still apply."
             answer = await self._ask(call, label, reason, preview)
             if answer == ALWAYS:
-                # "always" covers a tool, never a standing exit from the sandbox.
-                if not escape or approval_key == "session_edits":
+                # Full host access is granted one response at a time, never standing.
+                if call.name != "request_full_access":
                     self.always.add(approval_key)
             elif answer != YES:
                 self.session.add_note("tool_state", call_id=call.id, state="denied")

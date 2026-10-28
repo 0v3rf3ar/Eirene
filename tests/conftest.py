@@ -27,6 +27,13 @@ def eirene_home(tmp_path, monkeypatch):
     monkeypatch.delenv("EIRENE_REDUCE_MOTION", raising=False)
     monkeypatch.setenv(paths.ENV_HOME, str(home))
     monkeypatch.setenv("EIRENE_NO_UPDATE_CHECK", "1")
+    system_temp = tmp_path / "system-temp"
+    system_temp.mkdir()
+    monkeypatch.setattr(paths, "_SYSTEM_TEMP", str(system_temp))
+    monkeypatch.setattr(paths, "_session_temp", None)
+    monkeypatch.setattr(paths.tempfile, "tempdir", None)
+    for key in ("TMPDIR", "TEMP", "TMP", "EIRENE_SYSTEM_TEMP"):
+        monkeypatch.delenv(key, raising=False)
     paths.ensure_tree()
     return home
 

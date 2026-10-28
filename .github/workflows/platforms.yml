@@ -115,7 +115,7 @@ jobs:
 
   termux:
     name: Experimental Termux ARM64 package
-    if: github.event_name == 'workflow_dispatch' || (github.ref_type == 'tag' && contains(github.ref_name, 'b'))
+    if: github.event_name == 'workflow_dispatch' || (github.ref_type == 'tag' && (contains(github.ref_name, 'b') || contains(github.ref_name, 'rc')))
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     continue-on-error: true

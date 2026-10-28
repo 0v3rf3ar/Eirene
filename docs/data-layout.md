@@ -33,7 +33,10 @@ disables this automatic migration.
 │   └── <24-hex-workspace-hash>.json      cached project profile
 ├── skills/
 │   ├── <local-skill>.md
-│   └── <local-skill>/SKILL.md
+│   ├── <local-skill>/SKILL.md
+│   └── <folder-or-plugin>/              skills enabled together or one by one
+│       ├── <skill>.md
+│       └── <skill>/SKILL.md            copied with its supporting files
 ├── plugins/
 │   └── <installed-name>/               copied plugin bundle and resources
 │       ├── plugin.json                 source declaration, when present

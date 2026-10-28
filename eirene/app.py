@@ -15,7 +15,7 @@ from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from .ui.shortcuts import SHORTCUTS
+from .ui.shortcuts import COPY_KEYS, INERT_COPY_KEYS, SHORTCUTS
 from textual.css.query import NoMatches
 from textual._compositor import CompositorUpdate
 
@@ -87,10 +87,10 @@ class Eirene(App):
         Binding("ctrl+d", "leave", "exit", priority=True, show=False),
         Binding("escape", "interrupt", "stop", priority=True, show=False),
         Binding("shift+tab", "cycle_mode", "mode", priority=True, show=False),
-        Binding("ctrl+shift+c", "copy_selection", "copy", priority=True, show=False),
-        Binding("ctrl+c", "copy_selection(True)", "copy", priority=True, show=False),
+        Binding(",".join(COPY_KEYS), "copy_selection", "copy", priority=True, show=False),
         Binding("ctrl+e", "jump_to_end", "jump to bottom", priority=True, show=False),
-    ] + [Binding(key, action, hint, priority=True, show=False)
+    ] + [Binding(key, "ignore", "", priority=True, show=False)
+         for key in INERT_COPY_KEYS] + [Binding(key, action, hint, priority=True, show=False)
          for key, action, _, hint in SHORTCUTS]
 
     def __init__(self, sandbox: Path, resume: str = ""):
@@ -104,6 +104,7 @@ class Eirene(App):
         self._companion_renderer = prepare_renderer(self.config)
         self.runtime_logger = runtime_logging.configure(self.config)
         self.session = Session.create(self.sandbox.root, resume or None)
+        paths.use_session_temp(self.sandbox.root, self.session.id)
         self._resume_id = resume
         self.agent = agent_mod.Agent(self.session, self.config, self.sandbox)
         self.agent.approve = self._approve
@@ -196,8 +197,6 @@ class Eirene(App):
     # lifecycle
 
     def on_mount(self) -> None:
-        self._auto_copy_timer = None
-        self.watch(self.screen, "selections", self._queue_auto_copy, init=False)
         for theme in THEMES.values():
             self.register_theme(theme)
         selected = str(self.config.get("theme", "default"))
@@ -205,6 +204,8 @@ class Eirene(App):
         self.call_after_refresh(self._show_intro)
         self.agent.mode = Mode(self.config.mode)
         skills_mod.remove_seeded_examples()
+        from .core.plugin_install import export_installed_skills
+        export_installed_skills()
         self.agent.reload_skills()
         self._restore_provider()
         self.refresh_mode_line()
@@ -458,12 +459,16 @@ class Eirene(App):
         self.query_one(Companion).wake()
         if message.text:
             self.clear_prompt_suggestion()
+        # Bold the command name once it is completely written.
+        available = commands.commands(self) if message.text.startswith("/") else []
+        name = message.text[1:].split(maxsplit=1)[0].lower() if message.text[1:2].strip() else ""
+        known = name in {"plugin", *commands.REGISTRY, *(c.name for c in available)}
+        self.prompt.mark_command(len(name) + 1 if name and known else 0)
         if not message.suggest:
             self.slash.close()
             self.prompt.menu_open = False
             return
-        self.prompt.menu_open = self.slash.update_for(message.text,
-                                                      commands.commands(self))
+        self.prompt.menu_open = self.slash.update_for(message.text, available)
 
     def on_prompt_navigate(self, message: Prompt.Navigate) -> None:
         self.slash.move(message.delta)
@@ -606,27 +611,10 @@ class Eirene(App):
 
     async def ask_choice(self, title: str, options: list[tuple], *,
                          on_highlight=None, selected: str = "",
-                         skill_popup: bool = False, right_hint: bool = False,
-                         popup: bool = False, footer: str = "") -> str | None:
+                         right_hint: bool = False,
+                         footer: str = "") -> str | None:
         """Pick one option from a list, opening on the one already in use."""
         try:
-            if skill_popup or popup:
-                from .ui.skill_picker import SkillPickerScreen
-                from .ui.choice_popup import ChoicePopup
-                screen = (SkillPickerScreen(options, selected) if skill_popup else
-                          ChoicePopup(title, options, selected))
-                future = asyncio.get_running_loop().create_future()
-
-                def resolved(value):
-                    if not future.done():
-                        future.set_result(value)
-
-                await self.push_screen(screen, resolved)
-                try:
-                    return await future
-                finally:
-                    if self.screen is screen:
-                        self.pop_screen()
             self.picker.right_hint = right_hint
             return await self.picker.choose(title, options,
                                             on_highlight=on_highlight,
@@ -701,8 +689,6 @@ class Eirene(App):
         self.mark_busy(True)
         answer: AnswerBlock | None = None
         reply_text = ""
-        suggestion_release = asyncio.Event()
-        suggestion_started = False
         turn_completed = False
         cards: dict[str, ToolBlock] = {}
         attachment_cards: dict[str, ToolBlock] = {}
@@ -722,12 +708,6 @@ class Eirene(App):
                     if answer is None:
                         answer = await self.push(AnswerBlock(), live=True)
                     answer.feed(event.text)
-                    if ((not suggestion_started or self._suggestion_task is None)
-                            and self.config.get("prompt_suggest", False)
-                            and not self.prompt.text):
-                        self._offer_prompt_suggestion(record_text or text, reply_text,
-                                                      reveal_after=suggestion_release)
-                        suggestion_started = True
                 elif isinstance(event, agent_mod.Thought):
                     self.status.set_phase("reasoning")
                 elif isinstance(event, agent_mod.Phase):
@@ -754,7 +734,6 @@ class Eirene(App):
                     self.refresh_plan()
                 elif isinstance(event, agent_mod.ToolPreview):
                     self.clear_prompt_suggestion()
-                    suggestion_started = False
                     answer = None
                     cards[event.id] = await self.push(
                         ChangeBlock(event.label, event.diff,
@@ -763,7 +742,6 @@ class Eirene(App):
                     self.status.start_tool(event.id, event.kind)
                     self.query_one(Companion).refresh_companion()
                     self.clear_prompt_suggestion()
-                    suggestion_started = False
                     answer = None
                     if event.attachment_id and event.attachment_id in attachment_cards:
                         card = attachment_cards[event.attachment_id]
@@ -832,9 +810,7 @@ class Eirene(App):
                     if event.status == "completed":
                         turn_completed = True
                         self._last_suggestion_exchange = (self.session.id, record_text or text, reply_text)
-                        if not suggestion_started:
-                            self._offer_prompt_suggestion(record_text or text, reply_text)
-                        suggestion_release.set()
+                        self._offer_prompt_suggestion(record_text or text, reply_text)
         except asyncio.CancelledError:
             try:
                 self.transcript.settle()
@@ -926,7 +902,7 @@ class Eirene(App):
             self.prompt.value = suggestion
             self.prompt.focus()
 
-    def _offer_prompt_suggestion(self, request: str, answer, *, reveal_after=None) -> None:
+    def _offer_prompt_suggestion(self, request: str, answer) -> None:
         if not self.config.get("prompt_suggest", False):
             return
         if not self.agent.ready:
@@ -937,6 +913,9 @@ class Eirene(App):
             self._set_suggestion_status("Waiting for a completed reply")
             return
         self.clear_prompt_suggestion()
+        if questions.options_from(reply):
+            self._set_suggestion_status("Skipped · the reply already offers choices")
+            return
         generation = self._suggestion_generation
         session = self.session
         self._set_suggestion_status("Generating…")
@@ -949,12 +928,6 @@ class Eirene(App):
                     return
                 if not suggestion:
                     self._set_suggestion_status("No suggestion returned; switch off/on to retry")
-                    return
-                if reveal_after is not None:
-                    self._set_suggestion_status("Prepared · waiting for answer to finish")
-                    await reveal_after.wait()
-                if (generation != self._suggestion_generation or self.prompt.text
-                        or session is not self.session or not self.config.get("prompt_suggest", False)):
                     return
                 # Don't discard a valid suggestion just because a choice UI is
                 # momentarily open. New input/turns cancel this task instead.
@@ -996,6 +969,7 @@ class Eirene(App):
             return
         if self.turn and not self.turn.done():
             return
+        self.clear_prompt_suggestion()
         chosen = await self._choose(questions.question_from(body), options)
         if not chosen or chosen == tool_registry.CHAT_OPTION:
             return
@@ -1047,10 +1021,8 @@ class Eirene(App):
     def action_interrupt(self) -> None:
         """Close an output viewer before interrupting work underneath it."""
         from .ui.output import OutputScreen
-        from .ui.skill_picker import SkillPickerScreen
-        from .ui.choice_popup import ChoicePopup
         from .ui.session_tree import SessionTreeScreen
-        if isinstance(self.screen, (OutputScreen, SkillPickerScreen, ChoicePopup, SessionTreeScreen)):
+        if isinstance(self.screen, (OutputScreen, SessionTreeScreen)):
             self.screen.dismiss()
             return
         if self.aside.open:
@@ -1098,28 +1070,11 @@ class Eirene(App):
         else:
             self.prompt.focus()
 
-    def _queue_auto_copy(self) -> None:
-        """Wait for a selection to settle before updating the clipboard."""
-        if self._auto_copy_timer is not None:
-            self._auto_copy_timer.stop()
-        self._auto_copy_timer = self.set_timer(
-            0.15, self._auto_copy_selection)
+    def action_ignore(self) -> None:
+        """Swallow a key that would otherwise reach a built-in binding."""
 
-    def _auto_copy_selection(self) -> None:
-        try:
-            self.action_copy_selection(quiet=True, automatic=True)
-        except NoMatches:
-            # A pending selection callback may run while widgets are unmounting.
-            return
-
-    def on_text_area_selection_changed(self, event) -> None:
-        if event.text_area is self.prompt:
-            self._queue_auto_copy()
-
-    def action_copy_selection(self, quiet: bool = False, *, automatic: bool = False) -> None:
+    def action_copy_selection(self) -> None:
         """Copy the editor selection or selected transcript text."""
-        if automatic and self.prompt.has_focus and self.prompt.secret:
-            return
         text = self.prompt.selected_text if self.prompt.has_focus else ""
         if not text:
             try:
@@ -1127,33 +1082,46 @@ class Eirene(App):
             except NoMatches:
                 text = ""
         if not text:
-            if not quiet:
-                self.say("nothing selected - drag over the text first", "warn")
-            return
-        if automatic and text == self.clipboard:
+            self.say("nothing selected - drag over the text first", "warn")
             return
         self.copy_to_clipboard(text)
         tool = copy_to_system(text)
         self.query_one(CopyNotice).show_count(len(text))
-        if not automatic:
-            self.screen.clear_selection()
-        if not tool and not automatic:
+        self.screen.clear_selection()
+        if not tool:
             self.say("copied, but no clipboard tool was found - "
                      "install wl-clipboard or xclip", "warn")
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
-        """Right click copies the selection."""
         companion = self.query_one(Companion)
         if event.button == 1 and companion.poke_at(event.screen_x, event.screen_y):
             event.stop()
             event.prevent_default()
             return
         companion.wake()
-        if event.button != 3:
+
+    def on_click(self, event: events.Click) -> None:
+        """Double click selects the word under the pointer, not the whole block."""
+        if event.chain != 2:
             return
-        event.stop()
-        event.prevent_default()
-        self.action_copy_selection()
+        from textual.content import Content
+        from textual.geometry import Offset
+        from textual.selection import Selection
+        from textual.widgets import Input, TextArea
+        widget, offset = self.screen.get_widget_and_offset_at(event.screen_x, event.screen_y)
+        if widget is None or offset is None or isinstance(widget, (Input, TextArea)):
+            return
+        visual = widget._render()
+        if not isinstance(visual, (Text, Content)):
+            return
+        lines = str(visual).splitlines()
+        line = lines[offset.y] if offset.y < len(lines) else ""
+        word = next((m for m in re.finditer(r"\w+", line) if m.start() <= offset.x < m.end()), None)
+        if word is None:
+            self.screen.clear_selection()
+            return
+        self.screen.selections = {widget: Selection(Offset(word.start(), offset.y),
+                                                    Offset(word.end(), offset.y))}
 
     def clear_session(self) -> None:
         """Forget this session and its log."""
@@ -1202,6 +1170,7 @@ class Eirene(App):
             previous.close()
             self.session = resumed
             self.agent.session = resumed
+            paths.use_session_temp(self.sandbox.root, resumed.id)
             self.agent.always.clear()
             self.agent.usage = UsageTotals()
             reset_provider = getattr(self.agent.provider, "reset_thread", None)
@@ -1255,9 +1224,34 @@ class Eirene(App):
         except NoMatches:
             pass
 
+    EXIT_CONFIRM_SECONDS = 3.0
+
     def action_leave(self) -> None:
+        """Exit, asking for a second press while work would be cut off."""
+        busy = self._running_work()
+        armed = time.monotonic() - getattr(self, "_exit_armed", float("-inf"))
+        if busy and armed > self.EXIT_CONFIRM_SECONDS:
+            self._exit_armed = time.monotonic()
+            verb = "is" if busy in (["the agent"], ["1 command"]) else "are"
+            self.say(f"{' and '.join(busy)} {verb} still running; press ctrl+d or type /exit "
+                     f"again within {self.EXIT_CONFIRM_SECONDS:.0f}s to stop it and exit", "warn")
+            return
         self.shutdown()
         self.exit()
+
+    def action_quit(self) -> None:
+        """Textual's ctrl+q goes through the same confirmation as ctrl+d."""
+        self.action_leave()
+
+    def _running_work(self) -> list[str]:
+        from .tools import activity, shell
+        busy = []
+        if self.turn and not self.turn.done():
+            busy.append("the agent")
+        commands = len(processes.running()) + len(shell.active()) + len(activity.provider_commands())
+        if commands:
+            busy.append(f"{commands} command{'s' if commands != 1 else ''}")
+        return busy
 
     def action_cycle_mode(self) -> None:
         self.agent.mode = next_mode(self.agent.mode)
@@ -1327,9 +1321,6 @@ class Eirene(App):
         self.session.close()
 
     async def on_unmount(self) -> None:
-        timer = getattr(self, "_auto_copy_timer", None)
-        if timer is not None:
-            timer.stop()
         self.shutdown()
         await processes.stop_all()
         await self.agent.close()

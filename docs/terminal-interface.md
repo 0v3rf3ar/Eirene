@@ -56,13 +56,13 @@ supply them before submitting the task. Escape closes the active popup.
 | Shift+Tab | Cycle Manual, Auto, and Plan modes. |
 | Escape | Close a popup or interrupt current work. |
 | Ctrl+E | Jump to the latest transcript output. |
-| Ctrl+Shift+C | Copy selected input or transcript text. |
-| Ctrl+C | Copy selected text quietly. |
-| Right click | Copy selected text. |
-| Ctrl+D | Exit. |
+| Ctrl+Shift+C | Copy selected input or transcript text (Ctrl+C on Windows, Cmd+C on macOS). |
+| Ctrl+D | Exit. While the agent or a command is running, press it again within 3 seconds to confirm. |
 | Tab or Right arrow | Copy a suggestion into an empty composer. |
 
-Ctrl+C is a copy shortcut inside the interface; use Escape to stop the agent.
+Copy uses your platform's terminal copy shortcut only. Many Linux terminals
+send Ctrl+Shift+C as plain Ctrl+C, so Ctrl+C copies there too. Use Escape to
+stop the agent.
 Keyboard behavior can depend on your terminal's own bindings. `/keybindings`
 shows the same shortcuts from within Eirene.
 
@@ -74,7 +74,8 @@ the saved output around the relevant error. Expand/collapse choices survive a
 session resume.
 
 A background-work line appears below the model name while commands are running.
-Select it or press Ctrl+B to inspect output and stop a process. A quiet command
+Select it or press Ctrl+B to inspect a process's output; press S in that view to
+stop it. A quiet command
 can still be running; elapsed time alone does not establish that it is stuck.
 See [running commands](processes.md).
 
@@ -118,14 +119,19 @@ external service. Inspect your files or Git diff before continuing.
 ## Pickers and approvals
 
 Pickers are used for models, sessions, skills, plugins, and settings. Choose an
-item to apply it; Escape cancels or closes the popup. The composer retains a draft
+item to apply it; Escape cancels or closes the menu. The composer retains a draft
 when opening ordinary quick-action menus.
 
 Approval prompts are different from ordinary choices. A command approval can
 grant host access for the rest of the response, as disclosed by the prompt.
 Manual mode continues to ask before changes and commands under host access.
 File-change prompts offer **allow edits for this session**; choosing it does not
-approve commands. Long command labels are abbreviated in the transcript (at most
+approve commands. Other prompts offer **yes, and don't ask again for this tool**,
+which approves later calls of that tool for the rest of the session, in the main
+agent and its subagents, until `/clear` or a session switch. When the tool needed
+access outside the sandbox, each remembered call gets the same access a fresh
+**yes** would; web tools get no extra host access. Requests for full host access
+always ask, so they never offer this choice. Long command labels are abbreviated in the transcript (at most
 120 characters, shortened further to fit the terminal), while approval prompts
 show the full command.
 
@@ -135,11 +141,10 @@ Answering an ordinary task question does not grant execution access. Read
 
 ## Clipboard and display
 
-Selecting input or transcript text automatically copies it after the selection
-settles, while keeping it highlighted. This works with mouse selection and
-keyboard selection in the input. Empty selections leave the clipboard unchanged;
-masked API-key inputs do not copy automatically. The copy shortcuts and right
-click remain available.
+Selecting input or transcript text does not copy it. Press the platform copy
+shortcut - Ctrl+Shift+C on Linux, Ctrl+C on Windows, Cmd+C on macOS - to copy
+the selection. This works with mouse selection and keyboard selection in the
+input. Right click does not copy.
 Each copy shows `copied N characters` in the bottom-right corner for two seconds.
 
 Linux may need `wl-clipboard` or `xclip` for system clipboard copying. Terminal

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 
 import pytest
@@ -108,6 +109,7 @@ def test_notify_send_is_called_as_eirene(monkeypatch):
     monkeypatch.setattr(notify, "IS_MAC", False)
     monkeypatch.setattr(notify, "IS_WINDOWS", False)
     monkeypatch.setattr(notify.shutil, "which", lambda name: "/usr/bin/notify-send")
+    monkeypatch.setattr(notify, "_replaceable", lambda: False)
     monkeypatch.setattr(notify.subprocess, "Popen",
                         lambda command, **kw: seen.setdefault("command", command))
     assert notify.send("my chat", "all done") is True
@@ -122,6 +124,7 @@ def test_the_notification_carries_the_logo(monkeypatch):
     monkeypatch.setattr(notify, "IS_MAC", False)
     monkeypatch.setattr(notify, "IS_WINDOWS", False)
     monkeypatch.setattr(notify.shutil, "which", lambda name: "/usr/bin/notify-send")
+    monkeypatch.setattr(notify, "_replaceable", lambda: False)
     monkeypatch.setattr(notify.subprocess, "Popen",
                         lambda command, **kw: seen.setdefault("command", command))
     notify.send("chat", "body")
@@ -129,6 +132,39 @@ def test_the_notification_carries_the_logo(monkeypatch):
     icon = seen["command"][seen["command"].index("-i") + 1]
     assert icon.endswith("Eirene.png")
     assert "transparent" not in icon
+
+
+def test_a_new_notification_replaces_the_last_one(monkeypatch):
+    import io
+    launched = []
+
+    class Waiting:
+        def __init__(self, argv, **kw):
+            self.argv, self.alive = argv, True
+            self.stdout = io.StringIO("41\n")
+            launched.append(self)
+
+        def poll(self):
+            return None if self.alive else 0
+
+        def terminate(self):
+            self.alive = False
+
+        kill = terminate
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(notify.subprocess, "Popen", Waiting)
+    monkeypatch.setattr(notify, "_last_id", 0)
+    monkeypatch.setattr(notify, "_waiter", None)
+    monkeypatch.setattr(notify, "_wait_for_click", lambda process, read: None)
+    notify._send_replacing("chat", "first")
+    notify._send_replacing("chat", "second")
+    first, second = launched
+    assert "-r" not in first.argv and not first.alive
+    assert second.argv[second.argv.index("-r") + 1] == "41"
+    assert "-A" in second.argv and second.argv[-2:] == ["chat", "second"]
 
 
 def test_the_logo_ships_with_the_source():
@@ -225,6 +261,57 @@ def test_macos_prefers_terminal_notifier(monkeypatch):
     command = notify._command("chat", "done")
     assert command[0] == "terminal-notifier"
     assert "-appIcon" in command
+
+
+def test_macos_replaces_and_opens_the_terminal(monkeypatch):
+    monkeypatch.setattr(notify, "IS_MAC", True)
+    monkeypatch.setattr(notify, "IS_WINDOWS", False)
+    monkeypatch.setattr(notify.shutil, "which",
+                        lambda name: "/usr/local/bin/terminal-notifier"
+                        if name == "terminal-notifier" else None)
+    monkeypatch.setenv("__CFBundleIdentifier", "com.googlecode.iterm2")
+    command = notify._command("chat", "done")
+    assert command[command.index("-group") + 1] == f"eirene-{os.getpid()}"
+    assert command[command.index("-activate") + 1] == "com.googlecode.iterm2"
+
+
+def test_windows_toast_replaces_the_last_one(monkeypatch):
+    launched = []
+
+    class Waiting:
+        def __init__(self, argv, **kw):
+            self.argv, self.env, self.alive = argv, kw["env"], True
+            launched.append(self)
+
+        def poll(self):
+            return None if self.alive else 0
+
+        def terminate(self):
+            self.alive = False
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(notify, "IS_WINDOWS", True)
+    monkeypatch.setattr(notify.subprocess, "Popen", Waiting)
+    monkeypatch.setattr(notify, "_waiter", None)
+    notify._send_windows("chat", "first")
+    notify._send_windows("chat", "it's <done>")
+    first, second = launched
+    assert not first.alive and second.alive
+    assert second.argv[0] == "powershell" and "-EncodedCommand" in second.argv
+    assert second.env["EIRENE_TOAST_BODY"] == "it's <done>"
+    assert second.env["EIRENE_TOAST_GROUP"] == first.env["EIRENE_TOAST_GROUP"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="needs Windows PowerShell")
+def test_windows_toast_script_parses():
+    import subprocess
+    check = ("$errors = $null; $null = [System.Management.Automation.Language.Parser]::ParseInput("
+             "$env:EIRENE_SCRIPT, [ref]$null, [ref]$errors); $errors.Count")
+    result = subprocess.run(["powershell", "-NoProfile", "-Command", check], capture_output=True,
+                            text=True, env={**os.environ, "EIRENE_SCRIPT": notify.WINDOWS_TOAST})
+    assert result.stdout.strip() == "0", result.stdout + result.stderr
 
 
 def test_macos_falls_back_to_osascript(monkeypatch):

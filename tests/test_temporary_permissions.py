@@ -89,6 +89,88 @@ async def test_plan_cannot_request_host_access(workdir):
     assert "request_full_access" not in {spec["name"] for spec in runner.tool_specs()}
 
 
+@pytest.mark.parametrize("mode", [Mode.MANUAL, Mode.AUTO])
+async def test_dont_ask_again_covers_tools_that_leave_the_sandbox(workdir, outside, mode):
+    secret = str(outside / "secret.txt")
+    provider = Script(
+        [ToolCall("one", "read_file", {"path": secret}), Done("tool_calls")],
+        [TextDelta("read"), Done("stop")],
+        [ToolCall("two", "read_file", {"path": secret}), Done("tool_calls")],
+        [TextDelta("read again"), Done("stop")],
+    )
+    runner = build(workdir, provider, mode=mode)
+    asked = []
+    async def approve(name, *args):
+        asked.append(name)
+        return "always"
+    runner.approve = approve
+    first = [e for e in await drive(runner) if isinstance(e, ToolFinished)]
+    second = [e for e in await drive(runner, "again") if isinstance(e, ToolFinished)]
+    assert asked == ["read_file"]
+    assert not first[0].is_error and not second[0].is_error
+    assert "do not read" in second[0].result
+    # The remembered answer still ends host access with the response.
+    assert runner.config.get("permissions") == "sandboxed"
+
+
+async def test_dont_ask_again_for_web_search_never_widens_host_access(workdir, monkeypatch):
+    import eirene.core.agent as agent_mod
+    seen = []
+    async def search(*args, **kwargs):
+        return "1. Example\nhttps://example.com\n"
+    monkeypatch.setattr(agent_mod.tools.browser, "search", search)
+    provider = Script(
+        [ToolCall("one", "web_search", {"query": "football"}), Done("tool_calls")],
+        [TextDelta("found"), Done("stop")],
+        [ToolCall("two", "web_search", {"query": "basketball"}), Done("tool_calls")],
+        [TextDelta("found again"), Done("stop")],
+    )
+    runner = build(workdir, provider, mode=Mode.MANUAL)
+    asked = []
+    async def approve(name, *args):
+        asked.append(name)
+        return "always"
+    runner.approve = approve
+    original = runner._grant_turn_access
+    def grant():
+        seen.append(True)
+        original()
+    runner._grant_turn_access = grant
+    await drive(runner)
+    granted_by_answer = len(seen)
+    finished = [e for e in await drive(runner, "again") if isinstance(e, ToolFinished)]
+    assert asked == ["web_search"]
+    assert not finished[0].is_error
+    assert len(seen) == granted_by_answer  # The remembered answer adds no host access.
+
+
+def test_full_access_never_offers_dont_ask_again():
+    from eirene.ui.permission import PermissionBar
+    from eirene.core.agent import ALWAYS
+    bar = PermissionBar()
+    async def show(tool):
+        task = asyncio.create_task(bar.ask("t", "r", tool=tool))
+        await asyncio.sleep(0)
+        choices = [value for value, _ in bar.choices]
+        bar.cancel()
+        await task
+        return choices
+    async def main():
+        bar._draw = lambda: None
+        bar.call_after_refresh = lambda *a: None
+        bar.focus = lambda: None
+        return await show("request_full_access"), await show("run_command")
+    once, normal = asyncio.run(main())
+    assert ALWAYS not in once and ALWAYS in normal
+
+
+def test_subagents_are_offered_without_plugins(workdir):
+    runner = build(workdir, Script([Done("stop")]))
+    names = {spec["name"] for spec in runner.tool_specs()}
+    assert "delegate_tasks" in names
+    assert "load_plugin_resource" not in names
+
+
 async def test_failure_restores_permissions(workdir):
     runner = build(workdir, Script(
         [ToolCall("access", "request_full_access", {"reason": "Install"}), Done("tool_calls")],

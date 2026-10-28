@@ -47,6 +47,13 @@ def report(plugin, config, *, provider=None):
         rows.append("  Browser binaries/system libraries must be installed; the MCP browser-install tool can install supported binaries")
     if plugin.name == "serena":
         rows.append("  Serena selects Python 3.13 and the current project; language-server prerequisites vary by language")
+    from .platforms import is_termux
+    if is_termux() and (any(plugin.lifecycle.values()) or plugin.mcp_servers):
+        rows.append("  Android has no Eirene sandbox: trusted hooks and enabled MCP servers "
+                    "run with your Termux account's access")
+    if os.name == "nt" and plugin.mcp_servers:
+        rows.append("  Windows: sandboxed MCP is not supported yet; MCP servers start only "
+                    "with /permissions full-access")
     if os.name == "nt" and plugin.name == "superpowers":
         rows.append("  Startup hook needs Git Bash (the upstream .cmd wrapper selects it)")
     rows.extend("  Compatibility: " + warning for warning in plugin.warnings)

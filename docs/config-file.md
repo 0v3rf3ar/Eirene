@@ -36,13 +36,15 @@ $env:EIRENE_HOME = 'C:\Users\you\eirene-data'
 eirene -C 'C:\Users\you\Projects\example'
 ```
 
-There is no public `--config` option, project-local config overlay, or `/config`
-editor. `-C` selects the workspace, not the configuration directory. Separate
+There is no public `--config` option or project-local config overlay. `/config`
+opens this file in your editor; after a terminal editor closes, Eirene reloads it,
+or reports a JSON error and keeps the running settings. `-C` selects the workspace, not the configuration directory. Separate
 `EIRENE_HOME` directories give separate saved preferences and histories. They do
 not isolate external CLI logins or OS keyring identities.
 
-Close Eirene before manual edits: its live configuration is held in memory and
-later saves can overwrite a file edited underneath it. Back up `config.json`,
+Outside `/config` with a terminal editor, close Eirene before manual edits: its
+live configuration is held in memory and later saves can overwrite a file edited
+underneath it. Back up `config.json`,
 merge the fields you need, and restart. An example object on this page is a
 fragment to merge unless explicitly identified as a complete default file.
 Replacing the whole file with a fragment discards settings not in that fragment.

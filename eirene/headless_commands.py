@@ -184,7 +184,7 @@ class HeadlessApp:
             elif name == "help":
                 self.say("/providers [configured] — list provider connections\n/models [provider] — list models")
                 self.say("\n".join(f"{c.usage} — {c.summary}" for c in commands.commands(self)))
-            elif name in {"snow", "btw", "clear", "exit", "prompt-suggest", "keybindings"}:
+            elif name in {"snow", "btw", "clear", "exit", "prompt-suggest", "keybindings", "config"}:
                 raise CommandError(f"/{name} is an interactive interface command")
             else:
                 if name in {"compact", "think"}:

@@ -37,6 +37,64 @@ def test_import_preserves_resources_and_loads_namespaced_skill(tmp_path):
         install(str(root))
 
 
+def test_install_copies_skills_into_a_plugin_folder(tmp_path):
+    install(str(repository(tmp_path)))
+    folder = paths.skills_dir() / "ponytail" / "ponytail"
+    assert (folder / "reference.txt").read_text() == "supporting content"
+    found = skills.discover()
+    assert [(s.name, s.group, s.path) for s in found] == [
+        ("ponytail:ponytail", "ponytail", folder / "SKILL.md")]
+    # The bundle keeps its copy for hooks that read it.
+    assert (paths.plugins_dir() / "ponytail/skills/ponytail/SKILL.md").is_file()
+
+
+@pytest.mark.parametrize("name", ["con", "NUL", "com1", "aux.tools", "lpt9", "trailing."])
+def test_names_windows_cannot_create_are_rejected_everywhere(tmp_path, name):
+    root = tmp_path / "bundle"
+    (root / "skills" / "one").mkdir(parents=True)
+    (root / "skills" / "one" / "SKILL.md").write_text("# One")
+    (root / "plugin.json").write_text('{"name": "%s"}' % name)
+    with pytest.raises(ValueError, match="Windows"):
+        install(str(root))
+    assert not paths.plugins_dir().exists() or not any(paths.plugins_dir().iterdir())
+
+
+def test_install_refuses_an_existing_skills_folder(tmp_path):
+    (paths.skills_dir() / "ponytail").mkdir(parents=True)
+    with pytest.raises(ValueError, match="skills folder"):
+        install(str(repository(tmp_path)))
+    assert not (paths.plugins_dir() / "ponytail").exists()
+
+
+def test_user_folders_group_their_skills(tmp_path):
+    group = paths.skills_dir() / "writing"
+    (group / "tone").mkdir(parents=True)
+    (group / "tone" / "SKILL.md").write_text("---\nname: Tone\n---\nBe plain.")
+    (group / "edit.md").write_text("# Edit\nCut words.")
+    (paths.skills_dir() / "solo.md").write_text("# Solo\nAlone.")
+    found = {s.name: s.group for s in skills.discover()}
+    assert found == {"solo": "", "writing:edit": "writing", "writing:tone": "writing"}
+
+
+def test_existing_installs_move_their_skills_into_a_folder(tmp_path):
+    import json
+    from eirene.core.plugin_install import export_installed_skills
+    install(str(repository(tmp_path)))
+    # Simulate an install made before skill folders existed.
+    import shutil
+    shutil.rmtree(paths.skills_dir() / "ponytail")
+    manifest = paths.plugins_dir() / "ponytail" / ".eirene-plugin.json"
+    body = json.loads(manifest.read_text())
+    body.pop("skills_exported")
+    manifest.write_text(json.dumps(body))
+    assert [s.path.is_relative_to(paths.plugins_dir()) for s in skills.discover()] == [True]
+    assert export_installed_skills() == ["ponytail"]
+    assert export_installed_skills() == []
+    assert [s.group for s in skills.discover()] == ["ponytail"]
+    assert skills.discover()[0].path.is_relative_to(paths.skills_dir())
+    assert json.loads(manifest.read_text())["skills_exported"] is True
+
+
 def test_plugin_toggle_disables_its_skills(tmp_path):
     install(str(repository(tmp_path)))
     config = Config.load()
@@ -71,6 +129,8 @@ def test_github_download_uses_fixed_https_url(tmp_path, monkeypatch):
         import shutil
         from types import SimpleNamespace
         assert argv[-2] == "https://github.com/DietrichGebert/ponytail.git"
+        # Git for Windows must not rewrite hook scripts to CRLF.
+        assert argv[argv.index("core.autocrlf=false") - 1] == "-c"
         shutil.copytree(root, argv[-1])
         return SimpleNamespace(returncode=0)
 

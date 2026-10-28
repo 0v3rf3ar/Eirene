@@ -358,6 +358,20 @@ def test_root_manifest_is_preserved_for_refresh(tmp_path, config):
     assert normalize(installed, 'universal')['lifecycle']['SessionStart'][0]['command'] == 'echo hello'
 
 
+def test_manifest_hooks_may_list_several_files(tmp_path):
+    root = tmp_path / 'listed'
+    (root / 'hooks').mkdir(parents=True)
+    (root / 'hooks/a.json').write_text(json.dumps({'hooks': {'SessionStart': [
+        {'hooks': [{'type': 'command', 'command': 'echo start'}]}]}}))
+    (root / 'hooks/b.json').write_text(json.dumps({'hooks': {'UserPromptSubmit': [
+        {'hooks': [{'type': 'command', 'command': 'echo prompt'}]}]}}))
+    (root / 'plugin.json').write_text(json.dumps({'name': 'listed', 'hooks': ['./hooks/a.json', './hooks/b.json']}))
+    from eirene.core.plugin_manifest import normalize
+    lifecycle = normalize(root, 'listed')['lifecycle']
+    assert lifecycle['SessionStart'][0]['command'] == 'echo start'
+    assert lifecycle['UserPromptSubmit'][0]['command'] == 'echo prompt'
+
+
 @pytest.mark.parametrize('manifest', ['.agent-plugin/plugin.json', '.github/plugin/plugin.json', 'plugin.json'])
 def test_portable_manifest_and_root_mcp_file(tmp_path, config, manifest):
     root = tmp_path / 'portable'
@@ -374,3 +388,58 @@ def test_portable_manifest_and_root_mcp_file(tmp_path, config, manifest):
     assert plugins.merged_mcp_servers(config) == {}
     config.set('mcp_enabled', {'portable__browser': True})
     assert 'portable__browser' in plugins.merged_mcp_servers(config)
+
+
+@pytest.mark.parametrize("system", ["nt", "posix"])
+async def test_hooks_use_cmd_on_windows_and_node_runs_without_a_shell(tmp_path, config, box, monkeypatch, system):
+    root = bundle(tmp_path, 'ponytail')
+    (root / 'hooks/hooks.json').write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [
+        {"type": "command", "command": '"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd" session-start'}]}]}}))
+    (root / 'hooks/ponytail-instructions.js').write_text('// fixture: rule generator')
+    install(str(root))
+    config.set('plugin_trust', {'ponytail': True})
+    calls = []
+    async def run(command, cwd, **kwargs):
+        calls.append((command, kwargs))
+        if kwargs.get('argv'):
+            return SimpleNamespace(ok=True, output='Rules for full')
+        (Path(kwargs['env']['PLUGIN_DATA']) / '.ponytail-active').write_text('full')
+        return SimpleNamespace(ok=True, output='')
+    monkeypatch.setattr('eirene.core.plugin_runtime.shell.run', run)
+    monkeypatch.setattr('eirene.core.plugin_runtime.shell.IS_WINDOWS', system == "nt")
+    await PluginRuntime('windows-hooks').submit('build', box, config)
+    (hook, hook_args), (_, rules_args) = calls
+    if system == "nt":
+        # PowerShell, Windows' default shell, expands neither %VAR% nor a quoted .cmd call.
+        assert hook == '"%CLAUDE_PLUGIN_ROOT%/hooks/run-hook.cmd" session-start'
+        assert hook_args['shell_name'] == 'cmd'
+    else:
+        assert hook.startswith('"${CLAUDE_PLUGIN_ROOT}') and hook_args['shell_name'] == 'auto'
+    assert rules_args['argv'][1:2] == ['-e'] and 'node' in rules_args['argv'][0]
+
+
+async def test_windows_sandbox_refuses_mcp_with_a_clear_reason(monkeypatch, box):
+    from eirene.core.mcp import MCPManager
+    monkeypatch.setattr('eirene.core.mcp.WINDOWS', True)
+    manager = MCPManager({"docs": {"command": ["node", "server.js"], "_isolation": "auto"}}, box.root)
+    try:
+        await manager.ensure()
+        assert any("Windows sandbox" in error and "full-access" in error for error in manager.errors)
+        assert not any("Bubblewrap" in error for error in manager.errors)
+    finally:
+        await manager.close()
+
+
+def test_hooks_can_reach_interpreters_outside_system_folders(tmp_path, monkeypatch):
+    from eirene.core.plugin_runtime import tool_dirs
+    home_node = tmp_path / ".nvm/versions/node/v22/bin"
+    home_node.mkdir(parents=True)
+    (home_node / "node").write_text("")
+    monkeypatch.setattr('eirene.core.plugin_runtime.shell.IS_WINDOWS', False)
+    monkeypatch.setattr('eirene.core.plugin_runtime.shutil.which',
+                        lambda name: str(home_node / name) if name == "node" else
+                        ("/usr/bin/" + name if name == "bash" else None))
+    assert tool_dirs('node -e "require(1)"') == [str(home_node.resolve())]
+    assert tool_dirs("bash hooks/start") == []          # Already visible in the sandbox.
+    assert tool_dirs('"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd" x') == []  # A bundle path.
+    assert tool_dirs('node "unterminated') == []

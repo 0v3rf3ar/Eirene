@@ -7,6 +7,7 @@ import random
 
 from rich.cells import cell_len
 from ..core.text import terminal_icon
+from .shortcuts import COPY_LABEL
 
 BANNERS = [
     r"""
@@ -112,7 +113,7 @@ VERBS = [
 TIPS = [
     "Press shift + tab to change mode (manual, auto, or plan).",
     "Use /btw for a quick side question without changing the main conversation.",
-    "Select input or transcript text to copy it automatically; the character count appears for two seconds.",
+    f"Select input or transcript text, then press {COPY_LABEL} to copy it.",
     "Click the running-command bar to inspect or stop active commands.",
     "Use /review for a read-only review of the current working-tree changes.",
     "Use /sessions to search, resume, export, or import earlier conversations.",

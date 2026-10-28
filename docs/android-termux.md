@@ -55,6 +55,15 @@ isolate an approved command from the rest of your Termux environment. Explicit
 full-access settings can relax Eirene's approval behavior; see
 [modes and permissions](harness.md).
 
+Plugins work the same way. Installing a plugin never runs its code. A plugin's
+hooks run only after `/plugins trust NAME`, and its MCP servers only after you
+enable each one in `/mcp`. On Android those explicit choices take the place of a
+sandbox: trusted hooks and enabled MCP servers run with your Termux account's
+access, and the trust prompt, `/plugins doctor`, and `/mcp` say so. Plugins need
+their own tools from Termux packages, such as `git` to install, `node` for
+Ponytail and Playwright, and `uv` for Serena. Browser automation additionally
+needs a browser that runs in your Android environment.
+
 Desktop scheduling is unsupported. Browser automation, notifications, clipboard
 integration, and other desktop features depend on software and integrations
 available in your Android environment.

@@ -41,7 +41,8 @@ A command that runs longer than the brief foreground allowance can continue in
 the background without restarting. Builds and tests may start there immediately.
 The background line appears below the model name while work is active.
 
-Press Ctrl+B or select that line to view output, see state, or stop a command.
+Press Ctrl+B or select that line, then choose a command to view its output and
+state. Press S in that view to stop it; the view stays open on the final output.
 When only background commands remain, Eirene shows a static idle status and waits
 locally without sending API requests. A completion or timeout wakes the model with
 the process output and exit code; new user input can also interrupt the wait. Silence

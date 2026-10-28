@@ -56,12 +56,14 @@ class ProcessBar(Static):
             )
             labels.append(f"{command} {elapsed:.0f}s{deadline}")
         extra = f" · +{len(rows) - 2} more" if len(rows) > 2 else ""
+        # Indented and dim like the mode and subagent lines above it.
         self.update(
             Text(
-                f"● {len(rows)} background · "
+                f"  ● {len(rows)} background · "
                 + " · ".join(labels)
                 + extra
                 + " · view/stop",
+                style="dim",
                 overflow="ellipsis",
                 no_wrap=True,
             )
@@ -78,10 +80,7 @@ class ProcessBar(Static):
         rows = self._rows()
         options = []
         for label, value in rows:
-            options += [
-                (f"view:{value}", label, "View output"),
-                (f"stop:{value}", label, "Stop command"),
-            ]
+            options.append((f"view:{value}", label, "View output · S stops it"))
         options += [
             (f"provider:{value}", label, "Stop provider command")
             for label, value in activity.provider_commands()
@@ -102,8 +101,6 @@ class ProcessBar(Static):
                 self.app.say(await activity.stop_provider_command(value))
             elif action == "foreground":
                 self.app.say(await shell.stop_active(value))
-            elif action == "stop":
-                self.app.say(await processes.stop(value))
             else:
                 from .output import OutputScreen
 
@@ -120,6 +117,9 @@ class ProcessOutput:
     @property
     def label(self):
         return self.item.command
+
+    async def stop(self):
+        return await processes.stop(self.item.id)
 
     @property
     def artifact_id(self):

@@ -236,6 +236,36 @@ async def test_slash_opens_the_command_menu(workdir):
         await context.__aexit__(None, None, None)
 
 
+async def test_a_complete_slash_command_turns_bold(workdir):
+    app, pilot, context = await start(workdir)
+
+    def bold():
+        line = app.prompt.get_line(0)
+        return [line.plain[span.start:span.end] for span in line.spans
+                if "bold" in str(span.style)]
+
+    try:
+        for key in ("slash", "s", "k", "i", "l", "l"):
+            await pilot.press(key)
+        await settle(pilot)
+        assert bold() == []
+        await pilot.press("s")
+        await settle(pilot)
+        assert bold() == ["/skills"]
+        for key in ("space", "x"):
+            await pilot.press(key)
+        await settle(pilot)
+        assert bold() == ["/skills"]
+        app.prompt.value = "/skillsx"
+        await settle(pilot)
+        assert bold() == []
+        app.prompt.value = "use /skills"
+        await settle(pilot)
+        assert bold() == []
+    finally:
+        await context.__aexit__(None, None, None)
+
+
 async def test_slash_menu_is_alphabetical(workdir):
     app, pilot, context = await start(workdir)
     try:
@@ -768,7 +798,7 @@ async def test_arrows_navigate_visual_wraps_before_history(workdir, draft):
         await context.__aexit__(None, None, None)
 
 
-@pytest.mark.parametrize("shortcut", ["ctrl+c", "ctrl+shift+c", "right-click"])
+@pytest.mark.parametrize("shortcut", ["ctrl+shift+c", "ctrl+c"])
 async def test_copy_prompt_selection(workdir, monkeypatch, shortcut):
     from textual.document._document import Selection
 
@@ -781,10 +811,7 @@ async def test_copy_prompt_selection(workdir, monkeypatch, shortcut):
         await settle(pilot)
         selection = Selection((0, 6), (1, 6))
         app.prompt.selection = selection
-        if shortcut == "right-click":
-            await pilot.click("#prompt", button=3)
-        else:
-            await pilot.press(shortcut)
+        await pilot.press(shortcut)
         await pilot.pause()
         assert app.clipboard == "line\nsecond"
         assert copied and all(text == "line\nsecond" for text in copied)
@@ -837,7 +864,25 @@ async def test_deleting_next_to_folded_paste_preserves_it(workdir):
         await context.__aexit__(None, None, None)
 
 
-async def test_keyboard_selection_automatically_copies_prompt(workdir, monkeypatch):
+async def test_other_copy_keys_do_nothing(workdir, monkeypatch):
+    from textual.document._document import Selection
+
+    copied = []
+    monkeypatch.setattr("eirene.app.copy_to_system", lambda text: copied.append(text) or "test")
+    app, pilot, context = await start(workdir)
+    try:
+        app.prompt.value = "copy this text"
+        app.prompt.selection = Selection((0, 0), (0, 4))
+        await pilot.press("super+c")
+        await pilot.pause()
+        assert copied == []
+        assert app.clipboard != "copy"
+        assert app.prompt.text == "copy this text"
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_selecting_prompt_text_does_not_copy(workdir, monkeypatch):
     copied = []
     monkeypatch.setattr("eirene.app.copy_to_system", lambda text: copied.append(text) or "test")
     app, pilot, context = await start(workdir)
@@ -846,25 +891,7 @@ async def test_keyboard_selection_automatically_copies_prompt(workdir, monkeypat
         app.prompt.move_cursor((0, 0))
         await pilot.press("shift+right", "shift+right", "shift+right", "shift+right")
         await pilot.pause(0.25)
-        assert app.clipboard == "copy"
-        assert copied[-1] == "copy"
-        assert app.prompt.selected_text == "copy"
-        assert app.prompt.text == "copy this text"
-    finally:
-        await context.__aexit__(None, None, None)
-
-
-async def test_secret_prompt_selection_does_not_automatically_copy(workdir, monkeypatch):
-    from textual.document._document import Selection
-
-    copied = []
-    monkeypatch.setattr("eirene.app.copy_to_system", lambda text: copied.append(text) or "test")
-    app, pilot, context = await start(workdir)
-    try:
-        app.prompt.secret = True
-        app.prompt.value = "secret-key"
-        app.prompt.selection = Selection((0, 0), (0, 10))
-        await pilot.pause(0.25)
         assert copied == []
+        assert app.prompt.selected_text == "copy"
     finally:
         await context.__aexit__(None, None, None)

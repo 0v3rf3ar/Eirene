@@ -59,3 +59,22 @@ def test_override_does_not_migrate_default_data(user_home, monkeypatch):
     assert paths.sessions_dir().is_dir()
     assert legacy.is_dir()
     assert not (user_home / ".local/share/eirene").exists()
+
+
+def test_session_temp_is_private_and_used_by_children(tmp_path):
+    import os
+    import tempfile
+    temp = paths.use_session_temp(Path("/work/my app"), "abc")
+    assert temp == paths.temp_root() / "-work-my-app" / "abc"
+    assert paths.temp_root().parent == Path(paths._SYSTEM_TEMP).resolve()
+    assert os.environ["TMPDIR"] == os.environ["TEMP"] == str(temp)
+    assert tempfile.gettempdir() == str(temp)
+    if os.name != "nt":
+        assert paths.temp_root().name == f"eirene-{os.getuid()}"
+        assert temp.stat().st_mode & 0o777 == 0o700
+
+
+def test_file_tools_may_use_the_session_temp(workdir):
+    from eirene.tools.sandbox import Sandbox
+    temp = paths.use_session_temp(workdir, "abc")
+    assert Sandbox(workdir).contains(temp / "notes.txt")

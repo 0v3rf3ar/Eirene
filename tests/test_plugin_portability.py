@@ -133,10 +133,18 @@ async def test_specialists_use_fresh_contexts_same_provider_and_model(tmp_path, 
     parent.use(Provider(), "custom-openai", "my-local-model")
     parent.session.add_user("Private conversation that must not leak to reviewers")
     result = json.loads(await run_tasks(parent, [
-        {"agent": "feature-dev:code-explorer", "prompt": "Find startup"},
-        {"prompt": "Review error handling"},
+        {"name": "startup-tracer", "agent": "feature-dev:code-explorer", "prompt": "Find startup"},
+        {"name": "error-reviewer", "prompt": "Review error handling"},
     ]))
     assert all(r["status"] == "completed" for r in result)
+    assert [r["agent"] for r in result] == ["startup-tracer", "error-reviewer"]
+    assert [r["profile"] for r in result] == ["feature-dev:code-explorer", ""]
+    # The parent session tracks its subagents for the status line, live and on resume.
+    live = [(row["name"], row["status"]) for row in parent.session.subagents.values()]
+    assert live == [("startup-tracer", "completed"), ("error-reviewer", "completed")]
+    resumed = Session.resume(parent.session.id)
+    assert [(row["name"], row["status"]) for row in resumed.subagents.values()] == live
+    resumed.close()
     from eirene.commands.subagents import session_tree
     tree = session_tree(parent.session, box.root)
     assert {node["id"] for node, depth in tree if depth == 1} == {r["session_id"] for r in result}
@@ -170,7 +178,7 @@ async def test_readonly_specialist_cannot_write_even_with_parent_full_access(tmp
     monkeypatch.setattr("eirene.providers.registry.build", lambda *a: Provider())
     parent = Agent(Session.create(box.root), config, box)
     parent.use(Provider(), "custom-openai", "model")
-    result = json.loads(await run_tasks(parent, [{"prompt": "Attempt an unauthorized write"}]))
+    result = json.loads(await run_tasks(parent, [{"name": "writer", "prompt": "Attempt an unauthorized write"}]))
     assert "blocked" in result[0]["report"]
     assert not (box.root / "forbidden.txt").exists()
     await parent.close()
@@ -190,7 +198,7 @@ async def test_delegation_cancellation_closes_every_provider(config, box, monkey
     monkeypatch.setattr("eirene.providers.registry.build", lambda *a: Provider())
     parent = Agent(Session.create(box.root), config, box)
     parent.use(Provider(), "custom-openai", "model")
-    pending = asyncio.create_task(run_tasks(parent, [{"prompt": "one"}, {"prompt": "two"}]))
+    pending = asyncio.create_task(run_tasks(parent, [{"name": "one", "prompt": "one"}, {"name": "two", "prompt": "two"}]))
     async with asyncio.timeout(5):
         while len(started) < 2:
             await asyncio.sleep(.01)
@@ -198,18 +206,38 @@ async def test_delegation_cancellation_closes_every_provider(config, box, monkey
     with pytest.raises(asyncio.CancelledError):
         await pending
     assert set(closed) == set(started)
+    assert {row["status"] for row in parent.session.subagents.values()} == {"interrupted"}
     await parent.close()
 
 
 def test_disabled_and_ambiguous_profiles_are_rejected_before_launch(tmp_path, config):
     install(str(bundle(tmp_path)))
     with pytest.raises(ToolError, match="namespaced"):
-        validate_tasks([{"agent": "code-explorer", "prompt": "review"}], config)
+        validate_tasks([{"name": "a", "agent": "code-explorer", "prompt": "review"}], config)
     config.set_plugin("feature-dev", False)
     with pytest.raises(ToolError, match="disabled"):
-        validate_tasks([{"agent": "feature-dev:code-explorer", "prompt": "review"}], config)
+        validate_tasks([{"name": "a", "agent": "feature-dev:code-explorer", "prompt": "review"}], config)
     with pytest.raises(ToolError, match="boolean"):
-        validate_tasks([{"prompt": "review", "read_only": "false"}], config)
+        validate_tasks([{"name": "a", "prompt": "review", "read_only": "false"}], config)
+    with pytest.raises(ToolError, match="needs a name"):
+        validate_tasks([{"prompt": "review"}], config)
+    with pytest.raises(ToolError, match="unique"):
+        validate_tasks([{"name": "Reviewer", "prompt": "a"}, {"name": "reviewer", "prompt": "b"}], config)
+
+
+def test_subagent_line_shows_only_the_count():
+    from eirene.ui.composer import describe_subagents
+    row = dict(name="historian", status="running", activity="web_fetch", tools=3,
+               started=100.0, seconds=0.0)
+    done = dict(row, status="completed")
+    assert describe_subagents({str(i): done for i in range(4)}).plain == "  ◆ 4 subagents"
+    assert describe_subagents({"a": done}).plain == "  ◆ 1 subagent"
+    # The diamond turns while any of them is still working, and rests once all are done.
+    turning = [describe_subagents({"a": row, "b": done}, tick).plain for tick in range(4)]
+    assert turning == ["  ◇ 2 subagents", "  ◈ 2 subagents", "  ◆ 2 subagents", "  ◈ 2 subagents"]
+    assert describe_subagents({"a": done}, 0).plain == "  ◆ 1 subagent"
+    assert describe_subagents({"a": row}).plain == "  ◆ 1 subagent"  # reduce_motion
+    assert "dim" in str(describe_subagents({"a": done}).style)
 
 
 async def test_agent_list_respects_activation_without_changing_mode(tmp_path, config):
@@ -225,3 +253,41 @@ async def test_agent_list_respects_activation_without_changing_mode(tmp_path, co
     config.set_plugin("feature-dev", False)
     await dispatch(app, "/agents list")
     assert "no enabled plugin specialists" in messages[-1][0]
+
+
+async def test_parallel_subagents_share_dont_ask_again(tmp_path, config, box, monkeypatch):
+    from eirene.providers.base import ToolCall
+    outside = tmp_path / "notes"
+    outside.mkdir()
+    (outside / "facts.txt").write_text("shared facts")
+    config.set("mode", "auto")
+    config.set("execution_isolation", "none")
+    class Provider:
+        supports_tools = True
+        async def stream(self, messages, model, **kwargs):
+            if messages[-1]["role"] == "user":
+                yield ToolCall("read", "read_file", {"path": str(outside / "facts.txt")})
+                yield Done("tool_calls")
+            else:
+                yield TextDelta(messages[-1]["content"])
+                yield Done("stop")
+        async def close(self):
+            pass
+    monkeypatch.setattr("eirene.providers.registry.build", lambda *a: Provider())
+    parent = Agent(Session.create(box.root), config, box)
+    parent.use(Provider(), "custom-openai", "model")
+    asked = []
+    async def approve(name, *args):
+        asked.append(name)
+        await asyncio.sleep(0.05)  # Both subagents reach the dialog before it is answered.
+        return "always"
+    parent.approve = approve
+    result = json.loads(await run_tasks(parent, [
+        {"name": "first-reader", "prompt": "read the notes"},
+        {"name": "second-reader", "prompt": "read the notes"},
+    ]))
+    assert [r["status"] for r in result] == ["completed", "completed"]
+    assert all("shared facts" in r["report"] for r in result)
+    assert asked == ["read_file"]
+    assert "read_file" in parent.always
+    await parent.close()

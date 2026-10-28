@@ -203,12 +203,15 @@ class AsidePanel(DraggableWindow):
         self.refresh_body()
 
     def show_toggle(self, content: Text, enabled: bool, callback) -> None:
+        toggle = self.query_one("#aside-toggle", TextToggle)
         if self.open and self._toggle_callback == callback:
             self._content = content
             self.refresh_body()
         else:
             self.show_content(content)
-        self.query_one("#aside-toggle", TextToggle).value = enabled
+            # Left/Right switch it right away; Escape returns to the prompt.
+            self.call_after_refresh(toggle.focus)
+        toggle.value = enabled
         self._toggle_callback = callback
         self.query_one("#aside-toggle-row").display = True
         self.call_after_refresh(self._place)
