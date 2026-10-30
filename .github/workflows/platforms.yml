@@ -82,7 +82,7 @@ jobs:
             target: linux-amd64
           - runner: ubuntu-22.04-arm
             target: linux-arm64
-          - runner: macos-14
+          - runner: macos-15
             target: macos-silicon
           - runner: windows-2022
             target: windows-amd64
