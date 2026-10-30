@@ -251,3 +251,20 @@ async def test_sandboxed_script_imports_its_package_but_not_home(backend, home, 
         result = await shell.run(f"cat {shlex.quote(str(secret))}", workdir, isolation=backend,
                                  isolate_network=True, read_paths=definition["read_paths"])
         assert not result.ok, result.output
+
+
+def test_interpreter_outside_usr_gets_its_library_folder(home, tmp_path, monkeypatch):
+    """setup-python, pyenv and uv keep libpython and the stdlib in lib/ beside bin/."""
+    prefix = tmp_path / "toolcache" / "Python" / "3.14.9" / "x64"
+    (prefix / "bin").mkdir(parents=True)
+    (prefix / "lib" / "python3.14").mkdir(parents=True)
+    (prefix / "include").mkdir()
+    interpreter = prefix / "bin" / "python3"
+    interpreter.write_text("", encoding="utf-8")
+    monkeypatch.setattr("eirene.core.mcp_config.shutil.which", lambda name: str(interpreter))
+    project = package_project(home / "Desktop" / "mcp", "pyproject.toml")
+    definition = prepare_local("tool", {"command": ["python3", str(project / "scripts" / "server.py")]})
+    reads = set(definition["read_paths"])
+    assert str(prefix / "lib") in reads and str(prefix / "bin") in reads
+    assert str(prefix) not in reads and str(prefix / "include") not in reads
+    assert not any(str(home) == item for item in reads)

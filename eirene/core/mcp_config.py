@@ -325,6 +325,10 @@ def prepare_local(name: str, definition: dict, base: Path | None = None) -> dict
         else:
             # A binary loose in the home folder gets itself, not its neighbours.
             derived.append(str(executable.parent if _safe_grant(executable.parent) else executable))
+            # Interpreters outside /usr (setup-python, pyenv, asdf, uv) load libpython and
+            # their standard library from lib/ beside bin/; grant that folder, not the prefix.
+            if executable.parent.name == 'bin' and (executable.parent.parent / 'lib').is_dir():
+                derived.append(str(executable.parent.parent / 'lib'))
     node = shutil.which('node') if Path(found).name in ('npx', 'npx.cmd', 'npm') else None
     if node and not str(Path(node).resolve()).startswith('/usr/'):
         derived.append(str(Path(node).resolve().parent))

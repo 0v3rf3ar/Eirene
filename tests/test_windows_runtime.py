@@ -38,11 +38,53 @@ def test_toolchains_grant_install_roots_but_never_broad_or_private_folders(tmp_p
     monkeypatch.setenv("SystemRoot", str(system))
     for key in ("ProgramFiles", "ProgramFiles(x86)"):
         monkeypatch.delenv(key, raising=False)
+    machine = tmp_path / "Android" / "sdk" / "platform-tools"
+    machine.mkdir(parents=True)
     monkeypatch.setenv("PATH", os.pathsep.join(map(str, [
         python / "Scripts", python, cargo / "bin", uv_bin, system / "System32",
-        home, local / "Programs", home / ".local" / "share", tmp_path / "missing"])))
+        home, local / "Programs", home / ".local" / "share", tmp_path / "missing", machine])))
     found = set(runtime._toolchains(str(system / "System32" / "cmd.exe")))
     assert found == {python.resolve(), cargo.resolve(), rustup.resolve(), uv_bin.resolve(), uv_python.resolve()}
+
+
+def test_toolchain_grants_run_in_the_background_and_are_recorded_once_done(tmp_path, monkeypatch):
+    import threading
+    release, calls = threading.Event(), []
+    def icacls(path, *arguments):
+        calls.append(path)
+        release.wait(5)
+        if path.name == "broken":
+            raise runtime.ToolError("denied")
+    monkeypatch.setattr(runtime, "_icacls", icacls)
+    folders = [tmp_path / "python", tmp_path / "broken"]
+    runtime._grant_toolchains("S-1-15-3-1024-9", folders)
+    # The command does not wait for propagation through the toolchain.
+    assert runtime._granted_toolchains() == {}
+    runtime._grant_toolchains("S-1-15-3-1024-9", folders)  # already in progress: not repeated
+    release.set()
+    for _ in range(100):
+        if not runtime._toolchain_busy:
+            break
+        threading.Event().wait(0.02)
+    assert calls == folders
+    assert runtime._granted_toolchains() == {"S-1-15-3-1024-9": [str(folders[0]).casefold()]}
+    calls.clear()
+    runtime._grant_toolchains("S-1-15-3-1024-9", folders)
+    for _ in range(100):
+        if not runtime._toolchain_busy:
+            break
+        threading.Event().wait(0.02)
+    assert calls == [folders[1]], "only the failed folder is retried"
+
+
+def test_a_launcher_loose_in_the_profile_never_grants_the_profile(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".local" / "share" / "eirene").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(paths, "home", lambda: home / ".local" / "share" / "eirene")
+    assert not runtime._narrow(home) and not runtime._narrow(home.parent)
+    assert not runtime._narrow(home / ".local") and not runtime._narrow(home / ".local" / "share" / "eirene")
+    assert runtime._narrow(home / "tools" / "node")
 
 
 def test_python_shim_is_valid_and_inert_outside_the_sandbox(monkeypatch):

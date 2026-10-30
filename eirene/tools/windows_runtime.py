@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import ctypes as C
 import hashlib
+import json
 import os
 import shutil
 import struct
@@ -285,11 +286,13 @@ def _profile_name(root, read_only, network):
 
 
 def _toolchains(executable):
-    """User-installed runtimes on PATH, which the AppContainer could not otherwise load.
+    """Per-user runtimes on PATH, which the AppContainer could not otherwise load.
 
-    Windows and Program Files already admit AppContainers. Broad profile folders and
-    anything holding Eirene's own data are never granted; launcher folders such as
-    Scripts or cmd bring their install root, and a few launchers their real store.
+    Windows and Program Files already admit AppContainers. Only folders inside the
+    user's profile qualify: machine-wide trees such as SDKs or package caches can hold
+    hundreds of thousands of files. Broad profile folders and anything holding Eirene's
+    own data are never granted; launcher folders such as Scripts or cmd bring their
+    install root, and a few launchers their real store.
     """
     home = Path.home().resolve()
     local = Path(os.environ.get("LOCALAPPDATA") or home / "AppData" / "Local").resolve()
@@ -314,9 +317,64 @@ def _toolchains(executable):
                     and not str(candidate).startswith("\\\\")
                     and not any(candidate in folder.parents for folder in broad)
                     and not any(candidate == folder or folder in candidate.parents for folder in system)
-                    and not (candidate == private or candidate in private.parents)):
+                    and not (candidate == private or candidate in private.parents)
+                    and home in candidate.parents):
                 found.append(candidate)
     return list(dict.fromkeys(found))
+
+
+def _narrow(folder):
+    """Never the profile, a folder above it, or anything holding Eirene's own data."""
+    home, private = Path.home().resolve(), paths.home().resolve()
+    return (folder != Path(folder.anchor) and folder != home and folder not in home.parents
+            and folder != private and folder not in private.parents)
+
+
+_toolchain_lock = threading.Lock()
+_toolchain_busy = set()
+
+
+def _toolchain_record():
+    return paths.home() / "windows-sandbox" / "toolchains.json"
+
+
+def _granted_toolchains():
+    try:
+        data = json.loads(_toolchain_record().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _grant_toolchains(sid, folders):
+    """Grant per-user runtimes in the background: a first grant propagates through every
+    file of a toolchain and must never hold up a command. A folder is recorded only once
+    its grant completed, so one interrupted by exit is granted again next time."""
+    with _toolchain_lock:
+        done = set(_granted_toolchains().get(sid, []))
+        pending = [folder for folder in folders
+                   if str(folder).casefold() not in done | _toolchain_busy]
+        _toolchain_busy.update(str(folder).casefold() for folder in pending)
+    if pending:
+        threading.Thread(target=_grant_toolchains_now, args=(sid, pending), daemon=True).start()
+
+
+def _grant_toolchains_now(sid, folders):
+    for folder in folders:
+        key = str(folder).casefold()
+        try:
+            _icacls(folder, "/grant", f"*{sid}:(OI)(CI)RX")
+        except ToolError:
+            continue  # Retried on a later command.
+        finally:
+            with _toolchain_lock:
+                _toolchain_busy.discard(key)
+        with _toolchain_lock:
+            data = _granted_toolchains()
+            data[sid] = sorted({*data.get(sid, []), key})
+            record = _toolchain_record()
+            record.parent.mkdir(parents=True, exist_ok=True)
+            record.write_text(json.dumps(data), encoding="utf-8")
 
 
 class _Executables:
@@ -691,8 +749,16 @@ async def start(argv, root, cwd, *, network=False, read_paths=(), write_paths=()
             owner.persist_volume_root(root, toolchains)
             if network:
                 owner.persist_loopback(sid)
-            for folder in _toolchains(executable):
-                owner.persist(folder, toolchains, "(OI)(CI)RX")
+            # A program launched directly must work now: grant its own install folder.
+            runtime = Path(executable).resolve().parent
+            if runtime.name.casefold() in {"bin", "scripts"}:
+                runtime = runtime.parent
+            system = [Path(os.environ[key]).resolve() for key in ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)")
+                      if os.environ.get(key)]
+            if (not any(runtime == folder or folder in runtime.parents for folder in [root, *reads, *writes, *system])
+                    and _narrow(runtime)):
+                owner.persist(_specific(runtime), toolchains, "(OI)(CI)RX")
+        _grant_toolchains(toolchains, _toolchains(executable))
         for path, writable in [*((p, False) for p in reads), *((p, True) for p in writes)]:
             owner.grant(path, extra, writable)
         if not read_only:
