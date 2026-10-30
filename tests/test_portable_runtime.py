@@ -3,6 +3,7 @@ import asyncio
 import base64
 import json
 import importlib.util
+import os
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -41,7 +42,7 @@ async def test_windows_powershell_preserves_unicode_and_reports_errors(workdir, 
     args = spawn.call_args.args
     assert args[0] == "pwsh.exe" and "-NonInteractive" in args
     script = base64.b64decode(args[-1]).decode("utf-16-le")
-    assert "سلام" in script and "$ErrorActionPreference='Stop'" in script
+    assert "سلام" in script and "$PSDefaultParameterValues['*:ErrorAction']='Stop'" in script
     assert "exit $LASTEXITCODE" in script
 
 
@@ -50,11 +51,21 @@ async def test_windows_cmd_selects_system_processor(workdir, monkeypatch):
     monkeypatch.setattr(shell, "_spawn_kwargs", lambda: {})
     monkeypatch.setattr(shell, "own_windows", lambda process: None)
     monkeypatch.setenv("COMSPEC", "custom-cmd.exe")
-    spawn = AsyncMock()
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
-    await shell._start('echo "a b"', workdir, None, False, shell_name='cmd')
-    assert spawn.call_args.args[:4] == ("custom-cmd.exe", "/d", "/s", "/c")
-    assert spawn.call_args.args[-1].endswith('echo "a b"')
+    spawn, exec_spawn = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", spawn)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", exec_spawn)
+    await shell._start('"C:\\Program Files\\x.exe" "a b"', workdir, None, False, shell_name='cmd')
+    # The shell form hands cmd the line verbatim; exec-style quoting would emit \".
+    assert not exec_spawn.called
+    assert spawn.call_args.args[0] == 'chcp 65001 >nul & "C:\\Program Files\\x.exe" "a b"'
+
+
+def test_sandboxed_cmd_receives_its_line_verbatim():
+    from eirene.tools.windows_appcontainer import _command_line
+    root = "C:\\" if os.name == "nt" else "/"
+    line = _command_line([root + "cmd.exe", "/d", "/s", "/c", 'echo "a b" & "C:\\P Q\\x.exe"'])
+    assert line == root + 'cmd.exe /d /s /c "echo "a b" & "C:\\P Q\\x.exe""'
+    assert _command_line([root + "tool.exe", 'a "b"']) == root + 'tool.exe "a \\"b\\""'
 
 
 async def test_missing_powershell_is_actionable(workdir, monkeypatch):

@@ -9,63 +9,99 @@ External providers such as Claude Code manage their own execution boundaries.
 
 ## Kernel boundary and workspace grants
 
-Each command gets a unique AppContainer profile. Before the primary thread runs,
-Eirene verifies that the actual kernel token is an AppContainer, matches the
-profile SID, and has zero capabilities. The suspended process is assigned to a
-kill-on-close Job before it resumes. Normal children inherit the restrictions.
-There is no unsandboxed retry when setup fails.
+Each workspace has its own persistent AppContainer profile, with separate profiles
+for read-only execution and for commands with approved network access. Before a
+command's primary thread runs, Eirene verifies that the actual kernel token is an
+AppContainer, matches the profile SID, and carries exactly the requested
+capabilities. The suspended process is assigned to a kill-on-close Job before it
+resumes. Normal children inherit the restrictions. There is no unsandboxed retry
+when setup fails.
 
-The runtime grants the package SID read/execute or Modify access through Windows
-ACLs. Modify does not grant permission to change existing host ACLs or ownership.
-The workspace is writable for ordinary commands and read-only for read-only
-execution. Additional grants must name existing, specific local paths. Missing
-permissions, protected ACLs and inaccessible runtimes fail closed. Windows and
-Program Files runtimes use existing OS permissions; a caller-owned runtime outside
-the workspace may receive an additional read/execute grant.
+The first command in a workspace grants its profile SID Modify (read/execute for
+read-only execution) on the workspace through an inheritable ACL entry. Windows
+propagates that entry once; files created later inherit it, so later commands
+start without touching ACLs. Grants persist with the profile and only that
+profile's processes can use them. Modify does not grant permission to change
+existing ACLs or ownership. Inheritance does not follow junctions or symlinks:
+the link object receives the entry, its target does not, and access through a
+link is checked against the target's own ACL. Workspaces may therefore contain
+reparse points, including a user profile folder used as the workspace. Files with
+protected ACLs, such as those Python creates with `os.mkdir(path, 0o700)`, keep
+their own access rules (see below).
 
-Grant operations and command execution are serialized per user/session with a
-named semaphore. This prevents another Eirene sandbox from modifying the workspace
-while grants are being prepared. A concurrent launch fails with an instruction to
-poll or stop the current command. Trees containing symlinks/junctions or other
-reparse points, filesystem roots, and network-share grants are rejected.
+Folders above the workspace receive read-attributes only, without inheritance and
+without listing, so tools such as Git can stat their way to the workspace.
+Folders the user cannot re-ACL, such as `C:\Users`, are skipped. When Eirene runs
+elevated it also grants the drive root read-attributes and top-level listing,
+which `dir`, `vol` and PowerShell's provider need; otherwise PowerShell starts in
+a `Workspace:\` drive mapped to the working directory. On non-interactive window
+stations, such as SSH sessions, the profile receives limited window station and
+desktop rights (no clipboard, screen reading, hooks or journaling) so that
+PowerShell and other `user32` programs can start.
 
-Cleanup terminates and reaps the entire Job before removing only this unique
-package SID's temporary grants and deleting its profile. It does not restore an
-old ACL snapshot over unrelated changes. Cleanup failures are reported as failed
-commands. If processes cannot be reaped, the command slot remains held. An abrupt
-host termination can leave orphaned profiles and SID ACL entries; automatic
-recovery is not implemented. These profiles must not be reused for other work.
+Windows and Program Files already admit AppContainers. User-installed runtimes on
+PATH, such as per-user Python, Node, Git, Cargo/rustup and uv-managed Python, are
+granted read/execute through a shared custom capability, `Eirene.Sandbox.Toolchains`.
+Broad profile folders (the profile itself, AppData, Programs, Temp, `.local`) and
+anything containing Eirene's own data are never granted.
+
+Approved extra paths are granted per command to a capability derived from a unique
+name, so concurrent commands cannot see each other's grants, and are revoked when
+the command ends. They must name existing, specific local paths; filesystem roots
+and network shares are rejected. Commands run concurrently, as on Linux.
+
+Persistent grants outlive Eirene. Removing them is currently manual: `icacls
+<workspace> /remove:g *<SID>` for the profile's `S-1-15-2-...` SID, then deleting
+the profile's `%LOCALAPPDATA%\Packages\eirene.workspace.*` folder.
 
 This is a regular AppContainer, not an LPAC or a virtual machine. Windows resources
 already exposed through existing AppContainer ACLs remain exposed. This does not
 make a filesystem namespace or remove pre-existing broad package permissions.
 Concurrent trusted host applications can still modify the workspace.
 
-## Input, output and limitations
+## Input, output and network
 
-The child inherits only an explicit list of standard handles for private input and
-output files. Input is supplied before creation; output is streamed into the
-existing command supervisor and artifacts. Host credentials and loader variables
-are not inherited. HOME, USERPROFILE, TEMP and TMP point to private storage.
-LOCALAPPDATA is explicitly supplied during creation because Windows requires it
-to resolve and redirect profile storage; omitting it produces WinError 203.
+Commands inherit only an explicit list of standard handles: private input and
+output files for ordinary commands, or anonymous pipes for long-lived protocol
+servers. Host credentials and loader variables are not inherited. HOME,
+USERPROFILE, TEMP and TMP point to private storage. LOCALAPPDATA is explicitly
+supplied during creation because Windows requires it to resolve and redirect
+profile storage; omitting it produces WinError 203.
 
-Network grants are currently unsupported. The token receives no Internet, LAN or
-server capabilities, and no loopback exemptions are installed. Requesting network
-enablement fails closed; `/permissions full-access` remains an explicit host-access
-choice. PTYs and interactive streaming stdin are unsupported. Plan mode blocks
-arbitrary Windows commands and uses application-validated fixed file/search tools.
-Those fixed tools are trusted operations, not arbitrary model-supplied scripts.
+By default the token has no Internet, LAN or server capability. A command with
+approved `network_access` runs in the workspace's network profile, which adds the
+`internetClient`, `internetClientServer` and `privateNetworkClientServer`
+capabilities. When Eirene runs elevated, that profile also receives a loopback
+exemption so it can reach services on the host's localhost, as `--share-net` does
+on Linux; ordinary commands never get one. Processes in the same profile can always
+reach each other over loopback, so a sandboxed server and client work together.
+PTYs are unsupported. Plan mode blocks arbitrary Windows commands and uses
+application-validated fixed file/search tools.
 
-MCP stdio launch wrapping is not integrated with this runtime. Sandboxed Windows
-MCP startup fails closed with "cannot start in the Windows sandbox yet"; plugin MCP
-servers such as Playwright and Serena need `/permissions full-access` on Windows,
-and `/plugins doctor` says so. Existing full-access/provider-owned execution has its
-own boundary. Trusted plugin hooks run in this runtime through `cmd`, which expands
-the `%PLUGIN_ROOT%`-style variables Eirene substitutes and runs `.cmd` wrappers
-such as Superpowers' Git Bash launcher. Runtime compatibility still depends on whether its executable, DLLs and
-configuration are accessible through the granted paths. User-installed toolchains
-may require specific read grants.
+Since 3.12.4, CPython's `os.mkdir(path, 0o700)` applies a protected DACL for
+SYSTEM, Administrators and the owner only, which no AppContainer can open; this
+breaks `tempfile.mkdtemp`, `venv`, pip and pytest. Sandboxed commands receive a
+`sitecustomize` through PYTHONPATH that adds only the command's own profile SID to
+that DACL, keeps itself available to venv's pip bootstrap, and then runs any
+project `sitecustomize`. It is inert outside Eirene's sandbox.
+
+Windows labels everything an AppContainer creates with Low integrity, and starts
+a program whose file is labelled Low at Low integrity even from the user's own
+shell; a venv built in the sandbox could then not read its own `pyvenv.cfg`. While
+a command runs, Eirene watches its writable roots for new `.exe` and `.com` files
+and gives them the normal Medium label when it ends, scanning modified files
+instead when the change buffer overflows. Data files keep the Low label, which only
+limits writes by lower-integrity processes.
+
+## MCP servers and hooks
+
+Sandboxed MCP stdio servers run in the workspace profile through the same runtime,
+with their configured read and write paths granted for the server's lifetime and
+network only when the server's definition allows it. Trusted plugin hooks run in
+this runtime through `cmd`, which expands the `%PLUGIN_ROOT%`-style variables
+Eirene substitutes and runs `.cmd` wrappers such as Superpowers' Git Bash launcher.
+Runtime compatibility still depends on whether a program's executable, DLLs and
+configuration are reachable through these grants.
 
 ## CI verification
 

@@ -1,8 +1,9 @@
 """Windows AppContainer process creation with verified kernel tokens.
 
 No command reaches ResumeThread until its kernel token has been checked and it
-belongs to a kill-on-close Job. No credentials, capabilities, or handles are
-inherited except explicitly supplied standard handles. Workspace grants are
+belongs to a kill-on-close Job. No credentials or handles are inherited except
+explicitly supplied standard handles, and the token carries exactly the
+capabilities the runtime requested. Workspace grants are
 managed by windows_runtime. See docs/windows-sandbox.md for the boundary.
 """
 
@@ -13,7 +14,7 @@ import math
 import os
 import subprocess
 import uuid
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from ..core.errors import ToolError
 
@@ -28,6 +29,10 @@ SIZE = C.c_size_t
 class SecurityCapabilities(C.Structure):
     _fields_ = [("sid", PTR), ("capabilities", PTR),
                 ("count", DWORD), ("reserved", DWORD)]
+
+
+class SidAndAttributes(C.Structure):
+    _fields_ = [("sid", PTR), ("attributes", DWORD)]
 
 
 class StartupInfo(C.Structure):
@@ -55,6 +60,10 @@ def _command_line(argv) -> str:
             or not argv[0] or not Path(argv[0]).is_absolute()):
         raise ToolError("AppContainer requires an absolute executable and NUL-free string arguments")
     command = subprocess.list2cmdline(argv)
+    if PureWindowsPath(argv[0]).name.casefold() == "cmd.exe" and tuple(argv[1:4]) == ("/d", "/s", "/c") and len(argv) == 5:
+        # cmd parses its own command line: /s /c removes the outer quotes and runs the
+        # rest verbatim, so exec-style escaping (\") would corrupt quoted paths.
+        command = subprocess.list2cmdline(argv[:4]) + ' "' + argv[4] + '"'
     # CreateProcessW's limit includes the terminator and counts UTF-16 units.
     if len(command.encode("utf-16-le")) // 2 >= 32767:
         raise ToolError("AppContainer command exceeds the Windows command-line limit")
@@ -109,6 +118,13 @@ class _Win32:
 
         self.create_profile = bind(self.userenv, "CreateAppContainerProfile", C.c_int32,
                                    WSTR, WSTR, WSTR, PTR, DWORD, C.POINTER(PTR))
+        self.derive_profile = bind(self.userenv, "DeriveAppContainerSidFromAppContainerName", C.c_int32,
+                                   WSTR, C.POINTER(PTR))
+        self.kernelbase = C.WinDLL("kernelbase", use_last_error=True, winmode=0x800)
+        self.derive_capability = bind(self.kernelbase, "DeriveCapabilitySidsFromName", BOOL, WSTR,
+                                      C.POINTER(C.POINTER(PTR)), C.POINTER(DWORD),
+                                      C.POINTER(C.POINTER(PTR)), C.POINTER(DWORD))
+        self.string_sid = bind(self.security, "ConvertStringSidToSidW", BOOL, WSTR, C.POINTER(PTR))
         self.delete_profile = bind(self.userenv, "DeleteAppContainerProfile", C.c_int32, WSTR)
         self.get_folder = bind(self.userenv, "GetAppContainerFolderPath", C.c_int32,
                                WSTR, C.POINTER(PTR))
@@ -146,9 +162,50 @@ class _Win32:
 
     def profile(self, name):
         sid = PTR()
-        self.hresult(self.create_profile(name, name, "Eirene experimental command sandbox",
-                                         None, 0, C.byref(sid)), "CreateAppContainerProfile")
+        code = self.create_profile(name, name, "Eirene command sandbox", None, 0, C.byref(sid))
+        if code & 0xffffffff == 0x800700B7:  # ERROR_ALREADY_EXISTS: a persistent workspace profile.
+            code = self.derive_profile(name, C.byref(sid))
+        self.hresult(code, "CreateAppContainerProfile")
         return sid
+
+    def sid_string(self, sid):
+        text = PTR()
+        self.check(self.sid_text(sid, C.byref(text)), "ConvertSidToStringSidW")
+        try:
+            return C.wstring_at(text)
+        finally:
+            self.local_free(text)
+
+    def capability(self, name):
+        """The SID Windows derives for a named custom capability."""
+        groups, group_count, sids, sid_count = C.POINTER(PTR)(), DWORD(), C.POINTER(PTR)(), DWORD()
+        self.check(self.derive_capability(name, C.byref(groups), C.byref(group_count),
+                                          C.byref(sids), C.byref(sid_count)), "DeriveCapabilitySidsFromName")
+        try:
+            if sid_count.value != 1:
+                raise ToolError(f"unexpected capability SIDs for {name}")
+            return self.sid_string(sids[0])
+        finally:
+            for array, count in ((groups, group_count.value), (sids, sid_count.value)):
+                for index in range(count):
+                    self.local_free(array[index])
+                self.local_free(C.cast(array, PTR))
+
+    def capability_sids(self, texts):
+        values = []
+        try:
+            for text in texts:
+                sid = PTR()
+                self.check(self.string_sid(text, C.byref(sid)), f"ConvertStringSidToSidW({text})")
+                values.append(sid)
+        except BaseException:
+            self.free_capabilities(values)
+            raise
+        return values
+
+    def free_capabilities(self, values):
+        for sid in values:
+            self.local_free(sid)
 
     def folder(self, sid):
         text = PTR()
@@ -164,7 +221,7 @@ class _Win32:
             if text:
                 self.local_free(text)
 
-    def suspended(self, argv, cwd, environment, sid, *, std_handles=None):
+    def suspended(self, argv, cwd, environment, sid, *, std_handles=None, capabilities=()):
         size = SIZE()
         count = 2 if std_handles else 1
         self.init_attributes(None, count, 0, C.byref(size))
@@ -174,10 +231,12 @@ class _Win32:
         self.check(self.init_attributes(attributes, count, 0, C.byref(size)),
                    "InitializeProcThreadAttributeList")
         try:
-            # Zero capabilities: no Internet, LAN, server, or broad file grants.
-            capabilities = SecurityCapabilities(sid, None, 0, 0)
+            # Only the capabilities the runtime asked for: no network unless approved.
+            granted = (SidAndAttributes * len(capabilities))(
+                *(SidAndAttributes(value, 0x4) for value in capabilities)) if capabilities else None  # SE_GROUP_ENABLED
+            security = SecurityCapabilities(sid, C.cast(granted, PTR) if granted else None, len(capabilities), 0)
             self.check(self.update_attribute(attributes, 0, 0x00020009,
-                                             C.byref(capabilities), C.sizeof(capabilities), None, None),
+                                             C.byref(security), C.sizeof(security), None, None),
                        "UpdateProcThreadAttribute(SECURITY_CAPABILITIES)")
             startup = StartupInfoEx()
             startup.startup.cb = C.sizeof(startup)
@@ -210,7 +269,8 @@ class _Win32:
         self.check(self.token_info(token, kind, buffer, size, C.byref(size)), "GetTokenInformation")
         return buffer
 
-    def verify(self, process, sid):
+    def verify(self, process, sid, capabilities=()):
+        expected = list(capabilities)
         token = PTR()
         self.check(self.open_token(process, 0x0008, C.byref(token)), "OpenProcessToken")
         try:
@@ -218,9 +278,15 @@ class _Win32:
             is_container = self._token_value(token, 29)
             actual_sid = self._token_value(token, 31)
             capabilities = self._token_value(token, 30)
+            count = DWORD.from_buffer(capabilities).value
             if (DWORD.from_buffer(is_container).value != 1
                     or not self.equal_sid(PTR.from_buffer(actual_sid), sid)
-                    or DWORD.from_buffer(capabilities).value != 0):
+                    or count != len(expected)):
+                raise ToolError("AppContainer token verification failed; command was not resumed")
+            # TOKEN_GROUPS: a DWORD count, then pointer-aligned SID_AND_ATTRIBUTES entries.
+            offset = C.sizeof(PTR)
+            actual = (SidAndAttributes * count).from_buffer(capabilities, offset) if count else []
+            if not all(any(self.equal_sid(entry.sid, value) for entry in actual) for value in expected):
                 raise ToolError("AppContainer token verification failed; command was not resumed")
         finally:
             self.close_handle(token)
@@ -292,24 +358,34 @@ class Process:
 
 
 class AppContainer:
-    """One unique profile per command group, used by windows_runtime.
+    """An AppContainer profile and the commands started in it, used by windows_runtime.
 
-    Use as a context manager; it kills/reaps commands before deleting the profile.
-    Host path ACL grants belong to the runtime owner. Thread-confined.
+    Without a name the profile is unique and deleted on close. A named profile is
+    persistent: windows_runtime keeps one per workspace so its file grants are made
+    once, and close only reaps commands. Capabilities are SID strings that every
+    command token must carry exactly. Thread-confined.
     """
 
-    def __init__(self):
+    def __init__(self, name=None, capabilities=()):
         self._api = _Win32()
-        self.name = "Eirene.Sandbox." + uuid.uuid4().hex
+        self.persistent = name is not None
+        self.name = name or "Eirene.Sandbox." + uuid.uuid4().hex
         self._sid = self._api.profile(self.name)
+        self._capabilities = []
         self._processes = []
         self.closed = False
         try:
+            if capabilities:
+                self._capabilities = self._api.capability_sids(capabilities)
             self.home = self._api.folder(self._sid) / "LocalState"
             self.home.mkdir(exist_ok=True)
         except BaseException:
-            self._api.remove_profile(self.name, self._sid)
+            self._release()
             raise
+
+    @property
+    def sid(self):
+        return self._api.sid_string(self._sid)
 
     def spawn(self, argv, *, cwd=None, env=None, std_handles=None, temp=None):
         if self.closed:
@@ -320,6 +396,8 @@ class AppContainer:
         if not system_root or not Path(system_root).is_absolute():
             raise ToolError("AppContainer requires an absolute SystemRoot")
         options = {"std_handles": std_handles} if std_handles else {}
+        if self._capabilities:
+            options["capabilities"] = self._capabilities
         info = self._api.suspended(argv, cwd or self.home,
                                    _environment(system_root, self.home, os.environ.get("LOCALAPPDATA", ""), env, temp),
                                    self._sid, **options)
@@ -327,7 +405,7 @@ class AppContainer:
         # Retain ownership even when cleanup itself fails, so close() can retry.
         self._processes.append(process)
         try:
-            self._api.verify(info.process, self._sid)
+            self._api.verify(info.process, self._sid, *([self._capabilities] if self._capabilities else []))
             process._job = self._api.attach(info.pid)
             self._api.resume(info.thread)
         except BaseException:
@@ -342,8 +420,17 @@ class AppContainer:
         if not self.closed:
             for process in self._processes:
                 process.close()
-            self._api.remove_profile(self.name, self._sid)
+            self._release()
             self.closed = True
+
+    def _release(self):
+        if self._capabilities:
+            self._api.free_capabilities(self._capabilities)
+        self._capabilities = []
+        if self.persistent:
+            self._api.free_sid(self._sid)
+        else:
+            self._api.remove_profile(self.name, self._sid)
 
     def __enter__(self):
         return self

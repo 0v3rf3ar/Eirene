@@ -50,6 +50,8 @@ DEFAULTS: dict[str, Any] = {
     "reduce_motion": False,
     "companion": False,
     "accessible_icons": False,
+    # auto: the terminal's own selection over SSH, Eirene's mouse handling locally.
+    "mouse": "auto",
     "credential_store": "file",
     "search_api": {},
     "check_updates": True,
@@ -57,6 +59,7 @@ DEFAULTS: dict[str, Any] = {
 }
 
 VALID_MODES = {"auto", "manual", "plan"}
+VALID_MOUSE = {"auto", "eirene", "terminal"}
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 INTEGER_LIMITS = {
     "shell_timeout": (1, 86_400),
@@ -290,6 +293,8 @@ def _merge_defaults(data: dict[str, Any]) -> dict[str, Any]:
     merged["reduce_motion"] = bool(merged.get("reduce_motion", False))
     merged["companion"] = bool(merged.get("companion", False))
     merged["accessible_icons"] = bool(merged.get("accessible_icons", False))
+    if merged.get("mouse") not in VALID_MOUSE:
+        merged["mouse"] = "auto"
     merged["seasonal_effects"] = bool(merged.get("seasonal_effects", True))
     if merged.get("mode") not in VALID_MODES:
         merged["mode"] = "manual"

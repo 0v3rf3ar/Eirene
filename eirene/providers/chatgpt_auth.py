@@ -143,6 +143,27 @@ class ChatGPTAuth(Provider):
             params["agent_name_hint"] = "Eirene"
         return AUTHORIZE + "?" + urlencode(params)
 
+    @property
+    def callback_port(self):
+        return self._server.sockets[0].getsockname()[1] if self._server else 0
+
+    def accept(self, address):
+        """Complete sign-in from the callback request, or from the address a remote user
+        pastes when their browser cannot reach this machine's loopback listener."""
+        pending = self._pending
+        target = urlsplit(str(address).strip())
+        if not pending or pending["future"].done() or target.path != "/auth/callback":
+            return False
+        if target.scheme and (target.scheme, target.netloc) != ("http", urlsplit(pending["redirect_uri"]).netloc):
+            return False
+        query = parse_qs(target.query)
+        if (len(query.get("state", [])) != 1
+                or not all(len(query.get(field, [])) <= 1 for field in ("code", "client_id", "error"))
+                or not secrets.compare_digest(query["state"][0], pending["state"])):
+            return False
+        pending["future"].set_result(query)
+        return True
+
     async def _callback(self, reader, writer):
         status, text = "400 Bad Request", "Invalid sign-in callback."
         try:
@@ -150,17 +171,8 @@ class ChatGPTAuth(Provider):
             if len(line) > 8192:
                 return
             parts = line.decode("ascii").strip().split()
-            pending = self._pending
-            if len(parts) == 3 and parts[0] == "GET" and pending:
-                target = urlsplit(parts[1])
-                query = parse_qs(target.query)
-                state = query.get("state", [""])[0]
-                if (target.path == "/auth/callback" and len(query.get("state", [])) == 1
-                        and all(len(query.get(field, [])) <= 1 for field in ("code", "client_id", "error"))
-                        and secrets.compare_digest(state, pending["state"])
-                        and not pending["future"].done()):
-                    pending["future"].set_result(query)
-                    status, text = "200 OK", "Sign-in received. Return to Eirene to finish connecting."
+            if len(parts) == 3 and parts[0] == "GET" and self.accept(parts[1]):
+                status, text = "200 OK", "Sign-in received. Return to Eirene to finish connecting."
             body = text.encode()
             writer.write((f"HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\n"
                           f"Content-Length: {len(body)}\r\nCache-Control: no-store\r\n"

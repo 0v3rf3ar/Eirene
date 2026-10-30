@@ -40,13 +40,15 @@ class FakeAPI:
     def folder(self, sid):
         return self.root
 
-    def suspended(self, argv, cwd, environment, sid):
+    def suspended(self, argv, cwd, environment, sid, capabilities=()):
         self.events.append("suspended")
         self.environment = environment
+        self.capabilities = capabilities
         return SimpleNamespace(process=456, thread=789, pid=12)
 
-    def verify(self, process, sid):
+    def verify(self, process, sid, capabilities=()):
         self.events.append("verify")
+        self.verified = capabilities
         if self.fail == "verify":
             raise ToolError("bad token")
 
@@ -74,6 +76,15 @@ class FakeAPI:
     def remove_profile(self, name, sid):
         self.events.append("remove_profile")
 
+    def free_sid(self, sid):
+        self.events.append("free_sid")
+
+    def capability_sids(self, texts):
+        return [f"psid:{text}" for text in texts]
+
+    def free_capabilities(self, values):
+        self.events.append("free_capabilities")
+
 
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
@@ -98,6 +109,14 @@ def test_no_resume_before_token_verification_and_job_assignment(fake, tmp_path):
     assert events.count("remove_profile") == 1
     with pytest.raises(ToolError, match="closed"):
         box.spawn([str(tmp_path / "cmd.exe")])
+
+
+def test_named_profile_persists_and_carries_capabilities(fake, tmp_path):
+    with sandbox.AppContainer("Eirene.Workspace.abc", ["S-1-15-3-1024-1"]) as box:
+        box.spawn([str(tmp_path / "cmd.exe")]).wait()
+    assert fake.capabilities == fake.verified == ["psid:S-1-15-3-1024-1"]
+    assert "remove_profile" not in fake.events
+    assert fake.events[-2:] == ["free_capabilities", "free_sid"]
 
 
 @pytest.mark.parametrize("failure", ["verify", "attach", "resume"])
@@ -238,6 +257,33 @@ def test_kernel_token_verification_rejects_wrong_identity_or_capabilities(is_con
     with pytest.raises(ToolError, match="verification failed"):
         api.verify(456, C.c_void_p(123))
     assert len(closed) == 1
+
+
+def _token_groups(*sids):
+    class Groups(C.Structure):
+        _fields_ = [("count", sandbox.DWORD), ("groups", sandbox.SidAndAttributes * max(1, len(sids)))]
+    value = Groups(len(sids))
+    for index, sid in enumerate(sids):
+        value.groups[index] = sandbox.SidAndAttributes(sid, 4)
+    return C.create_string_buffer(bytes(value))
+
+
+@pytest.mark.parametrize("actual,ok", [((7, 8), True), ((7, 9), False), ((7,), False)])
+def test_kernel_token_verification_requires_exact_capabilities(actual, ok):
+    api = sandbox._Win32.__new__(sandbox._Win32)
+    api.open_token = lambda *args: True
+    api.close_handle = lambda token: None
+    address = lambda sid: getattr(sid, "value", sid)  # c_void_p or a raw structure field
+    api.equal_sid = lambda left, right: address(left) == address(right)
+    buffers = {29: C.create_string_buffer(bytes(sandbox.DWORD(1))), 30: _token_groups(*actual),
+               31: C.create_string_buffer(bytes(C.c_void_p(123)))}
+    api._token_value = lambda token, kind: buffers[kind]
+    expected = [C.c_void_p(7), C.c_void_p(8)]
+    if ok:
+        api.verify(456, C.c_void_p(123), expected)
+    else:
+        with pytest.raises(ToolError, match="verification failed"):
+            api.verify(456, C.c_void_p(123), expected)
 
 
 def test_job_attachment_does_not_resume_the_process(monkeypatch):

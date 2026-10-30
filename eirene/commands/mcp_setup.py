@@ -109,7 +109,9 @@ async def _save(app, name, definition, headers=None, *, action=None):
         action = await app.ask_choice(f'{name} — ready to connect', [
             ('connect', 'Connect and enable', 'test the connection and discover its tools',
              ('Network access. ' if definition.get('network') else '')
-             + ' '.join(f"{field}: {', '.join(definition.get(field, []))}." for field in ('read_paths', 'write_paths') if definition.get(field))),
+             + ' '.join(f"{field}: {', '.join(definition.get(field, []))}." for field in ('read_paths', 'write_paths') if definition.get(field))
+             + (f" Withheld from the sandbox (add to read_paths to allow): "
+                f"{', '.join(definition['_withheld_read_paths'])}." if definition.get('_withheld_read_paths') else '')),
             ('save', 'Save disabled', 'connect later with /mcp test ' + name),
         ], footer='Esc cancel setup')
     if action not in ('connect', 'save'):

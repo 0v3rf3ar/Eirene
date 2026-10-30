@@ -51,9 +51,6 @@ def report(plugin, config, *, provider=None):
     if is_termux() and (any(plugin.lifecycle.values()) or plugin.mcp_servers):
         rows.append("  Android has no Eirene sandbox: trusted hooks and enabled MCP servers "
                     "run with your Termux account's access")
-    if os.name == "nt" and plugin.mcp_servers:
-        rows.append("  Windows: sandboxed MCP is not supported yet; MCP servers start only "
-                    "with /permissions full-access")
     if os.name == "nt" and plugin.name == "superpowers":
         rows.append("  Startup hook needs Git Bash (the upstream .cmd wrapper selects it)")
     rows.extend("  Compatibility: " + warning for warning in plugin.warnings)

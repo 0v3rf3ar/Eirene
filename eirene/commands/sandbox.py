@@ -18,7 +18,8 @@ async def run(app, args):
     elif sys.platform == "win32":
         runtime = "Windows / AppContainer"
         available = bool(shutil.which("icacls"))
-        notes = ["No unsandboxed fallback.", "One sandboxed command at a time; network grants unavailable.", "Plan mode uses portable file/search tools."]
+        notes = ["No unsandboxed fallback.", "One persistent profile per workspace; grants made once.",
+                 "Approved network uses its own profile.", "Plan mode uses portable file/search tools."]
     else:
         runtime = "Linux / Bubblewrap"
         available = bool(shutil.which("bwrap"))

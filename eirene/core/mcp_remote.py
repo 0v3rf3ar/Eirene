@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import AsyncExitStack
 from datetime import timedelta
+from pathlib import Path
 
 import httpx
 
@@ -145,5 +146,6 @@ def make_client(name, definition, sandbox, *, interactive=False, say=None):
     if transport(definition) != 'stdio':
         return RemoteMCPClient(name, definition, sandbox, interactive=interactive, say=say)
     from .mcp_config import prepare_local
-    definition = prepare_local(name, definition) if definition.get('auto_setup') else normalize(definition)
+    definition = (prepare_local(name, definition, Path(sandbox))
+                  if definition.get('auto_setup') else normalize(definition))
     return MCPClient(name, definition, sandbox)

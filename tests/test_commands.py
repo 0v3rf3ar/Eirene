@@ -19,7 +19,7 @@ from eirene.ui.chat import Block, NoticeBlock
 EXPECTED = {"mcp", "help", "connect", "model", "schedule", "tasks", "exit", "usage", "plan", "plugins", "sessions",
             "skills", "compact", "agents", "btw", "clear", "notification", "theme",
             "review", "sandbox", "permissions", "prompt-suggest", "keybindings", "search-api", "update", "subagents",
-            "config"}
+            "config", "diff"}
 
 
 class Script:

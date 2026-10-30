@@ -9,6 +9,7 @@ import re
 import subprocess
 from .subprocesses import executable_argv, external_environment
 import shlex
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -62,11 +63,8 @@ class MCPClient:
         if isinstance(configured_env, dict):
             env.update({str(k): str(v) for k, v in configured_env.items()})
         backend = self.definition.get("_isolation", "none")
-        if backend != "none" and WINDOWS:
-            # Windows' AppContainer runtime does not wrap MCP stdio yet; fail closed.
-            raise ToolError(f"MCP server {self.name} cannot start in the Windows sandbox yet; "
-                            "use /permissions full-access to run MCP servers with your account's access")
-        if backend != "none":
+        contained = backend != "none" and WINDOWS
+        if backend != "none" and not WINDOWS:
             from ..tools import isolation
             command = isolation.command(shlex.join(command), cwd, backend=backend,
                 network=not self.definition.get("_isolate_network", True),
@@ -75,10 +73,20 @@ class MCPClient:
                 home_path=Path(self.definition['_runtime_home']) if self.definition.get('_runtime_home') else None)
             env = isolation.environment(configured_env if isinstance(configured_env, dict) else {})
         try:
-            self.process = await asyncio.create_subprocess_exec(
-                *executable_argv(command[0], *command[1:]), cwd=str(cwd), env=env, stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                start_new_session=os.name != "nt", limit=MESSAGE_LIMIT)
+            if contained:
+                from ..tools.windows_runtime import start
+                executable = shutil.which(command[0]) or command[0]
+                self.process = await start(executable_argv(executable, *command[1:]), self.sandbox, cwd,
+                    network=not self.definition.get("_isolate_network", True),
+                    read_paths=self.definition.get("read_paths", []),
+                    write_paths=self.definition.get("write_paths", []),
+                    env={str(k): str(v) for k, v in configured_env.items()} if isinstance(configured_env, dict) else None,
+                    streams=True, limit=MESSAGE_LIMIT)
+            else:
+                self.process = await asyncio.create_subprocess_exec(
+                    *executable_argv(command[0], *command[1:]), cwd=str(cwd), env=env, stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    start_new_session=os.name != "nt", limit=MESSAGE_LIMIT)
             self.stderr_task = asyncio.create_task(self._drain_stderr())
             initialized = await self.request("initialize", {
                 "protocolVersion": PROTOCOL_VERSION,

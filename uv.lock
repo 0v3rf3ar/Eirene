@@ -453,7 +453,7 @@ wheels = [
 
 [[package]]
 name = "eirene"
-version = "0.1.20"
+version = "0.2.0b1"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },

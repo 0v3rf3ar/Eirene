@@ -1,5 +1,6 @@
 """Default data location and migration from older installations."""
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -78,3 +79,13 @@ def test_file_tools_may_use_the_session_temp(workdir):
     from eirene.tools.sandbox import Sandbox
     temp = paths.use_session_temp(workdir, "abc")
     assert Sandbox(workdir).contains(temp / "notes.txt")
+
+
+def test_deep_workspace_session_temp_name_is_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "_SYSTEM_TEMP", str(tmp_path))
+    deep = Path("/work") / ("nested-project-folder/" * 12)
+    other = Path("/elsewhere") / ("nested-project-folder/" * 12)
+    temp = paths.use_session_temp(deep, "abc")
+    assert len(temp.parent.name) <= 61
+    assert temp.parent.name.endswith("nested-project-folder-" + hashlib.sha256(str(deep).encode()).hexdigest()[:12])
+    assert paths.use_session_temp(other, "abc").parent != temp.parent

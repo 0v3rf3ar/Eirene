@@ -84,8 +84,10 @@ def token_policy(pid):
         is_container = api._token_value(token, 29)
         capabilities = api._token_value(token, 30)
         sid = api._token_value(token, 31)
+        count = appcontainer.DWORD.from_buffer(capabilities).value
+        entries = (appcontainer.SidAndAttributes * count).from_buffer(capabilities, C.sizeof(C.c_void_p)) if count else []
         return (appcontainer.DWORD.from_buffer(is_container).value,
-                appcontainer.DWORD.from_buffer(capabilities).value,
+                tuple(api.sid_string(entry.sid) for entry in entries),
                 bool(C.c_void_p.from_buffer(sid).value))
     finally:
         if token:
@@ -150,8 +152,12 @@ async def test_default_agent_enforces_windows_kernel_sandbox(workdir, outside, m
                 + "\n".join(event.result for event in finished)
             )
             assert observed, "No kernel token was inspected through default execution"
-            assert all(policy == (1, 0, True) for policy in observed), (
-                f"Default commands must have an AppContainer SID and zero capabilities: {observed}"
+            # Only Eirene's custom toolchain capability: no Internet, LAN or server capability.
+            network = {"S-1-15-3-1", "S-1-15-3-2", "S-1-15-3-3"}
+            assert all(policy[0] == 1 and policy[2] and len(policy[1]) == 1
+                       and policy[1][0].startswith("S-1-15-3-1024-") and not network & set(policy[1])
+                       for policy in observed), (
+                f"Default commands must have an AppContainer SID and no network capability: {observed}"
             )
             assert result_file.read_text().strip() == "workspace-ok"
             assert (workdir / "probe-read.txt").read_text() == "workspace input"

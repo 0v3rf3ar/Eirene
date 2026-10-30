@@ -503,6 +503,54 @@ async def test_sign_in_opens_browser_and_keeps_clickable_fallback(monkeypatch, r
     assert len(notices) == (1 if result is True else 2)
 
 
+async def test_pasted_callback_address_completes_sign_in_over_ssh(monkeypatch):
+    from types import SimpleNamespace
+    from eirene.commands.connect import _wait_for_chatgpt_plan
+    monkeypatch.setenv("SSH_CONNECTION", "10.0.0.2 51000 10.0.0.1 22")
+    auth = ChatGPTAuth()
+    url = await auth.login()
+    params = parse_qs(urlsplit(url).query)
+    redirect = params["redirect_uri"][0]
+    monkeypatch.setattr(auth, "_token", lambda form: asyncio.sleep(0, token_response(id_token="t")))
+    monkeypatch.setattr(auth, "_identity", lambda *a: asyncio.sleep(0, {"sub": "person"}))
+    good = redirect + "?" + urlencode({"state": params["state"][0], "code": "c", "client_id": "oaiapp_x"})
+    # Wrong state, another port and a wrong path are refused; the real address is accepted.
+    answers = iter([redirect + "?state=forged&code=c",
+                    good.replace(str(auth.callback_port), "1"),
+                    good.replace("/auth/callback", "/other"), good])
+    notices = []
+    async def ask_text(label, secret=False):
+        return next(answers)
+    app = SimpleNamespace(ask_text=ask_text,
+                          say=lambda text, kind="info", **kwargs: notices.append((text, kind)))
+    await _wait_for_chatgpt_plan(app, auth)
+    assert auth._read()["active"] == "oaiapp_x"
+    assert sum(kind == "warn" for _, kind in notices) == 3
+    assert any(f"ssh -L {urlsplit(redirect).port}:127.0.0.1:" in text for text, _ in notices)
+
+
+async def test_sign_in_over_ssh_shows_the_whole_link_instead_of_a_server_browser(monkeypatch):
+    from types import SimpleNamespace
+    from eirene.commands.connect import _open_sign_in
+    monkeypatch.setenv("SSH_TTY", "/dev/pts/3")
+    monkeypatch.setattr("eirene.commands.connect._open_browser",
+                        lambda url: pytest.fail("opened a browser on the server"))
+    copied, shown, notices = [], [], []
+    app = SimpleNamespace(copy_to_clipboard=copied.append, show_outside=shown.append,
+                          say=lambda text, kind="info", **kwargs: notices.append(text))
+    await _open_sign_in(app, ISSUER + "/authorize?x=1")
+    # The whole link goes to the normal terminal screen, where it is one selectable link.
+    assert shown == copied == [ISSUER + "/authorize?x=1"] and notices[0] == copied[0]
+    assert "browser on your computer" in notices[1]
+
+
+def test_links_are_terminal_hyperlinks():
+    from eirene.ui import markup
+    text = markup.inline("see [docs](https://example.com/a) or https://example.com/b")
+    links = {span.style.link for span in text.spans if getattr(span.style, "link", None)}
+    assert links == {"https://example.com/a", "https://example.com/b"}
+
+
 async def test_sign_in_fallback_click_opens_full_url():
     from textual.app import App
     from eirene.ui.chat import NoticeBlock

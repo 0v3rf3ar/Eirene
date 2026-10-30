@@ -9,7 +9,7 @@ import subprocess
 import sys
 import webbrowser
 
-from ..core.errors import CommandError, EireneError, ProviderError
+from ..core.errors import AuthError, CommandError, EireneError, ProviderError
 from ..providers import registry as providers
 from ..ui import art
 from . import register
@@ -240,6 +240,15 @@ def _open_browser(url: str) -> bool:
 async def _open_sign_in(app, url: str) -> None:
     """Open the host browser independently of provider/model execution."""
     app.say(url, markdown=True)
+    from ..ui.terminal import remote_session
+    if remote_session():
+        # A browser here would open on the server. Show the whole link on the normal
+        # terminal screen, where the user's terminal selects or opens it in one piece.
+        app.copy_to_clipboard(url)
+        app.show_outside(url)
+        app.say("Eirene is running over SSH: open the sign-in link in the browser on your computer "
+                "(click the link above to show it in full again).")
+        return
     opened = await asyncio.to_thread(_open_browser, url)
     if not opened:
         app.say("Could not open your browser automatically; click the URL above or copy it into your browser.", "warn")
@@ -302,7 +311,7 @@ async def _connect_chatgpt_plan(app, key: str, spec) -> None:
             app.say("Sign in to ChatGPT in your browser; you can choose Continue with Google.")
             await _open_sign_in(app, url)
             app.say("waiting for ChatGPT sign-in…")
-            await provider.auth.wait_for_login()
+            await _wait_for_chatgpt_plan(app, provider.auth)
         app.say("checking ChatGPT plan access…")
         note = await provider.validate()
         model = await _choose_model(app, provider, key)
@@ -329,17 +338,54 @@ async def _connect_chatgpt_plan(app, key: str, spec) -> None:
             await provider.close()
 
 
+async def _wait_for_chatgpt_plan(app, auth) -> None:
+    """Over SSH the browser's redirect to 127.0.0.1 reaches the user's own computer,
+    not this server: accept the address they paste, or a forwarded callback."""
+    from ..ui.terminal import remote_session
+    if not remote_session():
+        await auth.wait_for_login()
+        return
+    port = auth.callback_port
+    app.say("After you sign in, the browser will show an error page at http://127.0.0.1:"
+            f"{port}/… - that is expected. Copy that page's full address and paste it here.")
+    app.say(f"Alternatively, reconnect with `ssh -L {port}:127.0.0.1:{port} …` before signing in "
+            "and the redirect will reach Eirene by itself.", markdown=True)
+    login = asyncio.create_task(auth.wait_for_login())
+    while True:
+        pasted = asyncio.create_task(app.ask_text("paste the http://127.0.0.1 address from your browser"))
+        await asyncio.wait({login, pasted}, return_when=asyncio.FIRST_COMPLETED)
+        if login.done():
+            pasted.cancel()
+            await asyncio.gather(pasted, return_exceptions=True)
+            await login
+            return
+        address = pasted.result()
+        if not address:
+            login.cancel()
+            await asyncio.gather(login, return_exceptions=True)
+            raise AuthError("ChatGPT sign-in cancelled")
+        if auth.accept(address):
+            await login
+            return
+        app.say("that is not this sign-in's address - copy the whole http://127.0.0.1:"
+                f"{port}/auth/callback?… address shown after signing in", "warn")
+
+
 async def _connect_subscription(app, key: str, spec) -> None:
     """Authenticate through Codex without handling ChatGPT credentials."""
     provider = providers.build(key, app.config)
     try:
         account = await provider.account(refresh=True)
         if not account or account.get("type") != "chatgpt":
+            from ..ui.terminal import remote_session
+            remote = remote_session()
             method = await app.ask_choice("sign in to ChatGPT", [
-                ("chatgpt", "browser sign-in", "shows a localhost callback URL"),
+                ("chatgpt", "browser sign-in", "needs a browser on this machine" if remote
+                 else "shows a localhost callback URL"),
                 ("chatgptDeviceCode", "device-code sign-in",
-                 "open a URL and enter a short code"),
-            ])
+                 "works over SSH: open a URL anywhere and enter a short code" if remote
+                 else "open a URL and enter a short code"),
+            ], selected="chatgptDeviceCode" if remote else "")
             if not method:
                 app.say("cancelled")
                 await provider.close()

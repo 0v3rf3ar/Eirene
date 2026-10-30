@@ -418,14 +418,32 @@ async def test_hooks_use_cmd_on_windows_and_node_runs_without_a_shell(tmp_path, 
     assert rules_args['argv'][1:2] == ['-e'] and 'node' in rules_args['argv'][0]
 
 
-async def test_windows_sandbox_refuses_mcp_with_a_clear_reason(monkeypatch, box):
+async def test_windows_sandbox_runs_mcp_in_the_appcontainer_runtime(monkeypatch, box):
     from eirene.core.mcp import MCPManager
     monkeypatch.setattr('eirene.core.mcp.WINDOWS', True)
-    manager = MCPManager({"docs": {"command": ["node", "server.js"], "_isolation": "auto"}}, box.root)
+    calls = []
+
+    async def start(argv, root, cwd, **kwargs):
+        calls.append((argv, root, cwd, kwargs))
+        raise ToolError("contained start reached")
+
+    monkeypatch.setattr('eirene.tools.windows_runtime.start', start)
+    spawned = []
+
+    async def host(*args, **kwargs):
+        spawned.append(args)
+
+    monkeypatch.setattr('asyncio.create_subprocess_exec', host)
+    manager = MCPManager({"docs": {"command": ["node", "server.js"], "_isolation": "auto",
+                                   "read_paths": ["/opt/docs"], "env": {"TOKEN": "x"}}}, box.root)
     try:
         await manager.ensure()
-        assert any("Windows sandbox" in error and "full-access" in error for error in manager.errors)
-        assert not any("Bubblewrap" in error for error in manager.errors)
+        assert any("contained start reached" in error for error in manager.errors)
+        assert not spawned, "sandboxed MCP must never fall back to host execution"
+        (argv, root, cwd, kwargs) = calls[0]
+        assert argv[-1] == "server.js" and root == box.root
+        assert kwargs["streams"] and kwargs["network"] is False
+        assert kwargs["read_paths"] == ["/opt/docs"] and kwargs["env"] == {"TOKEN": "x"}
     finally:
         await manager.close()
 

@@ -58,6 +58,21 @@ def test_osc52_carries_the_text():
     assert base64.b64decode(payload).decode() == "hello"
 
 
+def test_osc52_reaches_the_terminal_through_multiplexers():
+    plain = terminal.osc52("hi", {})
+    tmux = terminal.osc52("hi", {"TMUX": "/tmp/tmux-1/default,1,0"})
+    # Plain for `set-clipboard on`, and wrapped for `allow-passthrough on`.
+    assert tmux.startswith(plain) and "\x1bPtmux;\x1b\x1b]52;c;" in tmux and tmux.endswith("\x1b\\")
+    assert terminal.osc52("hi", {"STY": "1.pts"}) == "\x1bP" + plain + "\x1b\\"
+
+
+def test_over_ssh_the_servers_clipboard_tools_are_never_used(monkeypatch):
+    monkeypatch.setenv("SSH_CONNECTION", "10.0.0.2 51000 10.0.0.1 22")
+    monkeypatch.setattr(terminal.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(terminal.subprocess, "run", lambda *a, **k: pytest.fail("ran a server clipboard tool"))
+    assert terminal.remote_session() and terminal.copy_to_system("x") == ""
+
+
 def test_the_clipboard_uses_a_real_helper(monkeypatch):
     seen = {}
 

@@ -49,6 +49,7 @@ supply them before submitting the task. Escape closes the active popup.
 | F1 | Show command help and shortcuts. |
 | F2 | Pick a model. |
 | F3 | Pick a saved session. |
+| F4 | Switch the mouse between Eirene's handling and your terminal's own selection. |
 | Ctrl+K | Show keybindings. |
 | Ctrl+B | View output or stop running commands. |
 | Ctrl+T | Pick a theme. |
@@ -56,6 +57,7 @@ supply them before submitting the task. Escape closes the active popup.
 | Shift+Tab | Cycle Manual, Auto, and Plan modes. |
 | Escape | Close a popup or interrupt current work. |
 | Ctrl+E | Jump to the latest transcript output. |
+| PageUp / PageDown | Scroll the transcript while typing. |
 | Ctrl+Shift+C | Copy selected input or transcript text (Ctrl+C on Windows, Cmd+C on macOS). |
 | Ctrl+D | Exit. While the agent or a command is running, press it again within 3 seconds to confirm. |
 | Tab or Right arrow | Copy a suggestion into an empty composer. |
@@ -151,6 +153,36 @@ Linux may need `wl-clipboard` or `xclip` for system clipboard copying. Terminal
 clipboard integration and host utilities affect whether the copy reaches your
 desktop clipboard. `/theme`, `--no-color`, and `--reduce-motion` control display;
 see [appearance](appearance.md).
+
+### Over SSH
+
+When Eirene runs on a server you reach with SSH, the server's clipboard and
+browser are the wrong ones, so Eirene never uses `xclip`, `wl-copy` or a browser
+there, and it leaves the mouse to your terminal: drag to select, copy with your
+terminal's own shortcut (usually Ctrl+Shift+C), and Ctrl+click links, exactly as
+in any other program. Copies land on the computer you are typing on, whatever
+terminal you use. PageUp and PageDown scroll the transcript. Press F4 to give
+the mouse back to Eirene (clicking tool blocks, dragging to select and copying
+with Eirene's shortcut, which then uses an OSC 52 escape sequence); press it
+again to return. The `mouse` setting chooses the start-up mode.
+
+A full-screen program draws a long link as separate rows, so terminals that
+detect links by their text only recognize its first row. Clicking a link in
+Eirene, and every sign-in link over SSH, therefore prints the complete link on
+the normal terminal screen, where it wraps as one link you can select or
+Ctrl+click; press Enter to return to Eirene. Terminals that support OSC 8
+hyperlinks also open the whole link from any of its rows inside Eirene.
+
+Signing in to ChatGPT from a server:
+
+- `chatgpt-subscription` preselects device-code sign-in: open the URL on any
+  device and enter the code.
+- `chatgpt-plan` shows the sign-in link in full. After you sign in, your
+  browser tries to return to `http://127.0.0.1:PORT/...` on your own computer
+  and shows an error page; copy that page's full address and paste it into
+  Eirene, which verifies it and finishes. Alternatively, connect with
+  `ssh -L PORT:127.0.0.1:PORT server` using the port Eirene shows, and the
+  redirect reaches Eirene by itself.
 
 ## Displayed history versus active model context
 

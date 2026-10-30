@@ -97,7 +97,7 @@ snapshot = api("CreateToolhelp32Snapshot", W.HANDLE, [W.DWORD, W.DWORD])
 first = api("Thread32First", W.BOOL, [W.HANDLE, ctypes.POINTER(THREAD)])
 next_thread = api("Thread32Next", W.BOOL, [W.HANDLE, ctypes.POINTER(THREAD)])
 open_thread = api("OpenThread", W.HANDLE, [W.DWORD, W.BOOL, W.DWORD])
-resume = api("ResumeThread", W.DWORD, [W.HANDLE])
+resume_thread = api("ResumeThread", W.DWORD, [W.HANDLE])
 
 
 class Job:
@@ -159,7 +159,7 @@ def own(pid: int, *, resume: bool = True) -> Job:
                     if not thread:
                         raise ctypes.WinError(ctypes.get_last_error())
                     try:
-                        if resume(thread) == 0xFFFFFFFF:
+                        if resume_thread(thread) == 0xFFFFFFFF:
                             raise ctypes.WinError(ctypes.get_last_error())
                     finally:
                         close(thread)

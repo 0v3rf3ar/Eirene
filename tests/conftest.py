@@ -25,6 +25,9 @@ def eirene_home(tmp_path, monkeypatch):
     # the developer's terminal preference silently disable those colours.
     monkeypatch.delenv("NO_COLOR", raising=False)
     monkeypatch.delenv("EIRENE_REDUCE_MOTION", raising=False)
+    # Running the suite over SSH or inside tmux must not change clipboard and link behaviour.
+    for name in ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "TMUX", "STY"):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv(paths.ENV_HOME, str(home))
     monkeypatch.setenv("EIRENE_NO_UPDATE_CHECK", "1")
     system_temp = tmp_path / "system-temp"

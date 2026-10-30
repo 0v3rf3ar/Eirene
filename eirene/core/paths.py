@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import tempfile
@@ -93,7 +94,11 @@ def temp_dir() -> Path:
 def use_session_temp(workspace: Path, session_id: str) -> Path:
     """Send every temp file of Eirene and its commands to this session's folder."""
     global _session_temp
-    folder = _private(temp_root() / re.sub(r"[^A-Za-z0-9]", "-", str(workspace)))
+    name = re.sub(r"[^A-Za-z0-9]", "-", str(workspace))
+    if len(name) > 64:
+        # Deep workspaces would push Windows paths past MAX_PATH; keep the tail readable.
+        name = name[-48:].lstrip("-") + "-" + hashlib.sha256(str(workspace).encode()).hexdigest()[:12]
+    folder = _private(temp_root() / name)
     _session_temp = _private(folder / session_id)
     os.environ["EIRENE_SYSTEM_TEMP"] = _SYSTEM_TEMP
     for key in ("TMPDIR", "TEMP", "TMP"):

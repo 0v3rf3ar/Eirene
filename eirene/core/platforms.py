@@ -33,7 +33,7 @@ def guidance(*, native: bool = False, system: str | None = None, host=None) -> s
 CMD: dir /b, type "file", where program, set "NAME=value", %NAME%, and && for success chaining. Single quotes do not quote CMD arguments. Quote paths with double quotes.
 PowerShell: Get-ChildItem -LiteralPath '.', Get-Content -LiteralPath 'file' -TotalCount 80, Select-String, Get-Command, $env:NAME='value'. Use & 'C:\Program Files\tool.exe' for quoted executable paths. Windows PowerShell 5.1 has no &&; check $LASTEXITCODE for native programs. Use -LiteralPath for filenames containing brackets.
 Use python or py -3 when installed, not an assumed python3 alias. Use ping -n 4; no /dev/null, sudo, chmod, sed, or Unix environment assignments. PTY mode is unavailable in Eirene on Windows.
-Native commands use kernel-enforced AppContainer isolation; network grants and concurrent commands are currently unsupported. In plan mode use the fixed native read/search tools."""
+Native commands use kernel-enforced AppContainer isolation: the workspace is writable, Windows, Program Files and user-installed runtimes on PATH are readable, and the network needs network_access approval. If PowerShell cannot open the drive root it starts in a Workspace:\ drive mapped to the working directory; (Get-Location).ProviderPath gives the real path, and native list tools work where CMD dir is denied. In plan mode use the fixed native read/search tools."""
         if host is not None and not ({"pwsh", "powershell"} & set(host.available)):
             detail = ("Windows command profile: CMD only; PowerShell was not found on host PATH. "
                       "Use dir /b, where program, set \"NAME=value\", %NAME%, and && for success chaining. "

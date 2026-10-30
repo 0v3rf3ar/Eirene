@@ -76,14 +76,16 @@ def inline(text: str, *, show_link_urls: bool = False) -> Text:
         groups = match.groupdict()
         if groups["label"] is not None or groups["bare"] is not None:
             url = groups["url"] or groups["bare"].rstrip(".,;:!?)")
-            link = Style.parse(LINK_STYLE) + Style.from_meta(
+            # link= makes Textual emit an OSC 8 hyperlink, which the terminal itself can
+            # open (Ctrl+click) on the user's own computer, even over SSH.
+            link = Style.parse(LINK_STYLE) + Style(link=url) + Style.from_meta(
                 {"@click": f"open_link({url!r})"})
             label = (inline(groups["label"], show_link_urls=False)
                      if groups["label"] is not None else Text(url))
             label.stylize(link)
             body.append_text(label)
             if groups["label"] is not None and show_link_urls:
-                body.append(f" ({url})", style=Style.parse("dim") + Style.from_meta(
+                body.append(f" ({url})", style=Style.parse("dim") + Style(link=url) + Style.from_meta(
                     {"@click": f"open_link({url!r})"}))
             elif groups["bare"] is not None:
                 body.append(groups["bare"][len(url):])

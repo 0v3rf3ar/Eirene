@@ -37,7 +37,7 @@ from .tools import processes
 from .tools.sandbox import Sandbox
 from .ui import art, markup
 from .ui import theme as theme_mod
-from .ui.terminal import copy_to_system, write_terminal_title
+from .ui.terminal import copy_to_system, osc52, remote_session, write_terminal_title
 from .ui.theme import THEMES
 from .ui.format import display_path
 from .ui.aside import AsidePanel
@@ -45,6 +45,7 @@ from .ui.chat import (AnswerBlock, ArtBlock, BackToBottom, ChangeBlock, CommandB
                       DiffBlock, FLUSH_INTERVAL, NoticeBlock, PromptNavigator,
                       ToolBlock, Transcript, UserBlock)
 from .ui.complete import SlashMenu
+from .ui.diff_panel import DiffPanel, DiffToggle
 from .ui.composer import Composer, ModeLine, Prompt
 from .ui.companion import Companion, prepare_renderer
 from .ui.permission import PermissionBar
@@ -79,7 +80,7 @@ class Eirene(App):
     CSS = """
     Screen {
         background: $background;
-        layers: base overlay notification splash;
+        layers: base overlay notification diff splash;
     }
     """
 
@@ -89,6 +90,8 @@ class Eirene(App):
         Binding("shift+tab", "cycle_mode", "mode", priority=True, show=False),
         Binding(",".join(COPY_KEYS), "copy_selection", "copy", priority=True, show=False),
         Binding("ctrl+e", "jump_to_end", "jump to bottom", priority=True, show=False),
+        Binding("pageup", "scroll_transcript(-1)", "scroll up", priority=True, show=False),
+        Binding("pagedown", "scroll_transcript(1)", "scroll down", priority=True, show=False),
     ] + [Binding(key, "ignore", "", priority=True, show=False)
          for key in INERT_COPY_KEYS] + [Binding(key, action, hint, priority=True, show=False)
          for key, action, _, hint in SHORTCUTS]
@@ -144,6 +147,8 @@ class Eirene(App):
         super()._display(screen, renderable)
 
     def compose(self) -> ComposeResult:
+        # Split off the right edge, so the chat and composer share the rest.
+        yield DiffPanel(self.sandbox.root)
         yield Transcript()
         yield PromptNavigator()
         yield BackToBottom()
@@ -152,6 +157,7 @@ class Eirene(App):
                        TaskList(self.sandbox.root, self.session.id))
         yield Companion(self._companion_renderer)
         yield CopyNotice()
+        yield DiffToggle()
         yield StartupSplash()
 
     @property
@@ -213,6 +219,7 @@ class Eirene(App):
         self._flusher = self.set_interval(FLUSH_INTERVAL, self._flush_live)
         self.name_the_tab()
         self.prompt.focus()
+        self.call_after_refresh(self._start_mouse_mode)
         if self.config.get("check_updates", True) and not os.environ.get("EIRENE_NO_UPDATE_CHECK"):
             self.run_worker(self._check_updates(), group="update-check", exclusive=True)
 
@@ -243,6 +250,7 @@ class Eirene(App):
         """Keep the floating window inside a smaller terminal."""
         try:
             self.query_one(CopyNotice).place(event.size)
+            self.query_one(DiffPanel).fit(event.size.width)
             if self.aside.open:
                 self.aside._place(event.size)
                 self.call_after_refresh(self.aside.refresh_body)
@@ -787,6 +795,7 @@ class Eirene(App):
                     card.finish(event.result, event.is_error, card.seconds + event.seconds)
                     card.artifact_id = event.artifact_id
                     card.flush()
+                    self.query_one(DiffPanel).reload()
                 elif isinstance(event, agent_mod.Notice):
                     if event.transient:
                         if event.phase in {"reconnecting", "waiting for response"}:
@@ -1082,15 +1091,45 @@ class Eirene(App):
             except NoMatches:
                 text = ""
         if not text:
+            if not getattr(self, "_mouse_captured", True):
+                return  # The terminal owns selection and copying in this mode.
             self.say("nothing selected - drag over the text first", "warn")
             return
         self.copy_to_clipboard(text)
         tool = copy_to_system(text)
         self.query_one(CopyNotice).show_count(len(text))
         self.screen.clear_selection()
-        if not tool:
+        if remote_session():
+            self._clipboard_hint()
+        elif not tool:
             self.say("copied, but no clipboard tool was found - "
                      "install wl-clipboard or xclip", "warn")
+
+    def copy_to_clipboard(self, text: str) -> None:
+        """Have the terminal showing Eirene set its clipboard, across SSH and tmux."""
+        self._clipboard = text
+        if self._driver is not None:
+            self._driver.write(osc52(text))
+            self._driver.flush()
+
+    def _clipboard_hint(self) -> None:
+        """Over SSH only the user's terminal can reach their clipboard; say how once."""
+        if getattr(self, "_clipboard_hinted", False):
+            return
+        self._clipboard_hinted = True
+        self.say("copied through your terminal (OSC 52) to the computer you are typing on. "
+                 "If it does not paste, allow clipboard access in your terminal's settings"
+                 + (", and add `set -g set-clipboard on` to ~/.tmux.conf" if os.environ.get("TMUX") else "")
+                 + ".")
+
+    def open_url(self, url: str, *, new_tab: bool = True) -> None:
+        """Over SSH a browser here would open on the server: show the whole link to the
+        user's own terminal instead, and offer it to their clipboard too."""
+        if not remote_session():
+            super().open_url(url, new_tab=new_tab)
+            return
+        self.copy_to_clipboard(url)
+        self.show_outside(url)
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
         companion = self.query_one(Companion)
@@ -1217,6 +1256,66 @@ class Eirene(App):
         if not (self.aside.open and self.aside._toggle_callback == self.set_prompt_suggestions):
             state = "ON" if self.config.get("prompt_suggest", False) else "OFF"
             self.say(f"prompt suggestions {state}")
+
+    def _start_mouse_mode(self) -> None:
+        """Over SSH default to the terminal's own selection, copying and link clicks."""
+        setting = self.config.get("mouse", "auto")
+        self._apply_mouse(setting == "eirene" or (setting == "auto" and not remote_session()))
+        if not self._mouse_captured:
+            self.say("Mouse: your terminal's own selection - drag to select, copy with your terminal's "
+                     "shortcut (Ctrl+Shift+C), Ctrl+click links. PageUp/PageDown scroll. F4 switches.")
+
+    def _apply_mouse(self, captured: bool) -> None:
+        """Turn mouse reporting on (Eirene handles clicks) or off (the terminal does)."""
+        self._mouse_captured = captured
+        driver = self._driver
+        switch = getattr(driver, "_enable_mouse_support" if captured else "_disable_mouse_support", None)
+        if switch is None:
+            return
+        switch()
+        if not captured:
+            # Without reporting, terminals turn the wheel into arrow keys on the
+            # alternate screen, which would page through prompt history.
+            driver.write("\x1b[?1007l")
+            driver.flush()
+
+    def action_toggle_mouse(self) -> None:
+        self._apply_mouse(not getattr(self, "_mouse_captured", True))
+        self.say("Mouse: Eirene - click blocks and links, drag then Ctrl+Shift+C to copy."
+                 if self._mouse_captured else
+                 "Mouse: your terminal's own selection - drag to select, copy with your terminal's "
+                 "shortcut, Ctrl+click links. PageUp/PageDown scroll. F4 switches back.")
+
+    def check_action(self, action: str, parameters) -> bool | None:
+        if action == "scroll_transcript":
+            # Only while typing in the main screen; popups keep their own paging.
+            return len(self.screen_stack) == 1 and self.focused is self.prompt
+        return super().check_action(action, parameters)
+
+    def action_scroll_transcript(self, direction: int) -> None:
+        try:
+            transcript = self.transcript
+        except NoMatches:
+            return
+        transcript.scroll_to(y=transcript.scroll_y + direction * max(1, transcript.size.height - 2), animate=False)
+
+    def show_outside(self, text: str) -> None:
+        """Print text on the normal terminal screen, where a long link wraps as one link
+        that the terminal can select or open whole; inside the full-screen view each
+        row is separate, so only its first row is recognized."""
+        driver = self._driver
+        if driver is None or not getattr(driver, "can_suspend", False):
+            self.copy_to_clipboard(text)
+            return
+        with self.suspend():
+            sys.stdout.write("\n" + text + "\n\nSelect it or Ctrl+click it, then press Enter to return to Eirene. ")
+            sys.stdout.flush()
+            try:
+                sys.stdin.readline()
+            except (OSError, ValueError):
+                pass
+        # Resuming re-enables mouse reporting.
+        self._apply_mouse(getattr(self, "_mouse_captured", True))
 
     def action_jump_to_end(self) -> None:
         try:

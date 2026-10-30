@@ -27,6 +27,7 @@ support dragging. Close a popup with Esc, or use `[x]` when shown.
 | Command | Action | Guide |
 | --- | --- | --- |
 | `/review [base]` | Read-only review of working changes, or changes against a Git revision. | [Review](review.md) |
+| `/diff [on\|off]` | Toggle a side panel of uncommitted Git changes; it refreshes every 2 seconds and after each tool call. In windows narrower than 100 columns the chat stays full width and a top-right button switches between the chat and the diff. | [Review](review.md) |
 | `/plan` | Show the saved session plan. | [Plans](plans.md) |
 | `/plan clear` | Clear that plan after confirmation. | [Plans](plans.md) |
 | `/sessions` | Pick a session in the current workspace. | [Sessions](sessions.md) |

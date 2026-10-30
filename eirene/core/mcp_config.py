@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -150,12 +151,142 @@ def valid_name(name: str) -> bool:
             and not name.startswith(':') and not re.search(r'[/\\\x00-\x1f\x7f]', name))
 
 
-def prepare_local(name: str, definition: dict) -> dict:
-    """Give common launchers persistent caches without opening the whole home."""
+# Launch arguments that are code, which usually imports its own project.
+SOURCE_SUFFIXES = frozenset({'.py', '.pyw', '.pyz', '.js', '.mjs', '.cjs', '.ts', '.mts', '.cts',
+                             '.jar', '.rb', '.php', '.pl', '.lua', '.sh', '.bash', '.ps1', '.psm1',
+                             '.cmd', '.bat', '.wasm'})
+PROJECT_MARKERS = ('pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'package.json',
+                   'deno.json', 'deno.jsonc', 'Cargo.toml', 'go.mod', 'Gemfile', 'composer.json',
+                   'pom.xml', 'build.gradle', 'manifest.json', '.git')
+PROJECT_SEARCH_DEPTH = 4
+# Credential stores that no derived grant may contain, equal, or sit inside,
+# across Linux, macOS and Windows home layouts.
+PRIVATE_HOME_ENTRIES = (
+    '.ssh', '.gnupg', '.aws', '.azure', '.kube', '.docker', '.password-store', '.pki',
+    '.netrc', '.git-credentials', '.npmrc', '.pypirc', '.cargo/credentials.toml',
+    '.config/gcloud', '.config/gh', '.local/share/keyrings',
+    'Library/Keychains', 'Library/Cookies', 'Library/Mail', 'Library/Messages', 'Library/Safari',
+    'Library/Application Support/com.apple.TCC',
+    'AppData/Roaming/Microsoft/Credentials', 'AppData/Local/Microsoft/Credentials',
+    'AppData/Roaming/Microsoft/Protect', 'AppData/Roaming/Microsoft/Crypto',
+    'AppData/Roaming/gcloud', 'AppData/Roaming/GitHub CLI')
+# Top-level folders that hold other users, volumes or the system rather than one project.
+SHARED_TOP_LEVEL = frozenset({
+    'home', 'users', 'root', 'mnt', 'media', 'volumes', 'run', 'var', 'etc', 'private', 'proc',
+    'sys', 'dev', 'tmp', 'opt', 'srv', 'usr', 'lib', 'lib64', 'bin', 'sbin', 'boot', 'snap',
+    'nix', 'data', 'storage', 'sdcard', 'system', 'library', 'applications', 'cores',
+    'windows', 'program files', 'program files (x86)', 'programdata', '$recycle.bin',
+    'system volume information'})
+# The only parts of Eirene's own data a server may be handed: never sessions or tokens.
+EIRENE_SHAREABLE = ('plugins', 'plugin-data', 'mcp-runtime')
+
+
+def _resolved(path: Path) -> Path | None:
+    try:
+        return path.expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+
+
+def _folded(path: Path) -> tuple[str, ...]:
+    # macOS and Windows volumes usually ignore case, so ~/.SSH must count as ~/.ssh.
+    # Folding everywhere only ever refuses more, never less.
+    return tuple(part.casefold().rstrip('\\/') for part in path.parts)
+
+
+def _within(path: tuple[str, ...], folder: tuple[str, ...]) -> bool:
+    return path[:len(folder)] == folder
+
+
+def _safe_grant(path: Path) -> bool:
+    """Whether a read grant derived from a launch command stays narrow."""
+    if not path.is_absolute():
+        return False
+    target = _folded(path)
+    # The filesystem or drive root, and shared top-level folders such as /home or C:\Users.
+    if len(target) < 2 or (len(target) == 2 and target[1] in SHARED_TOP_LEVEL):
+        return False
+    home = _resolved(Path.home()) or Path.home()
+    data = _resolved(paths.home()) or paths.home()
+    temp = _resolved(Path(tempfile.gettempdir()))
+    for owner in filter(None, (home, data, temp)):
+        if _within(_folded(owner), target):
+            return False
+    for entry in PRIVATE_HOME_ENTRIES:
+        private = _folded(home / entry)
+        if _within(target, private) or _within(private, target):
+            return False
+    if _within(target, _folded(data)):
+        # Matched exactly: on a case-sensitive volume PLUGINS is not plugins.
+        return any(path == data / part or data / part in path.parents for part in EIRENE_SHAREABLE)
+    return True
+
+
+def project_root(file: Path) -> Path | None:
+    """The narrowest safe folder holding a launched file's project, or None for the file alone."""
+    start = file.parent
+    if not _safe_grant(start):
+        return None
+    nearest = None
+    for ancestor in [start, *start.parents][:PROJECT_SEARCH_DEPTH + 1]:
+        if not _safe_grant(ancestor):
+            break
+        if nearest is None and any((ancestor / marker).exists() for marker in PROJECT_MARKERS):
+            nearest = ancestor
+            if (ancestor / '.git').exists():
+                break
+        elif nearest is not None and (ancestor / '.git').exists():
+            # A package inside a monorepo may import from the repository root.
+            return ancestor
+    return nearest or start
+
+
+def _launch_grants(command: list[str], env: dict, base: Path | None) -> tuple[list[str], list[str]]:
+    """Rewrite linked source paths to their targets and list the folders they need."""
+    grants: list[str] = []
+    out = [command[0]]
+    for part in command[1:]:
+        prefix, value = (part.split('=', 1)[0] + '=', part.split('=', 1)[1]) if '=' in part else ('', part)
+        if '://' in value or not value or value.startswith('-'):
+            out.append(part)
+            continue
+        raw = Path(value).expanduser()
+        if not raw.is_absolute():
+            if base is None:
+                out.append(part)
+                continue
+            raw = base / raw
+        target = _resolved(raw)
+        if target is None:
+            out.append(part)
+            continue
+        if target.is_dir():
+            if _safe_grant(target):
+                grants.append(str(target))
+        elif target.suffix.lower() in SOURCE_SUFFIXES:
+            root = project_root(target)
+            grants.append(str(root or target))
+            if target != raw.absolute():
+                # The sandbox mounts real paths, so a link's own location would be missing.
+                part = prefix + str(target)
+        out.append(part)
+    for key in ('PYTHONPATH', 'NODE_PATH'):
+        for entry in str(env.get(key, '')).split(os.pathsep):
+            target = _resolved(Path(entry)) if entry and Path(entry).expanduser().is_absolute() else None
+            if target and target.is_dir() and _safe_grant(target):
+                grants.append(str(target))
+    return out, grants
+
+
+def prepare_local(name: str, definition: dict, base: Path | None = None) -> dict:
+    """Give common launchers persistent caches without opening the whole home.
+
+    ``base`` is the folder relative launch paths are read from, normally the workspace.
+    """
     result = normalize(definition)
     if transport(result) != 'stdio':
         return result
-    command = [str(Path(part).expanduser()) if part.startswith('~/') else part for part in result['command']]
+    command = [str(Path(part).expanduser()) if part.startswith(('~/', '~\\')) else part for part in result['command']]
     command = [part.split('=', 1)[0] + '=' + str(Path(part.split('=', 1)[1]).expanduser())
                if '=~/' in part else part for part in command]
     found = shutil.which(str(Path(command[0]).expanduser()))
@@ -165,20 +296,43 @@ def prepare_local(name: str, definition: dict) -> dict:
         raise ValueError(f'{command[0]} is not installed or is not on PATH; install its runtime first')
     command[0] = found
     result['command'] = command
-    reads = list(result.get('read_paths', []))
+    stored = [str(item) for item in result.get('read_paths', [])]
+    if '_derived_read_paths' in result:
+        previous = set(result['_derived_read_paths'])
+        explicit = [item for item in stored if item not in previous]
+    elif '_runtime_home' in result:
+        # Saved by an older release that mixed its own grants into read_paths.
+        explicit = [item for item in stored if (target := _resolved(Path(item))) and _safe_grant(target)]
+    else:
+        explicit = stored
+    # Grants worked out below are recorded apart, so each launch derives them afresh.
+    reads: list[str] = []
+    derived = []
     # nvm, fnm, pipx, and user-installed runtimes live outside system mounts.
     executable = Path(found).resolve()
     launch_directory = Path(found).absolute().parent
-    runtime = executable.parent.parent if executable.suffix in ('.py', '.js') else executable.parent
     if not str(Path(found).absolute()).startswith(('/usr/', '/bin/', '/sbin/')):
-        reads.append(str(launch_directory.parent if (launch_directory.parent / 'pyvenv.cfg').is_file() else launch_directory))
+        if (launch_directory.parent / 'pyvenv.cfg').is_file():
+            venv = launch_directory.parent.resolve()
+            derived.append(str(venv))
+            # Editable installs in a project's own venv import from the project.
+            derived.append(str(project_root(venv / 'pyvenv.cfg') or venv))
+        elif _safe_grant(launch_directory.resolve()):
+            derived.append(str(launch_directory.resolve()))
     if not str(executable).startswith(('/usr/', '/bin/', '/sbin/')):
-        reads.append(str(runtime))
+        if executable.suffix.lower() in SOURCE_SUFFIXES:
+            derived.append(str(project_root(executable) or executable))
+        else:
+            # A binary loose in the home folder gets itself, not its neighbours.
+            derived.append(str(executable.parent if _safe_grant(executable.parent) else executable))
     node = shutil.which('node') if Path(found).name in ('npx', 'npx.cmd', 'npm') else None
     if node and not str(Path(node).resolve()).startswith('/usr/'):
-        reads.append(str(Path(node).resolve().parent))
-    if reads:
-        result['read_paths'] = list(dict.fromkeys(reads))
+        derived.append(str(Path(node).resolve().parent))
+    command, launched = _launch_grants(command, result.get('env', {}), base)
+    result['command'] = command
+    derived.extend(launched)
+    # A derived folder is only granted when it stays clear of home and credential stores.
+    reads.extend(item for item in derived if Path(item).exists() and _safe_grant(Path(item)))
     launcher = Path(found).stem
     directory = paths.home() / 'mcp-runtime' / name
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -200,13 +354,19 @@ def prepare_local(name: str, definition: dict) -> dict:
         env.setdefault('npm_config_cache' if launcher in ('npx', 'npm') else 'UV_CACHE_DIR', str(directory))
         if launcher in ('uv', 'uvx'):
             env.setdefault('UV_PYTHON_INSTALL_DIR', str(directory / 'python'))
-    # Local source/JAR launchers and explicitly supplied credential files.
+    # Local source/JAR launchers and explicitly supplied credential files. A file
+    # in a credential store or Eirene's data is withheld unless read_paths names it.
+    withheld = []
     for part in [*command[1:], *env.values()]:
         if not isinstance(part, str) or '://' in part:
             continue
         candidate = Path(part.split('=', 1)[-1]).expanduser()
         if candidate.is_absolute() and candidate.is_file():
-            reads.append(str(candidate))
+            target = _resolved(candidate)
+            if target and _safe_grant(target):
+                reads.append(str(candidate))
+            elif str(candidate) not in explicit:
+                withheld.append(str(candidate))
     if launcher in ('docker', 'podman'):
         config = Path(env.get('DOCKER_CONFIG', os.environ.get('DOCKER_CONFIG', str(Path.home() / '.docker')))).expanduser()
         if config.is_dir():
@@ -251,6 +411,11 @@ def prepare_local(name: str, definition: dict) -> dict:
             elif 'server-puppeteer' in packages:
                 env.setdefault('PUPPETEER_LAUNCH_OPTIONS', json.dumps({'headless': True}))
     result['env'] = env
-    result['read_paths'] = list(dict.fromkeys(reads))
+    result['_derived_read_paths'] = list(dict.fromkeys(reads))
+    if withheld:
+        result['_withheld_read_paths'] = list(dict.fromkeys(withheld))
+    else:
+        result.pop('_withheld_read_paths', None)
+    result['read_paths'] = list(dict.fromkeys([*explicit, *reads]))
     result['write_paths'] = list(dict.fromkeys(result['write_paths']))
     return result

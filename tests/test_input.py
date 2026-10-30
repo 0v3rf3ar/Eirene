@@ -231,7 +231,7 @@ async def test_slash_opens_the_command_menu(workdir):
         assert app.slash.open
         assert app.prompt.menu_open
         listing = content(app.slash)
-        assert "/help" in listing and "/connect" in listing
+        assert "/agents" in listing and "/connect" in listing
     finally:
         await context.__aexit__(None, None, None)
 
@@ -817,6 +817,77 @@ async def test_copy_prompt_selection(workdir, monkeypatch, shortcut):
         assert copied and all(text == "line\nsecond" for text in copied)
         assert app.prompt.text == "first line\nsecond line"
         assert app.prompt.selection == selection
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_over_ssh_copy_and_links_use_the_users_own_terminal(workdir, monkeypatch):
+    from textual.document._document import Selection
+
+    monkeypatch.setenv("SSH_CONNECTION", "10.0.0.2 51000 10.0.0.1 22")
+    monkeypatch.setattr("eirene.ui.terminal.shutil.which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr("eirene.ui.terminal.subprocess.run",
+                        lambda *a, **k: pytest.fail("used the server's clipboard tool"))
+    monkeypatch.setattr("webbrowser.open", lambda *a, **k: pytest.fail("opened a browser on the server"))
+    app, pilot, context = await start(workdir)
+    try:
+        written = []
+        monkeypatch.setattr(app._driver, "write", written.append)
+        app.prompt.value = "copy this"
+        app.prompt.selection = Selection((0, 0), (0, 4))
+        await pilot.press("ctrl+shift+c")
+        await pilot.pause()
+        import base64
+        assert "\x1b]52;c;" + base64.b64encode(b"copy").decode() in "".join(written)
+        notices = " ".join(str(block.content) for block in app.query("NoticeBlock"))
+        assert "xclip" not in notices and "OSC 52" in notices
+        app.open_url("https://example.com/x")
+        assert app.clipboard == "https://example.com/x"
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("ssh,setting,captured", [
+    (True, "auto", False), (False, "auto", True), (True, "eirene", True), (False, "terminal", False)])
+async def test_mouse_mode_defaults_to_terminal_selection_over_ssh(workdir, monkeypatch, ssh, setting, captured):
+    if ssh:
+        monkeypatch.setenv("SSH_TTY", "/dev/pts/4")
+    from eirene.core.config import Config
+    config = Config.load()
+    config.set("mouse", setting)
+    config.save()
+    app, pilot, context = await start(workdir)
+    try:
+        calls = []
+        app._driver._enable_mouse_support = lambda: calls.append("on")
+        app._driver._disable_mouse_support = lambda: calls.append("off")
+        app._start_mouse_mode()
+        assert app._mouse_captured is captured and calls == ["on" if captured else "off"]
+        notices = " ".join(str(block.content) for block in app.query("NoticeBlock"))
+        assert ("your terminal's own selection" in notices) is (not captured)
+        await pilot.press("f4")
+        await pilot.pause()
+        assert app._mouse_captured is (not captured) and calls[-1] == ("off" if captured else "on")
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_page_keys_scroll_the_transcript_from_the_prompt(workdir):
+    app, pilot, context = await start(workdir, size=(80, 20))
+    try:
+        for index in range(60):
+            app.say(f"line {index}")
+        await settle(pilot)
+        app.action_jump_to_end()
+        await settle(pilot)
+        bottom = app.transcript.scroll_y
+        await pilot.press("pageup")
+        await settle(pilot)
+        raised = app.transcript.scroll_y
+        assert raised < bottom
+        await pilot.press("pagedown")
+        await settle(pilot)
+        assert app.transcript.scroll_y > raised
     finally:
         await context.__aexit__(None, None, None)
 

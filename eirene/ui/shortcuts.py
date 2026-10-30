@@ -20,6 +20,7 @@ SHORTCUTS = (
     ("ctrl+b", "manage_processes", "Ctrl + B", "View or stop running commands"),
     ("f2", "pick_model", "F2", "Choose a model"),
     ("f3", "pick_session", "F3", "Switch sessions"),
+    ("f4", "toggle_mouse", "F4", "Switch mouse: Eirene or terminal selection"),
     ("ctrl+t", "pick_theme", "Ctrl + T", "Choose a theme"),
     ("ctrl+p", "toggle_suggestions", "Ctrl + P", "Toggle prompt suggestions"),
 )

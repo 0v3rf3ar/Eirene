@@ -37,6 +37,10 @@ def command(command: str, root: Path, *, backend: str = "auto",
             raise ToolError(f"mount path does not exist: {path}; request its existing parent")
         if path == Path("/"):
             raise ToolError("grant a specific directory, not the filesystem root")
+    # A read grant inside a writable mount is already readable; binding it again
+    # read-only after its parent would quietly make that part unwritable.
+    writable = [*writes, *([] if read_only else [root])]
+    reads = [p for p in reads if not any(p == w or w in p.parents for w in writable)]
     mounts = [(root, not read_only), *((p, False) for p in reads),
               *((p, True) for p in writes)]
     if not read_only:

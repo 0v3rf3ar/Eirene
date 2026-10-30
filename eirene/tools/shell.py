@@ -487,10 +487,24 @@ async def _start(command: str, cwd: Path, env: dict[str, str] | None,
     elif selected in {"powershell", "pwsh"}:
         import base64
         executable = shutil.which("pwsh") or shutil.which("powershell")
-        script = ("$ErrorActionPreference='Stop'; "
+        # Windows PowerShell serializes progress and errors as CLIXML on a redirected
+        # stderr; keep both out of the merged output and report errors as text.
+        # Cmdlet errors stop the script, but a global 'Stop' would also abort on any
+        # native stderr line (git hints) once 2>&1 wraps it; native lines stay verbatim.
+        # An AppContainer cannot open the volume root, so PowerShell falls back to C:\
+        # and denies every relative path; reach the workspace through its own drive.
+        script = ("$ErrorActionPreference='Continue'; $PSDefaultParameterValues['*:ErrorAction']='Stop'; "
+                  "$ProgressPreference='SilentlyContinue'; "
                   "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); "
-                  "$global:LASTEXITCODE=0; & {\n" + command +
-                  "\n} | Out-String -Stream -Width 4096; if (-not $?) { exit 1 }; exit $LASTEXITCODE")
+                  "if ((Get-Location).ProviderPath -ne [Environment]::CurrentDirectory) { "
+                  "$null = New-PSDrive -Name Workspace -PSProvider FileSystem "
+                  "-Root ([Environment]::CurrentDirectory) -Scope Global; Set-Location Workspace:\\ }; "
+                  "$global:LASTEXITCODE=0; $failed=$false; try { & {\n" + command +
+                  "\n} 2>&1 | ForEach-Object { if ($_ -isnot [System.Management.Automation.ErrorRecord]) { $_ } "
+                  "elseif ($_.FullyQualifiedErrorId -like 'NativeCommandError*') { $_.Exception.Message } "
+                  "else { $failed=$true; $_ | Out-String -Width 4096 } } | Out-String -Stream -Width 4096 } "
+                  "catch { [Console]::Out.Write(($_ | Out-String -Width 4096)); exit 1 }; "
+                  "if ($failed) { exit 1 }; exit $LASTEXITCODE")
         encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
         launch_argv = [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
     elif selected == "cmd":
@@ -511,7 +525,12 @@ async def _start(command: str, cwd: Path, env: dict[str, str] | None,
             network=not isolate_network, read_paths=read_paths, write_paths=write_paths,
             read_only=read_only, launch_argv=launch_argv, workdir=cwd)
         kwargs["env"] = environments.environment({**NONINTERACTIVE_ENV, **(env or {})})
-    process = await asyncio.create_subprocess_exec(*launch_argv, **kwargs)
+    if IS_WINDOWS and argv is None and selected == "cmd":
+        # cmd parses its own command line; exec-style quoting (\") would corrupt quoted
+        # paths. Python's shell form passes the line verbatim as cmd.exe /c "<line>".
+        process = await asyncio.create_subprocess_shell(launch_argv[-1], **kwargs)
+    else:
+        process = await asyncio.create_subprocess_exec(*launch_argv, **kwargs)
     if IS_WINDOWS:
         try:
             own_windows(process)

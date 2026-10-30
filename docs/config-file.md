@@ -136,6 +136,7 @@ choices, platform behavior, and provider-specific limits can narrow them.
   "reduce_motion": false,
   "companion": false,
   "accessible_icons": false,
+  "mouse": "auto",
   "credential_store": "file",
   "search_api": {},
   "check_updates": true
@@ -220,6 +221,7 @@ layers are independent: changing one does not replace credentials for another.
 | `reduce_motion` | `false` | Static activity markers. `--reduce-motion` or a nonempty `EIRENE_REDUCE_MOTION` also enables it. |
 | `companion` | `false` | Optional animated companion above the input. `/companion [on|off]` toggles and saves this preference in graphics-capable terminals. Hidden in small windows and when graphics are unavailable. |
 | `accessible_icons` | `false` | Alternative icon presentation. |
+| `mouse` | `"auto"` | `"terminal"` leaves selection, copying and link clicks to the terminal; `"eirene"` handles the mouse in Eirene; `"auto"` uses the terminal's over SSH. F4 switches for the session. |
 | `check_updates` | `true` | Startup release checks. A nonempty `EIRENE_NO_UPDATE_CHECK` skips these checks; `/update check` remains explicit. |
 
 `isolate_network`, `auto_compact`, `reduce_motion`, `companion`, `seasonal_effects`, and `accessible_icons` are

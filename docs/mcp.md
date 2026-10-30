@@ -208,6 +208,31 @@ actual boolean `network: true`, not the string `"true"`. HTTP/SSE declarations
 default to network access because their connection is remote; an explicit
 `network: false` remains a block when network isolation is enabled.
 
+For servers added through `/mcp`, Eirene derives the read grants a local
+launcher needs each time it starts, and keeps them apart from the `read_paths`
+you write yourself:
+
+- A script argument (`.py`, `.js`, `.ts`, `.jar`, and similar) gets its project
+  root: the nearest folder with a project marker such as `pyproject.toml`,
+  `package.json`, or `.git`, widened to the enclosing Git repository for
+  monorepos. Without a marker it gets the script's own folder.
+- Folder arguments (for example `uv run --directory /path`), `PYTHONPATH` and
+  `NODE_PATH` entries, and a project venv's project are granted too.
+- Relative script paths are read from the project, and linked scripts launch
+  from their real location so the sandbox can mount them.
+- A derived grant is never a filesystem or drive root, a shared top-level
+  folder (`/home`, `/Users`, `/Volumes`, `/opt`, `C:\Users`, `C:\Windows`,
+  `C:\Program Files`, and similar), your home folder or anything above it, the
+  system temp folder or above, a credential store (`~/.ssh`, `~/.gnupg`,
+  `~/.aws`, `~/.kube`, `~/.docker`, macOS `~/Library/Keychains`, Windows
+  `AppData\Roaming\Microsoft\Credentials`, and others), or Eirene's own data
+  outside its plugin and MCP runtime folders. These checks ignore case, as macOS
+  and Windows volumes usually do. A grant narrows to the script's folder, then to
+  the file alone, rather than widening.
+- A file named in the command or environment that sits in one of those places
+  is withheld, and the setup confirmation lists it. Add it to `read_paths` to
+  share it deliberately.
+
 Process isolation and declared grants control what the server process can access.
 They do not authenticate the downstream service or interpret every remote tool's
 side effect. Configure service accounts and server-side restrictions separately.

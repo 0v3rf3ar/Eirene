@@ -43,8 +43,16 @@ def write_terminal_title(driver, text: str) -> bool:
     return True
 
 
+def remote_session(env=None) -> bool:
+    """Over SSH the clipboard, browser and desktop belong to the user's own machine."""
+    env = os.environ if env is None else env
+    return bool(env.get("SSH_CONNECTION") or env.get("SSH_CLIENT") or env.get("SSH_TTY"))
+
+
 def clipboard_tool() -> list[str]:
-    """The first clipboard helper on this machine."""
+    """The first clipboard helper on this machine; none over SSH, where it is the server's."""
+    if remote_session():
+        return []
     for name, command in WRITERS:
         if shutil.which(name):
             return command
@@ -65,7 +73,17 @@ def copy_to_system(text: str) -> str:
     return command[0] if process.returncode == 0 else ""
 
 
-def osc52(text: str) -> str:
-    """The escape sequence some terminals accept."""
+def osc52(text: str, env=None) -> str:
+    """Ask the terminal showing Eirene, even across SSH, to set its own clipboard.
+
+    tmux drops application OSC 52 unless `set-clipboard on`, and forwards it inside a
+    DCS passthrough only with `allow-passthrough on`; send both so either works.
+    """
+    env = os.environ if env is None else env
     encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
-    return f"\x1b]52;c;{encoded}\a"
+    sequence = f"\x1b]52;c;{encoded}\a"
+    if env.get("TMUX"):
+        return sequence + "\x1bPtmux;" + sequence.replace("\x1b", "\x1b\x1b") + "\x1b\\"
+    if env.get("STY"):  # GNU screen
+        return "\x1bP" + sequence + "\x1b\\"
+    return sequence

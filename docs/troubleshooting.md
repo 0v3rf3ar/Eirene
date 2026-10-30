@@ -36,6 +36,8 @@ has been exercised.
 | An unattended Windows command fails | Check AppContainer startup, workspace ACL access and unsupported grants; see [platform support](platforms.md). |
 | A server disappears after a response | A temporary host-access grant may have ended. See [processes](processes.md). |
 | Copying does not reach the desktop | Check terminal clipboard integration and Linux `wl-clipboard` or `xclip`. |
+| Copying over SSH does not reach your computer | Use your terminal's own selection (the default over SSH; F4 switches) and its copy shortcut. See [over SSH](terminal-interface.md#over-ssh). |
+| ChatGPT sign-in over SSH ends on a 127.0.0.1 error page | Paste that page's address into Eirene, or use `ssh -L` with the shown port. |
 | A notification does not appear | Run `/notification test` and check the desktop session and OS settings. |
 
 ## A response is slow or reconnecting

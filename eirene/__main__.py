@@ -103,6 +103,11 @@ def open_session(sandbox: Path, resume: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # A legacy Windows console code page cannot encode every model character;
+    # replace them rather than abort a headless run mid-answer.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
     args = build_parser().parse_args(argv)
 
     if args.mcp_proxy:
