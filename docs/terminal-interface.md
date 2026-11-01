@@ -41,6 +41,8 @@ for the input field.
 Type `/` to browse commands. Up and Down select a menu item, Tab completes it
 without running it, and Enter accepts it. A command that needs arguments lets you
 supply them before submitting the task. Escape closes the active popup.
+While a popup too tall for its window, such as `/help`, is open, Up and Down
+scroll it instead of recalling earlier prompts.
 
 ## Keyboard shortcuts
 
@@ -81,9 +83,17 @@ stop it. A quiet command
 can still be running; elapsed time alone does not establish that it is stuck.
 See [running commands](processes.md).
 
-The live status indicator can show model reasoning or waiting activity without
-adding that text to the saved conversation. Reduced-motion settings keep the
-status readable with a static marker.
+While Eirene works, the live status line shows a spinner, a word, the time
+since the turn started and what is happening now:
+
+```text
+⠋ Tinkering… (1m 3s · searching)
+```
+
+The activity is `thinking`, `reasoning`, `coding` (writing files or running
+commands), `searching` (reading and searching) or `answering`. None of it is
+added to the saved conversation. Press Esc to interrupt the turn.
+Reduced-motion settings keep the status readable with a static marker.
 
 The optional Eirene companion starts disabled. `/companion` toggles her silently;
 `/companion on` and `/companion off` set and save the preference explicitly.

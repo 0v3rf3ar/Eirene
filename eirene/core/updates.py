@@ -254,7 +254,7 @@ def install(staged: Path) -> str:
         shutil.copyfile(staged, pending)
         pending.chmod(target.stat().st_mode & 0o777)
         os.replace(pending, target)
-        return "Update installed. Exit and restart Eirene to use the new version."
+        return "Update installed. Run /restart to use the new version."
     except BaseException:
         pending.unlink(missing_ok=True)
         raise

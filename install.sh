@@ -264,10 +264,119 @@ has_shell() {
 }
 join() { local IFS=','; local text="$*"; printf '%s' "${text//,/, }"; }
 
+# Linux runs every command inside Bubblewrap. Missing bwrap or blocked user
+# namespaces are fixed outside Eirene, so say exactly how now, not mid-task.
+# Empty when the setting does not exist on this kernel; never fails under set -e.
+read_setting() { local value=''; value=$(cat "$1" 2>/dev/null) || value=''; printf '%s' "${value//[!0-9]/}"; }
+bubblewrap_package_command() {
+    local sudo=''
+    [[ "$(id -u 2>/dev/null || echo 1)" == 0 ]] || sudo='sudo '
+    if command -v apt-get >/dev/null 2>&1; then printf '%sapt install bubblewrap' "$sudo"
+    elif command -v dnf >/dev/null 2>&1; then printf '%sdnf install bubblewrap' "$sudo"
+    elif command -v yum >/dev/null 2>&1; then printf '%syum install bubblewrap' "$sudo"
+    elif command -v pacman >/dev/null 2>&1; then printf '%spacman -S bubblewrap' "$sudo"
+    elif command -v zypper >/dev/null 2>&1; then printf '%szypper install bubblewrap' "$sudo"
+    elif command -v apk >/dev/null 2>&1; then printf '%sapk add bubblewrap' "$sudo"
+    elif command -v xbps-install >/dev/null 2>&1; then printf '%sxbps-install -S bubblewrap' "$sudo"
+    elif command -v emerge >/dev/null 2>&1; then printf '%semerge sys-apps/bubblewrap' "$sudo"
+    fi
+}
+in_container() {
+    [[ -f /.dockerenv || -f /run/.containerenv ]] && return 0
+    command -v systemd-detect-virt >/dev/null 2>&1 && systemd-detect-virt --container --quiet 2>/dev/null
+}
+# A boxed advisory in the installer's colours: title, explanation, then commands.
+advise() {
+    local title=$1 line
+    shift
+    clear_pending
+    if [[ "$fancy" == 1 ]]; then
+        printf '\n  %s╭─%s %s!%s %s%s%s\n' "$yellow" "$reset" "$yellow$bold" "$reset" "$bold" "$title" "$reset" >&2
+        for line in "$@"; do
+            case "$line" in
+                '$ '*) printf '  %s│%s   %s%s%s\n' "$yellow" "$reset" "$bold$cyan" "${line#'$ '}" "$reset" >&2 ;;
+                '') printf '  %s│%s\n' "$yellow" "$reset" >&2 ;;
+                *) printf '  %s│%s %s%s%s\n' "$yellow" "$reset" "$dim" "$line" "$reset" >&2 ;;
+            esac
+        done
+        printf '  %s╰─%s\n' "$yellow" "$reset" >&2
+    else
+        printf 'warning: %s\n' "$title" >&2
+        for line in "$@"; do
+            [[ -n "$line" ]] && printf '  %s\n' "${line#'$ '}" >&2
+        done
+    fi
+}
+check_sandbox() {
+    [[ "$os_name" == Linux ]] || return 0
+    local bwrap command error='' persist='/etc/sysctl.d/90-eirene-userns.conf'
+    begin 'Checking the command sandbox'
+    bwrap=$(command -v bwrap 2>/dev/null || true)
+    if [[ -z "$bwrap" ]]; then
+        command=$(bubblewrap_package_command)
+        if [[ -n "$command" ]]; then
+            advise 'Command sandbox not ready: Bubblewrap is not installed' \
+                'Eirene runs every command inside Bubblewrap and never without it,' \
+                'so commands will refuse to start until it is installed:' '' \
+                "\$ $command" '' 'Then check it inside Eirene with /sandbox.'
+        else
+            advise 'Command sandbox not ready: Bubblewrap is not installed' \
+                'Eirene runs every command inside Bubblewrap and never without it.' \
+                "Install your distribution's bubblewrap package, then check with /sandbox."
+        fi
+        return 0
+    fi
+    # The same isolation Eirene starts for a command, on a no-op.
+    if command -v timeout >/dev/null 2>&1; then
+        error=$(timeout 10 "$bwrap" --die-with-parent --new-session --unshare-all --cap-drop ALL \
+            --ro-bind / / true 2>&1 >/dev/null) && { done_step "Command sandbox ready $dim(Bubblewrap)$reset"; return 0; }
+    else
+        error=$("$bwrap" --die-with-parent --new-session --unshare-all --cap-drop ALL \
+            --ro-bind / / true 2>&1 >/dev/null) && { done_step "Command sandbox ready $dim(Bubblewrap)$reset"; return 0; }
+    fi
+    error=${error%%$'\n'*}
+    error=${error#bwrap: }
+    local reason=${error:-bwrap exited with an error}
+    if [[ "$(read_setting /proc/sys/kernel/unprivileged_userns_clone)" == 0 ]]; then
+        advise 'Command sandbox blocked: user namespaces are turned off' \
+            "Bubblewrap is installed but cannot start ($reason)." \
+            'This kernel disallows unprivileged user namespaces. Allow them now:' '' \
+            '$ sudo sysctl -w kernel.unprivileged_userns_clone=1' '' \
+            'and keep it after a reboot:' '' \
+            "\$ echo kernel.unprivileged_userns_clone=1 | sudo tee $persist"
+    elif [[ "$(read_setting /proc/sys/user/max_user_namespaces)" == 0 ]]; then
+        advise 'Command sandbox blocked: user namespaces are turned off' \
+            "Bubblewrap is installed but cannot start ($reason)." \
+            'This system allows no user namespaces. Allow them now:' '' \
+            '$ sudo sysctl -w user.max_user_namespaces=15000' '' \
+            'and keep it after a reboot:' '' \
+            "\$ echo user.max_user_namespaces=15000 | sudo tee $persist"
+    elif [[ "$(read_setting /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" == 1 ]]; then
+        advise 'Command sandbox blocked by AppArmor' \
+            "Bubblewrap is installed but cannot start ($reason)." \
+            'AppArmor only lets profiled programs use user namespaces. Allow them now:' '' \
+            '$ sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0' '' \
+            'and keep it after a reboot:' '' \
+            "\$ echo kernel.apparmor_restrict_unprivileged_userns=0 | sudo tee $persist" '' \
+            'Or give bwrap its own AppArmor profile that allows userns.'
+    elif in_container; then
+        advise 'Command sandbox blocked inside this container' \
+            "Bubblewrap is installed but cannot start ($reason)." \
+            'The container forbids nested namespaces. Enable nesting for it' \
+            '(Proxmox LXC: features: nesting=1; Docker: a seccomp profile that' \
+            'allows unshare), or run Eirene on the host.'
+    else
+        advise 'Command sandbox cannot start' \
+            "Bubblewrap is installed but failed: $reason" \
+            'Eirene runs commands only inside it. Check that this kernel allows' \
+            'unprivileged user namespaces, then check again with /sandbox.'
+    fi
+}
+
 if [[ "$path_only" == 0 ]]; then
     show_portrait
     if [[ "$fancy" == 1 ]]; then
-        printf '\n  %sE I R E N E%s  %s·  terminal coding agent%s\n\n' "$bold$cyan" "$reset" "$dim" "$reset"
+        printf '\n  %sE I R E N E%s  %s·  terminal AI agent%s\n\n' "$bold$cyan" "$reset" "$dim" "$reset"
     else
         printf 'Eirene installer\n'
     fi
@@ -425,10 +534,17 @@ if [[ "${EIRENE_NO_PATH:-0}" != 1 ]]; then
         # and profiles can create additional groups, so snapshot descendants
         # before signalling the shell; their parent links disappear on exit.
         # Only resolve PATH here: another frozen-binary startup is unnecessary.
+        # An interactive Bash on the installer's terminal tries to take it over and
+        # is stopped (SIGTTIN/SIGTTOU) until the watchdog fires. A new session has
+        # no terminal; setsid -w keeps the exit status. macOS has no setsid.
+        detach=()
+        if command -v setsid >/dev/null 2>&1 && setsid -w true </dev/null >/dev/null 2>&1; then
+            detach=(setsid -w)
+        fi
         verify_bash_profile() (
             set +e
             set -m
-            PATH="$initial_path" bash --noprofile --norc +m -ic \
+            PATH="$initial_path" "${detach[@]}" bash --noprofile --norc +m -ic \
                 'set +m; source "$1"; hash -r; [[ "$(type -P eirene)" == "$2/eirene" ]] && printf verified > "$3"' \
                 bash "$HOME/.bashrc" "$install_dir" "$temporary/profile-verified" < /dev/null \
                 > "$temporary/shell-check.txt" 2>&1 &
@@ -499,6 +615,7 @@ if [[ "$path_only" == 1 ]]; then
     exit 0
 fi
 
+check_sandbox
 launch=$(quote "$install_dir/eirene")
 printf '\n%s%s%s is installed.%s\n' "$pad" "$bold$green" "${installed_version:-eirene ${version#v}}" "$reset"
 if [[ "${EIRENE_NO_PATH:-0}" == 1 || "$path_ready" == 0 ]]; then

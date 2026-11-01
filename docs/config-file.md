@@ -125,6 +125,8 @@ choices, platform behavior, and provider-specific limits can narrow them.
   "execution_isolation": "auto",
   "permissions": "sandboxed",
   "prompt_suggest": false,
+  "recap": true,
+  "fast_mode": false,
   "isolate_network": true,
   "plugins": {},
   "hooks": {},
@@ -218,6 +220,8 @@ layers are independent: changing one does not replace credentials for another.
 | `seasonal_effects` | `true` | Automatic snowfall in the empty chat during December, using the local system date. |
 | `notifications` | `false` | Desktop notifications; `/notification` controls it. |
 | `prompt_suggest` | `false` | Additional model requests for follow-up drafts; `/prompt-suggest` controls it. |
+| `recap` | `true` | A one-line `※ recap` of the session after a completed turn once the transcript has grown by about two screen heights since the last one. Each recap is one additional model request and is never added to the conversation. Set `false` to disable. |
+| `fast_mode` | `false` | Ask supported models for the provider's faster, pricier serving tier; `/fast` controls it. See [fast mode](fast-mode.md). |
 | `reduce_motion` | `false` | Static activity markers. `--reduce-motion` or a nonempty `EIRENE_REDUCE_MOTION` also enables it. |
 | `companion` | `false` | Optional animated companion above the input. `/companion [on|off]` toggles and saves this preference in graphics-capable terminals. Hidden in small windows and when graphics are unavailable. |
 | `accessible_icons` | `false` | Alternative icon presentation. |

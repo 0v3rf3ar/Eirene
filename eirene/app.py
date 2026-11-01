@@ -9,6 +9,7 @@ import sys
 import textwrap
 import threading
 import time
+from datetime import datetime
 from collections.abc import Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -26,6 +27,7 @@ from .core import agent as agent_mod
 from .core import crash, notify, paths, questions
 from .core import logging as runtime_logging
 from .core import plans as plan_mod
+from .core import recap as recap_mod
 from .core import skills as skills_mod
 from .core.attachments import (MAX_DROPPED_FILES, attachment_manifest, store_attachment,
                                store_attachment_bytes)
@@ -46,7 +48,7 @@ from .ui.theme import THEMES
 from .ui.format import display_path
 from .ui.aside import AsidePanel
 from .ui.chat import (AnswerBlock, ArtBlock, BackToBottom, ChangeBlock, CommandBlock,
-                      DiffBlock, FLUSH_INTERVAL, NoticeBlock, PromptNavigator,
+                      DiffBlock, FLUSH_INTERVAL, NoticeBlock, PromptNavigator, RecapBlock,
                       ToolBlock, Transcript, UserBlock)
 from .ui.complete import SlashMenu
 from .ui.diff_panel import DiffPanel, DiffToggle
@@ -55,7 +57,7 @@ from .ui.companion import Companion, prepare_renderer
 from .ui.permission import PermissionBar
 from .ui.picker import Picker
 from .ui.processes import ProcessBar
-from .ui.status import ContextIndicator, StatusLine
+from .ui.status import ContextIndicator, StatusLine, clock_label, elapsed_label
 from .ui.compaction import CompactionProgress
 from .ui.splash import StartupSplash
 from .ui.tasks import TaskList
@@ -76,6 +78,9 @@ def _fit(value: str, width: int) -> str:
     body = Text(str(value), no_wrap=True, overflow="ellipsis")
     body.truncate(max(width, 1), overflow="ellipsis", pad=True)
     return body.plain
+
+
+UNNAMED_TITLE = "eirene"
 
 
 class Eirene(App):
@@ -139,7 +144,10 @@ class Eirene(App):
         self._aside_task: asyncio.Task | None = None
         self._text_future: asyncio.Future[str | None] | None = None
         self._new_session = not resume
+        # The drawing chosen for this chat, and a smaller stand-in while the
+        # window is too narrow for it.
         self._banner: str | None = None
+        self._banner_fallback: str | None = None
         self._tip = art.tip()
         self._titled = bool(self.session.name)
         self._busy = False
@@ -151,6 +159,11 @@ class Eirene(App):
         self._suggestion_task = None
         self._suggestion_status = "Waiting for a completed reply"
         self._last_suggestion_exchange = None
+        self._recaps: dict[str, recap_mod.Tracker] = {}
+        self._fast_state = ""
+        self._fast_checked: tuple | None = None
+        self._recap_task = None
+        self.restart_requested = False
         self._mouse_captured = True
         self._clipboard_hinted = False
         self._exit_armed = float("-inf")
@@ -424,15 +437,20 @@ class Eirene(App):
         except NoMatches:
             pass
 
+    def tab_label(self) -> str:
+        """The chat's own name alone once it has one, else just "eirene"."""
+        return self.session.name or UNNAMED_TITLE
+
     def name_the_tab(self) -> None:
         """Put the chat name on the terminal tab."""
-        label = self.session.name or self.sandbox.root.name or "eirene"
+        label = self.tab_label()
         if self._busy:
-            mark = art.spinner_frame(self._tab_tick)
-            write_terminal_title(getattr(self, "_driver", None),
-                                 f"{mark} eirene - {label}")
-            return
-        write_terminal_title(getattr(self, "_driver", None), f"eirene - {label}")
+            # The same spinner the chat's status line picked for this turn,
+            # stepped at the title's own slower rate so no frames are skipped.
+            frame = ("*" if self.config.get("reduce_motion", False)
+                     else art.spinner_frame(self._tab_tick, self.status.spinner_style))
+            label = f"{frame} {label}"
+        write_terminal_title(getattr(self, "_driver", None), label)
 
     def refresh_plan(self) -> None:
         """Show only this session's unfinished plan."""
@@ -554,9 +572,22 @@ class Eirene(App):
         width = available_width or self.size.width or 80
         room = max(width, 1)
         art_room = max(width - art.BANNER_MARGIN, 1)
-        if self._banner is None or art.art_width(self._banner) > art_room:
+        full_size = {text for text, _ in art.SIZED}
+        if self._banner is None:
             self._banner = art.banner(width)
-        lines = [self._banner, f"v{__version__}"[:room], ""]
+        elif self._banner not in full_size and art.SIZED[0][1] <= art_room:
+            # Started too narrow for real art; now there is room for some.
+            self._banner = art.banner(width)
+        if art.art_width(self._banner) <= art_room:
+            # Wide enough again: bring back the same drawing as before.
+            self._banner_fallback = None
+            shown = self._banner
+        else:
+            fallback = self._banner_fallback
+            if fallback is None or art.art_width(fallback) > art_room:
+                fallback = self._banner_fallback = art.banner(width)
+            shown = fallback
+        lines = [shown, f"v{__version__}"[:room], ""]
         lines.extend(self._intro_panel(room))
         return "\n".join(lines)
 
@@ -621,7 +652,37 @@ class Eirene(App):
         detail = ""
         if self.agent.provider_key:
             detail = f"{providers.display_name(self.agent.provider_key, compact=True)}({self.agent.model})"
+            fast = self.agent.fast_state()
+            if fast == "on":
+                detail += " · fast"
+            elif fast == "cooling":
+                detail += " · fast (cooling down)"
         self.mode_line.show(self.agent.mode, detail)
+        self._learn_fast_support()
+
+    def _learn_fast_support(self) -> None:
+        """Load the catalog that says whether this model has a fast tier.
+
+        Codex and ChatGPT only know once their model list is read; /fast is
+        listed as soon as it is.
+        """
+        provider, model = self.agent.provider, self.agent.model
+        check = getattr(provider, "check_fast", None)
+        key = (id(provider), model)
+        if check is None or not model or key == self._fast_checked:
+            return
+        self._fast_checked = key
+
+        async def learn() -> None:
+            try:
+                supported = await check(model)
+            except Exception:  # noqa: BLE001 - /fast just stays unlisted
+                self.runtime_logger.debug("fast.check_failed", exc_info=True)
+                return
+            if supported and self.agent.provider is provider and self.agent.model == model:
+                self.refresh_mode_line()
+
+        self.spawn(learn(), name="fast mode support")
 
     # input
 
@@ -866,7 +927,10 @@ class Eirene(App):
                         attachments: list[dict] | None = None,
                         files: list[dict] | None = None) -> None:
         self.clear_prompt_suggestion()
-        self.status.start()
+        if self._recap_task is not None and not self._recap_task.done():
+            # Don't compete with the new turn for the provider (local models).
+            self._recap_task.cancel()
+        self.status.start(art.session_spinner(self.session.id))
         self.companion.start_turn()
         self.mark_busy(True)
         answer: AnswerBlock | None = None
@@ -974,7 +1038,8 @@ class Eirene(App):
                     await self.push(NoticeBlock(self._friendly_failure(event.text)))
                 elif isinstance(event, agent_mod.TurnDone):
                     self.transcript.settle()
-                    self.status.stop(self._turn_note(event))
+                    self.status.stop(self._turn_note(event),
+                                     "done" if event.status == "completed" else "dot")
                     self.companion.finish_turn(
                         event.status == "completed" and questions.wants_an_answer(reply_text))
                     self._announce_done(event, answer)
@@ -984,6 +1049,7 @@ class Eirene(App):
                         turn_completed = True
                         self._last_suggestion_exchange = (self.session.id, record_text or text, reply_text)
                         self._offer_prompt_suggestion(record_text or text, reply_text)
+                        self._offer_recap()
         except asyncio.CancelledError:
             try:
                 self.transcript.settle()
@@ -1003,9 +1069,19 @@ class Eirene(App):
                 if self.status.active:
                     self.status.stop()
                 self.transcript.settle()
+                self._note_fast_fallback()
                 self.prompt.focus()
             except NoMatches:
                 pass
+
+    def _note_fast_fallback(self) -> None:
+        """Say once when fast limits pushed this session back to standard speed."""
+        state = self.agent.fast_state()
+        if state == "cooling" and self._fast_state != "cooling":
+            self.say("fast mode limit reached · continuing at standard speed; "
+                     "fast resumes on its own after a short cooldown", "warn")
+        self._fast_state = state
+        self.refresh_mode_line()
 
     def _name_the_session(self, request: str, answer) -> None:
         """Let the model name a fresh session."""
@@ -1029,6 +1105,50 @@ class Eirene(App):
         self.session.rename(title)
         self.name_the_tab()
 
+    def _offer_recap(self) -> None:
+        """Measure once the finished turn is laid out, then maybe recap."""
+        session, turn = self.session, self.turn
+        self.call_after_refresh(self._maybe_recap, session, turn)
+
+    def _transcript_height(self) -> tuple[int, int]:
+        """Rendered transcript height and the visible screen height, in rows."""
+        return self.transcript.virtual_size.height, self.transcript.size.height
+
+    def _maybe_recap(self, session, turn) -> None:
+        """Show a short recap once the chat has grown by a couple of screens."""
+        if (not self.config.get("recap", True) or not self.agent.ready
+                or session is not self.session or self.turn is not turn):
+            return
+        if self._recap_task is not None and not self._recap_task.done():
+            return
+        try:
+            height, screen = self._transcript_height()
+        except NoMatches:
+            return
+        tracker = self._recaps.setdefault(session.id, recap_mod.Tracker())
+        if not tracker.due(height, screen):
+            return
+
+        async def generate():
+            try:
+                text = await asyncio.wait_for(self.agent.recap(), 120)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - a recap is optional
+                self.runtime_logger.warning("recap.failed", exc_info=True)
+                text = ""
+            # Never interleave with a newer turn's output or another session;
+            # a later completed turn retries since the mark did not move.
+            if session is not self.session or self.turn is not turn:
+                return
+            # A failed or unusable reply waits for more growth instead of
+            # costing a request after every turn.
+            tracker.shown(height)
+            if text and self.config.get("recap", True):
+                await self.push(RecapBlock(text))
+
+        self._recap_task = self.spawn(generate(), name="session recap")
+
     def clear_prompt_suggestion(self) -> None:
         self._suggestion_generation += 1
         if self._suggestion_task is not None and not self._suggestion_task.done():
@@ -1041,9 +1161,6 @@ class Eirene(App):
 
     def _set_suggestion_status(self, text: str) -> None:
         self._suggestion_status = text
-        if self.aside.open and self.aside._toggle_callback == self.set_prompt_suggestions:
-            from .commands.prompt_suggest import show
-            show(self)
 
     def set_prompt_suggestions(self, enabled: bool) -> None:
         self.config.set("prompt_suggest", enabled)
@@ -1183,14 +1300,16 @@ class Eirene(App):
         title = self.session.name or self.sandbox.root.name or "eirene"
         notify.send(title, body or f"done in {event.seconds:.0f}s")
 
-    def _turn_note(self, event: agent_mod.TurnDone) -> str:
+    def _turn_note(self, event: agent_mod.TurnDone, now: datetime | None = None) -> str:
+        finished = clock_label(now or datetime.now())
         if event.status != "completed":
-            return f"{event.status} · {event.seconds:.0f}s"
+            return f"{event.status} · {elapsed_label(event.seconds)} · {finished}"
         if event.seconds < 1 and not event.usage.total:
             return ""
-        parts = [f"{event.seconds:.0f}s"]
+        parts = [f"{art.done_verb()} for {elapsed_label(event.seconds)}"]
         if event.usage.output_tokens:
             parts.append(f"{art.icon('tokens')} {event.usage.output_tokens} tokens")
+        parts.append(finished)
         return " · ".join(parts)
 
     # actions
@@ -1360,6 +1479,8 @@ class Eirene(App):
         self.session.clear()
         self.agent.always.clear()
         self._titled = False
+        self._recaps.pop(self.session.id, None)
+        self.name_the_tab()
         self.agent.usage = UsageTotals()
         plan_mod.clear(self.sandbox.root, self.session.id)
         self.refresh_plan()
@@ -1445,9 +1566,8 @@ class Eirene(App):
         if self._modal_open():
             return
         self.set_prompt_suggestions(not self.config.get("prompt_suggest", False))
-        if not (self.aside.open and self.aside._toggle_callback == self.set_prompt_suggestions):
-            state = "ON" if self.config.get("prompt_suggest", False) else "OFF"
-            self.say(f"prompt suggestions {state}")
+        state = "ON" if self.config.get("prompt_suggest", False) else "OFF"
+        self.say(f"prompt suggestions {state}")
 
     def _start_mouse_mode(self) -> None:
         """Over SSH default to the terminal's own selection, copying and link clicks."""
@@ -1512,16 +1632,19 @@ class Eirene(App):
         except NoMatches:
             pass
 
-    def action_leave(self) -> None:
+    def action_leave(self, *, restart: bool = False) -> None:
         """Exit, asking for a second press while work would be cut off."""
         busy = self._running_work()
         armed = time.monotonic() - self._exit_armed
         if busy and armed > self.EXIT_CONFIRM_SECONDS:
             self._exit_armed = time.monotonic()
             verb = "is" if busy in (["the agent"], ["1 command"]) else "are"
-            self.say(f"{' and '.join(busy)} {verb} still running; press ctrl+d or type /exit "
-                     f"again within {self.EXIT_CONFIRM_SECONDS:.0f}s to stop it and exit", "warn")
+            again = "type /restart" if restart else "press ctrl+d or type /exit"
+            self.say(f"{' and '.join(busy)} {verb} still running; {again} again within "
+                     f"{self.EXIT_CONFIRM_SECONDS:.0f}s to stop it and "
+                     f"{'restart' if restart else 'exit'}", "warn")
             return
+        self.restart_requested = restart
         self.shutdown()
         self.exit()
 
@@ -1629,6 +1752,26 @@ def invocation() -> str:
     return argument
 
 
+def restart_argv(sandbox: Path, session_id: str = "") -> list[str]:
+    """Start this same installation again; after /update that is the new binary."""
+    program = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "eirene"]
+    return program + ["-C", str(sandbox)] + (["--resume", session_id] if session_id else [])
+
+
+def relaunch(argv: list[str]) -> int:
+    """Replace this process with a fresh Eirene (Windows: run it, then pass on its code)."""
+    # A one-file build must unpack itself afresh instead of reusing this
+    # process's extraction, or the restart would still run the old code.
+    os.environ["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    if os.name == "nt":
+        # execv on Windows starts a child and exits, handing the console back
+        # to the shell while the new Eirene is still drawing on it.
+        import subprocess
+        return subprocess.call(argv)
+    os.execv(argv[0], argv)
+    return 0  # not reached
+
+
 def run(sandbox: Path, resume: str = "") -> int:
     """Start the TUI."""
     from .ui.trust import confirm_workspace_trust
@@ -1638,6 +1781,10 @@ def run(sandbox: Path, resume: str = "") -> int:
         return 0
     app = Eirene(sandbox, resume)
     app.run()
+    if getattr(app, "restart_requested", False):
+        sys.stdout.write("restarting eirene…\n")
+        sys.stdout.flush()
+        return relaunch(restart_argv(sandbox, app.session.id if app.session.saved else ""))
     if app.session.saved:
         sys.stdout.write(
             f"{art.BANNERS[0]}\n{invocation()} --resume {app.session.id}\n")

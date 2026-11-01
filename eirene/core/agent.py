@@ -229,6 +229,8 @@ class Agent:
     def use(self, provider, provider_key: str, model: str) -> None:
         previous = self.provider
         self.provider = provider
+        if provider is not None:
+            provider.fast = bool(self.config.get("fast_mode", False))
         self.provider_key = provider_key
         self.model = model
         self._context_overhead = 0
@@ -241,6 +243,28 @@ class Agent:
                     asyncio.get_running_loop().create_task(close())
                 except RuntimeError:
                     pass
+
+    def set_fast(self, enabled: bool) -> None:
+        """Ask for the fast tier from the next request on."""
+        if self.provider is not None:
+            self.provider.fast = enabled
+            # An explicit choice ends any rate-limit cooldown.
+            self.provider._fast_cooldown_until = 0.0
+
+    def fast_state(self) -> str:
+        """"on", "cooling" (fast limit hit), "unsupported" or "off"."""
+        provider = self.provider
+        if provider is None or not getattr(provider, "fast", False):
+            return "off"
+        supported = getattr(provider, "fast_supported", None)
+        if supported is None or not supported(self.model):
+            return "unsupported"
+        return "cooling" if getattr(provider, "fast_cooling", False) else "on"
+
+    def fast_supported(self) -> bool:
+        """The current model has a provider fast tier (from cached catalogs)."""
+        check = getattr(self.provider, "fast_supported", None)
+        return bool(self.model and check and check(self.model))
 
     def reload_skills(self) -> list[skills_mod.Skill]:
         self.skills = skills_mod.apply_config(skills_mod.discover(), self.config)
@@ -1549,6 +1573,26 @@ class Agent:
                 or is_assistant_reply(suggestion)):
             return ""
         return suggestion
+
+    async def recap(self) -> str:
+        """Summarise the session so far; display only, never added to history."""
+        if not self.ready:
+            return ""
+        from .aside import snapshot
+        from . import recap as recap_mod
+        plan = plan_mod.load(self.sandbox.root, self.session.id)
+        context = snapshot(list(self.session.messages),
+                           plan=plan.render() if plan.active else "", limit=12000)
+        parts: list[str] = []
+        stream = getattr(self.provider, "isolated_stream", self.provider.stream)
+        async for event in stream([Message.user("Session snapshot:\n" + context)], self.model,
+                                  system=prompts.RECAP_PROMPT, tools=None,
+                                  max_tokens=TITLE_TOKENS):
+            if isinstance(event, TextDelta):
+                parts.append(event.text)
+            elif isinstance(event, Done) and event.reason in {"length", "max_tokens", "max_output_tokens"}:
+                return ""
+        return recap_mod.clean("".join(parts))
 
     async def title(self, request: str, reply: str = "") -> str:
         """Ask the model to name this session."""

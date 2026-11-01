@@ -19,7 +19,7 @@ from eirene.ui.chat import Block, NoticeBlock
 EXPECTED = {"mcp", "help", "connect", "model", "schedule", "tasks", "exit", "usage", "plan", "plugins", "sessions",
             "skills", "compact", "agents", "btw", "clear", "notification", "theme",
             "review", "sandbox", "permissions", "prompt-suggest", "keybindings", "search-api", "update", "subagents",
-            "config", "diff"}
+            "config", "diff", "pwd", "restart", "recap"}
 
 
 class Script:
@@ -971,3 +971,101 @@ async def test_subagents_opens_saved_transcript_and_returns(workdir):
         assert app.session.id == parent.id
     finally:
         await context.__aexit__(None, None, None)
+
+
+def test_help_groups_every_command_on_one_line_each():
+    from eirene.commands import Command, REGISTRY, _load
+    from eirene.commands import help as help_mod
+    _load()
+    available = [c for c in REGISTRY.values() if not c.hidden]
+    plugin = Command("bundle:long-plugin-command",
+                     "A plugin summary that is far too long to fit beside its name", "/x", None, True)
+    body = help_mod.build(available + [plugin]).plain
+    lines = body.splitlines()
+    for command in available:
+        row = next(line for line in lines if line.strip().startswith(f"/{command.name} "))
+        # The description sits on the same line as its command.
+        assert row.split(f"/{command.name}", 1)[1].strip()
+    assert " Plugins" in lines
+    assert any(line.strip().startswith("/bundle:long-plugin-command") and line.endswith("…")
+               for line in lines)
+    # Everything outside the plugin row fits a narrow panel without wrapping.
+    assert max(len(line) for line in lines if "bundle:" not in line) <= 70
+    # Every grouped name is a real command, so a rename cannot silently drop one.
+    assert {n for _, names in help_mod.GROUPS for n in names} <= set(REGISTRY)
+
+
+async def test_pwd_shows_the_working_directory(workdir):
+    app, pilot, context = await start(workdir)
+    try:
+        await dispatch(app, "/pwd")
+        await settle(pilot)
+        assert any(str(app.sandbox.root) in text for text in texts(app))
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_restart_exits_and_asks_to_relaunch_this_session(workdir, monkeypatch):
+    app, pilot, context = await start(workdir)
+    try:
+        exited = []
+        monkeypatch.setattr(app, "exit", lambda *a, **k: exited.append(True))
+        monkeypatch.setattr(app, "shutdown", lambda: None)
+        await dispatch(app, "/restart")
+        assert exited and app.restart_requested
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+def test_restart_argv_resumes_the_session(monkeypatch, tmp_path):
+    import sys
+    from eirene import app as app_mod
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "/opt/eirene/eirene")
+    assert app_mod.restart_argv(tmp_path, "abc") == [
+        "/opt/eirene/eirene", "-C", str(tmp_path), "--resume", "abc"]
+    assert app_mod.restart_argv(tmp_path) == ["/opt/eirene/eirene", "-C", str(tmp_path)]
+    monkeypatch.setattr(sys, "frozen", False)
+    assert app_mod.restart_argv(tmp_path)[1:3] == ["-m", "eirene"]
+
+
+def test_relaunch_resets_pyinstaller_and_execs(monkeypatch):
+    from eirene import app as app_mod
+    calls = []
+    monkeypatch.delenv("PYINSTALLER_RESET_ENVIRONMENT", raising=False)
+    monkeypatch.setattr(app_mod.os, "name", "posix")
+    monkeypatch.setattr(app_mod.os, "execv", lambda path, argv: calls.append((path, argv)))
+    app_mod.relaunch(["/opt/eirene/eirene", "-C", "/w"])
+    assert calls == [("/opt/eirene/eirene", ["/opt/eirene/eirene", "-C", "/w"])]
+    assert app_mod.os.environ["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+
+
+async def test_arrow_keys_scroll_the_help_window(workdir):
+    from eirene.ui.aside import AsideBody
+    app = Eirene(workdir)
+    async with app.run_test(size=(100, 20)) as pilot:
+        await pilot.pause()
+        app.prompt.remember("an earlier prompt")
+        await dispatch(app, "/help")
+        await settle(pilot)
+        body = app.aside.query_one(AsideBody)
+        assert body.max_scroll_y > 0, "help must be taller than this window"
+        assert app.prompt.has_focus and body.scroll_y == 0
+        for _ in range(3):
+            await pilot.press("down")
+        await pilot.pause()
+        assert body.scroll_y == 3
+        await pilot.press("up")
+        await pilot.pause()
+        assert body.scroll_y == 2
+        assert app.prompt.text == "", "arrows scroll instead of recalling history"
+        for _ in range(500):
+            await pilot.press("down")
+        await pilot.pause()
+        assert body.scroll_y == body.max_scroll_y
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not app.aside.open
+        await pilot.press("up")
+        await pilot.pause()
+        assert app.prompt.text == "an earlier prompt", "history works once it closes"

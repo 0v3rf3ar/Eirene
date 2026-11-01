@@ -33,6 +33,14 @@ existing profiles before changing them. An installer cannot change the terminal
 that started it, so it ends with the one command that refreshes yours, such as
 `source ~/.bashrc`; opening a new terminal works too.
 
+On Linux the installer also starts a no-op Bubblewrap sandbox, the same
+isolation Eirene uses for commands. If `bwrap` is missing or user namespaces are
+blocked, it warns before finishing and prints the fix for that system: the
+package command for your distribution, or the `sysctl` setting to change
+(AppArmor on Ubuntu, disabled user namespaces, or a container without nesting).
+It never runs `sudo` itself; Eirene installs either way, and `/sandbox` shows the
+same diagnosis later.
+
 ## Windows
 
 Run this in PowerShell:

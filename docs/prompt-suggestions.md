@@ -11,8 +11,9 @@ after a response.
 /prompt-suggest off
 ```
 
-`/prompt-suggest` without arguments opens the status and toggle panel. Ctrl+P
-also toggles suggestions. The preference is saved for later sessions.
+`/prompt-suggest` without arguments opens the On/Off menu, highlighting the
+current setting; pick with the arrow keys and Enter, or Esc to leave it as is.
+Ctrl+P also toggles suggestions. The preference is saved for later sessions.
 
 ## Accept a draft
 
@@ -21,8 +22,8 @@ arrow to copy it into the composer, edit it if needed, and press Enter to send.
 Typing your own text replaces the suggested draft. A suggestion does not run
 itself or become part of the transcript until you send it.
 
-Generation can finish after the main response. Open the suggestion panel to see
-its current status or a failure. Toggling the feature resets its suggestion state.
+Generation can finish after the main response. Open `/prompt-suggest` to see
+its current status or a failure next to the On option. Toggling the feature resets its suggestion state.
 
 ## Requests and context
 

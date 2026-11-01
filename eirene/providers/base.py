@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import re
@@ -110,11 +111,37 @@ class Provider:
     # True for CLIs that run their own agent loop, prompt and sandbox. Eirene
     # is their front end: it sends no instructions of its own beyond skills.
     owns_context = False
+    # Fast mode: the same model on a faster, pricier serving tier. The agent
+    # sets the wish from config; each provider sends it only where supported.
+    fast = False
+    _fast_cooldown_until = 0.0
 
     def __init__(self, api_key: str | None, base_url: str, *, timeout: float = 300.0):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+
+    def fast_supported(self, model: str) -> bool:
+        """Whether this backend offers a fast tier for the model."""
+        return False
+
+    async def check_fast(self, model: str) -> bool:
+        """Like fast_supported, loading whatever catalog the answer needs."""
+        return self.fast_supported(model)
+
+    @property
+    def fast_cooling(self) -> bool:
+        """Fast-tier limits were hit; requests run at standard speed for now."""
+        return time.monotonic() < self._fast_cooldown_until
+
+    def fast_active(self, model: str) -> bool:
+        """Send the fast tier on this request."""
+        return self.fast and not self.fast_cooling and self.fast_supported(model)
+
+    def cool_fast(self, seconds: float | None) -> None:
+        """Drop to standard speed until the fast tier has capacity again."""
+        wait = FAST_COOLDOWN if seconds is None else min(max(seconds, 1.0), FAST_COOLDOWN_MAX)
+        self._fast_cooldown_until = time.monotonic() + wait
 
     def headers(self) -> dict[str, str]:
         return {"Content-Type": "application/json"}
@@ -161,6 +188,20 @@ class Provider:
         """Cheap credential check; returns a note."""
         names = await self.models()
         return f"{len(names)} models available"
+
+
+FAST_COOLDOWN = 60.0
+FAST_COOLDOWN_MAX = 600.0
+# Opus models with a fast tier: claude-opus-5-5, claude-opus-5, claude-opus-4-8,
+# optionally dated. Claude Code also accepts the bare alias "opus".
+_ANTHROPIC_FAST = re.compile(r"^(?:claude-)?opus-(5-5|5|4-8)(?:-\d{8})?$")
+ANTHROPIC_FAST_BETA = "fast-mode-2026-02-01"
+
+
+def anthropic_fast_model(model: str) -> str:
+    """The fast-capable Opus generation ("5-5", "5", "4-8"), or empty."""
+    match = _ANTHROPIC_FAST.match((model or "").strip().lower())
+    return match.group(1) if match else ""
 
 
 _TRANSPORT: httpx.AsyncBaseTransport | None = None

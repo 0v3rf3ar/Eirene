@@ -31,7 +31,7 @@ has been exercised.
 | A key is rejected | Replace it through `/connect PROVIDER!`; check provider access and quota. |
 | The model answers but cannot act | Choose a tool-capable connection; Perplexity is text-only. |
 | A local model is unavailable | Check the Ollama service and downloaded models before reconnecting. |
-| Commands cannot start on Linux | Check `bwrap`, user namespaces, and `/sandbox`. |
+| Commands cannot start on Linux | Run `/sandbox`: it starts a test sandbox and names the cause and fix (missing `bwrap`, blocked user namespaces, or a container without nesting). |
 | Commands cannot start on macOS | Check the availability of `sandbox-exec` and its reported failure. |
 | An unattended Windows command fails | Check AppContainer startup, workspace ACL access and unsupported grants; see [platform support](platforms.md). |
 | A server disappears after a response | A temporary host-access grant may have ended. See [processes](processes.md). |

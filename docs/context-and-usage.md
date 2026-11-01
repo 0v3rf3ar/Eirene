@@ -134,6 +134,25 @@ instruction/tool overhead from the latest budget calculation. Local models use
 their effective model/hardware window; a large configured number does not
 override local context shifting. Counts are approximate, not subscription usage.
 
+## Recaps
+
+When the chat gets long, Eirene shows a short recap so you can pick the thread
+back up:
+
+```text
+※ recap: You're adding recaps to Eirene; I wired them in and the tests pass. Next, try it in a long session. (/recap off to disable)
+```
+
+A recap appears after a completed turn once the transcript has grown by about
+two screen heights since the last recap, counting replies, tool output and
+diffs as they appear on screen. Short exchanges don't trigger one, and a
+resumed long session can get one after its first new turn. A recap is one extra
+model request, is displayed only, and is never added to the conversation, so it
+does not use context. It is skipped if you start a new turn before it is ready.
+
+Run `/recap` to pick On or Off, or `/recap off` and `/recap on` directly. The
+choice is saved as `"recap"` in `config.json`.
+
 ## Inspect usage
 
 ```text

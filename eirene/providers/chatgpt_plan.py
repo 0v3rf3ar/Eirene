@@ -76,6 +76,21 @@ class ChatGPTPlan(Provider):
                 options.append((effort, effort, description))
         return options
 
+    def fast_tier(self, model):
+        """The catalog's fast service tier for a model, or empty."""
+        return _fast_tier(self._catalog.get(model, {}).get("service_tiers"))
+
+    def fast_supported(self, model):
+        return bool(self.fast_tier(model))
+
+    async def check_fast(self, model):
+        if model not in self._catalog:
+            try:
+                await self.models()
+            except ProviderError:
+                return False
+        return self.fast_supported(model)
+
     def context_window(self, model):
         """Plan catalog capacity, falling back to the shared plan default."""
         metadata = self._catalog.get(model, {})
@@ -129,6 +144,8 @@ class ChatGPTPlan(Provider):
         effort = self.reasoning_efforts.get(model, "default")
         if effort != "default":
             body["reasoning"] = {"effort": effort}
+        if self.fast_active(model):
+            body["service_tier"] = self.fast_tier(model)
         allowed_names = {spec["name"] for spec in tools or []}
         if tools:
             body["tools"] = [{"type": "namespace", "name": "eirene",
@@ -255,6 +272,18 @@ class ChatGPTPlan(Provider):
     async def close(self):
         await self.auth.close()
         await super().close()
+
+
+def _fast_tier(tiers):
+    """Pick the Fast tier id ("priority") from a catalog's service tiers."""
+    for tier in tiers or []:
+        if isinstance(tier, dict):
+            ident, name = str(tier.get("id") or ""), str(tier.get("name") or "")
+        else:
+            ident = name = str(tier or "")
+        if ident and (name.lower() == "fast" or ident.lower() in {"priority", "fast"}):
+            return ident
+    return ""
 
 
 def to_responses_input(messages):

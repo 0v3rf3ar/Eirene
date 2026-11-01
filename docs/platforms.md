@@ -22,10 +22,17 @@ executables on the environment's PATH rather than relying on interactive aliases
 ## Linux
 
 Sandboxed command execution needs `bwrap` and a system policy that permits user
-namespaces. If either is unavailable, Eirene reports the failure and does not
-silently execute without isolation. Install Bubblewrap through your distribution's
-package manager and check local namespace restrictions if `/sandbox` reports a
-problem. File inspection alone does not prove command isolation works.
+namespaces; root is not required. If either is unavailable, Eirene reports the
+failure and does not silently execute without isolation. Unlike macOS and
+Windows, whose sandboxes are built in, Linux may need Bubblewrap installed
+(minimal servers and containers often lack it).
+
+The installer and `/sandbox` both start a no-op sandbox and report the result:
+"Ready", or why not with the fix: the install command for your distribution,
+the `sysctl` setting that blocks user namespaces
+(`kernel.unprivileged_userns_clone`, `user.max_user_namespaces`, or Ubuntu's
+`kernel.apparmor_restrict_unprivileged_userns`), or a container that forbids
+nesting (Proxmox LXC: `features: nesting=1`).
 
 The command environment uses a private temporary directory and home. A dependency
 available only through your usual home configuration may need explicit access or

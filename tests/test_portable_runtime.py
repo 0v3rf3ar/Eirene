@@ -183,7 +183,7 @@ def test_terminal_quota_and_server_retry_header():
 
 def test_standard_spinner_and_accessibility(monkeypatch):
     monkeypatch.setattr(art, "ACCESSIBLE", False)
-    assert art.SPINNERS == (art.SPINNER,)
+    assert art.SPINNERS == (art.SPINNER, art.STAR_SPINNER, art.MOON_SPINNER)
     for style, frames in enumerate(art.SPINNERS):
         assert len(set(frames)) > 3
         assert all(cell_len(art.spinner_frame(t, style)) == 1 for t in range(30))
@@ -202,6 +202,15 @@ def test_status_picks_style_once_per_turn(monkeypatch):
     assert status._spinner_style == 1
     status.start()
     assert status._spinner_style == 2
+    status.start(0)
+    assert status._spinner_style == 0
+
+
+def test_each_session_keeps_one_spinner():
+    ids = [f"session-{n}" for n in range(30)]
+    picks = [art.session_spinner(i) for i in ids]
+    assert picks == [art.session_spinner(i) for i in ids]  # stable, including restarts
+    assert set(picks) == set(range(len(art.SPINNERS)))     # every spinner gets used
 
 
 def test_build_preserves_unrelated_dist_files(tmp_path, monkeypatch):

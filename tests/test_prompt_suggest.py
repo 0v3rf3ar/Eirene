@@ -129,8 +129,8 @@ async def test_suggestion_generation_uses_isolated_tool_free_request(workdir):
         await context.__aexit__(None, None, None)
 
 
-async def test_popup_switch_generates_for_existing_reply(workdir, monkeypatch):
-    from eirene.ui.aside import TextToggle
+async def test_menu_switch_generates_for_existing_reply(workdir, monkeypatch):
+    from eirene.ui.picker import Picker
     app, pilot, context = await start(workdir, Script([Done("stop")]))
     ready = asyncio.Event()
     calls = []
@@ -142,28 +142,33 @@ async def test_popup_switch_generates_for_existing_reply(workdir, monkeypatch):
     try:
         app.session.add_user("Fix this bug")
         app.session.add_assistant("The bug is fixed.")
-        await dispatch(app, "/prompt-suggest")
+        command = asyncio.create_task(dispatch(app, "/prompt-suggest"))
         await pilot.pause()
-        assert app.aside.open and not app.config.get("prompt_suggest")
-        switch = app.aside.query_one("#aside-toggle", TextToggle)
-        await pilot.click(switch)
+        picker = app.query_one(Picker)
+        assert picker.waiting and picker.title == "prompt-suggest"
+        assert picker.options[picker.index][0] == "off", "opens on the setting in use"
+        await pilot.press("up")
+        await pilot.press("enter")
+        await command
         await pilot.pause()
-        assert app.config.get("prompt_suggest") and switch.value
+        assert app.config.get("prompt_suggest")
         assert calls == [("Fix this bug", "The bug is fixed.")]
-        assert "Generating" in content(app.aside.body)
+        assert app._suggestion_status == "Generating…"
         ready.set()
         await pilot.pause()
         assert app.prompt.prompt_suggestion == "Add tests for the fix."
-        assert "Ready" in content(app.aside.body)
-        # Merely reopening settings must not toggle or regenerate.
-        await dispatch(app, "/prompt-suggest")
+        # Reopening and dismissing changes nothing and does not regenerate.
+        command = asyncio.create_task(dispatch(app, "/prompt-suggest"))
         await pilot.pause()
-        assert switch.value and len(calls) == 1
-        await pilot.click(switch)
+        assert picker.options[picker.index][0] == "on"
+        assert "Ready" in picker.options[0][2]
+        await pilot.press("escape")
+        await command
+        assert app.config.get("prompt_suggest") and len(calls) == 1
+        await dispatch(app, "/prompt-suggest off")
         await pilot.pause()
         assert not app.config.get("prompt_suggest")
         assert not app.prompt.prompt_suggestion
-        assert "Disabled" in content(app.aside.body)
     finally:
         ready.set()
         await context.__aexit__(None, None, None)
@@ -184,7 +189,7 @@ async def test_suggestion_failures_are_visible(workdir, monkeypatch, failure):
         app.session.add_assistant("reply")
         await dispatch(app, "/prompt-suggest on")
         await pilot.pause()
-        assert "retry" in content(app.aside.body)
+        assert "retry" in app._suggestion_status
         assert not app.prompt.prompt_suggestion
         assert not any("Prompt suggestion:" in content(b) for b in app.transcript.children)
     finally:
@@ -352,46 +357,20 @@ async def test_cancelled_answer_never_requests_a_suggestion(workdir, monkeypatch
         await context.__aexit__(None, None, None)
 
 
-async def test_arrow_keys_switch_the_popup_toggle_right_away(workdir):
-    from eirene.ui.aside import TextToggle
+async def test_prompt_suggest_menu_uses_the_shared_picker(workdir):
+    from eirene.ui.picker import Picker
     app, pilot, context = await start(workdir)
     try:
-        await dispatch(app, "/prompt-suggest")
+        command = asyncio.create_task(dispatch(app, "/prompt-suggest"))
         await pilot.pause()
-        toggle = app.aside.query_one("#aside-toggle", TextToggle)
-        assert app.focused is toggle
-        await pilot.press("right")
-        await pilot.pause()
-        assert app.config.get("prompt_suggest") and content(toggle) == "<  ON  >"
-        await pilot.press("left")
-        await pilot.pause()
-        assert not app.config.get("prompt_suggest") and content(toggle) == "<  OFF  >"
-    finally:
-        await context.__aexit__(None, None, None)
-
-
-async def test_text_toggle_is_one_line_and_keyboard_operable(workdir):
-    from eirene.ui.aside import TextToggle
-    app, pilot, context = await start(workdir, size=(48, 20))
-    try:
-        await dispatch(app, "/prompt-suggest")
-        await pilot.pause()
-        toggle = app.aside.query_one("#aside-toggle", TextToggle)
-        assert content(toggle) == "<  OFF  >"
-        assert toggle.region.height == 1
-        assert app.aside.region.width < 48
-        toggle.focus()
+        picker = app.query_one(Picker)
+        assert app.focused is picker and not app.aside.open
+        assert [row[0] for row in picker.options] == ["on", "off"]
+        await pilot.press("up")
         await pilot.press("enter")
-        await pilot.pause()
+        await command
         assert app.config.get("prompt_suggest")
-        assert content(toggle) == "<  ON  >"
-        assert app.focused is toggle
-        await pilot.press("space")
-        await pilot.pause()
-        assert not app.config.get("prompt_suggest")
-        assert content(toggle) == "<  OFF  >"
-        await pilot.press("escape")
-        assert not app.aside.open
+        assert app.focused is app.prompt
     finally:
         await context.__aexit__(None, None, None)
 

@@ -55,6 +55,7 @@ an action or the [plugin catalog](plugin-catalog.md) to choose a workflow.
 | [Scheduled tasks](scheduling.md) | Create recurring work with your OS scheduler. |
 | [Themes and accessibility](appearance.md) | Choose colors, reduce motion, and adjust terminal output. |
 | [Notifications](notifications.md) | Enable and test desktop notifications. |
+| [Fast mode](fast-mode.md) | Use a provider's faster, pricier serving tier for the same model. |
 | [Prompt suggestions](prompt-suggestions.md) | Enable optional model-generated follow-up drafts. |
 | [Local model thinking](thinking.md) | Control the local Ollama thinking option. |
 | [Troubleshooting](troubleshooting.md) | Diagnose installation, provider, execution, and plugin issues. |

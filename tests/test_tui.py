@@ -505,6 +505,38 @@ async def test_narrow_terminal_picks_a_banner_that_fits(workdir):
         await context.__aexit__(None, None, None)
 
 
+async def test_banner_comes_back_after_the_window_grows_again(workdir):
+    from eirene.ui import art
+
+    app, pilot, context = await start(workdir, size=(120, 32))
+    try:
+        banner = blocks(app, ArtBlock)[0]
+        original = content(banner).split("\nv", 1)[0]
+        assert original in {text for text, _ in art.SIZED}
+        for size in ((16, 20), (40, 24), (12, 10), (120, 32)):
+            await pilot.resize_terminal(*size)
+            await pilot.pause()
+            await pilot.pause()
+        assert content(banner).split("\nv", 1)[0] == original
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_a_chat_started_narrow_gets_real_art_once_widened(workdir):
+    from eirene.ui import art
+
+    app, pilot, context = await start(workdir, size=(16, 20))
+    try:
+        banner = blocks(app, ArtBlock)[0]
+        assert content(banner).split("\nv", 1)[0] not in {text for text, _ in art.SIZED}
+        await pilot.resize_terminal(120, 32)
+        await pilot.pause()
+        await pilot.pause()
+        assert content(banner).split("\nv", 1)[0] in {text for text, _ in art.SIZED}
+    finally:
+        await context.__aexit__(None, None, None)
+
+
 async def test_intro_rules_reflow_without_wrapping_on_resize(workdir):
     from rich.cells import cell_len
 
@@ -979,8 +1011,9 @@ async def test_status_line_reports_while_working(workdir):
             if app.status.active:
                 break
         text = content(app.status)
-        # Only the spinner and its word; the word is picked at random.
-        assert text.strip().endswith(f"{app.status.verb}…")
+        # The spinner, its word (picked at random), then time and activity.
+        assert f"{app.status.verb}… (" in text
+        assert text.strip().endswith(f"{app.status.activity})")
         assert app.status.active
         app.turn.cancel()
     finally:
@@ -1124,6 +1157,9 @@ async def test_prompt_recalls_history(workdir):
     try:
         await type_line(pilot, "/help")
         await type_line(pilot, "/usage")
+        # A tall popup takes the arrows for scrolling; close it to recall.
+        await pilot.press("escape")
+        await pilot.pause()
         await pilot.press("up")
         await pilot.pause()
         assert app.prompt.value == "/usage"
@@ -2007,7 +2043,9 @@ async def test_the_tab_spins_while_the_agent_works(workdir):
             assert app._busy
             app._spin_tab()
             app._spin_tab()
-            busy = [t for t in titles if not t.startswith("eirene -")]
+            label = app.tab_label()
+            assert not label.startswith("eirene -"), "a named chat shows only its name"
+            busy = [t for t in titles if t != label and t.endswith(f" {label}")]
             assert busy, "the tab should show a spinner while busy"
             assert len(set(busy)) > 1, "the spinner should turn"
 
@@ -2017,7 +2055,7 @@ async def test_the_tab_spins_while_the_agent_works(workdir):
                 if app.turn and app.turn.done():
                     break
             assert not app._busy
-            assert titles[-1].startswith("eirene -")
+            assert titles[-1] == app.tab_label()
         finally:
             app_mod.write_terminal_title = original
     finally:
@@ -4111,7 +4149,7 @@ async def test_quick_menu_shortcuts_preserve_the_draft(workdir):
         await pilot.pause()
         assert app.aside.open
         menu = content(app.aside.body)
-        assert "/keybindings" in menu and "tips" in menu
+        assert "/keybindings" in menu and "Tips" in menu
         assert app.prompt.value == "unfinished draft"
         await pilot.press("ctrl+p")
         await pilot.pause()

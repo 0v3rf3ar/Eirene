@@ -38,6 +38,8 @@ class FileDiff:
     change: diff.Change | None = None
     untracked: bool = False
     binary: bool = False
+    # The raw section this came from; equal keys draw identically.
+    key: str = ""
 
     @property
     def added(self) -> int:
@@ -115,7 +117,7 @@ def split_patch(patch: str) -> list[FileDiff]:
         if not chunk.startswith("diff --git "):
             continue
         path, binary = _path_of(chunk)
-        out.append(FileDiff(path, diff.parse(path, chunk), binary=binary))
+        out.append(FileDiff(path, diff.parse(path, chunk), binary=binary, key=chunk))
     return out
 
 
@@ -148,7 +150,7 @@ async def collect(root: Path) -> Snapshot:
         return Snapshot(error=patch.strip() or "git diff failed")
     truncated = len(patch) > MAX_PATCH
     files = split_patch(patch[:MAX_PATCH])
-    files.extend(FileDiff(name, untracked=True)
+    files.extend(FileDiff(name, untracked=True, key="untracked\0" + name)
                  for name in sorted(filter(None, untracked.split("\0"))))
     error = "Patch too large; showing the first part." if truncated else ""
     return Snapshot(files=files, error=error, key=patch + "\0\0" + untracked)
@@ -166,7 +168,9 @@ class DiffRows(Widget):
         self.view = diff.ChangeView(change)
 
     def get_content_height(self, container, viewport, width: int) -> int:
-        return max(len(self.view.rows(width)) + bool(self.view.change.hidden), 1)
+        # Rows never wrap, so the height does not depend on the width.
+        change = self.view.change
+        return max(len(change.rows) + bool(change.hidden), 1)
 
     def render(self) -> Text:
         width = max(self.size.width, 20)
@@ -357,14 +361,14 @@ class DiffPanel(VerticalScroll):
         """Sit beside the chat when there is room, otherwise take turns with it."""
         self._narrow = width < NARROW_WIDTH
         full = self._narrow and self._viewing
-        before = (bool(self.display), self.has_class("full"))
+        shown = bool(self.display)
         self.set_class(full, "full")
         self.display = self._open and (full or not self._narrow)
         self.screen.query_one(DiffToggle).place(self, width)
-        if self.display and before != (True, full):
-            # Redraw once the new width is laid out, so the listing fits it.
-            self._key = None
-            self.call_after_refresh(self.reload)
+        if self.display and not shown:
+            # Catch up on changes made while hidden. Width changes need no
+            # reload: every row redraws itself at its new size.
+            self.reload()
 
     def show_diff(self) -> None:
         self._viewing = True
@@ -407,20 +411,20 @@ class DiffPanel(VerticalScroll):
             self._key = key
             await self._draw(snapshot)
         if self._again:
-            # A resize may have landed mid-read; draw again at the new width.
+            # A change may have landed mid-read; read once more.
             self._again = False
-            self._key = None
             self.reload()
 
     async def _draw(self, snapshot: Snapshot) -> None:
         summary = self.query_one("#diff-summary", Static)
         listing = self.query_one(FileListing)
         holder = self.query_one("#diff-files", Vertical)
-        await holder.remove_children()
         if not snapshot.files:
-            summary.update(Text(snapshot.error or "No uncommitted changes.",
-                                style="dim" if not snapshot.error else palette.RED))
-            listing.show_files([])
+            with self.app.batch_update():
+                summary.update(Text(snapshot.error or "No uncommitted changes.",
+                                    style="dim" if not snapshot.error else palette.RED))
+                listing.show_files([])
+                await holder.remove_children()
             return
         count = len(snapshot.files)
         head = Text()
@@ -431,13 +435,29 @@ class DiffPanel(VerticalScroll):
         head.append(f"-{snapshot.removed}", style=palette.RED)
         if snapshot.error:
             head.append(f"  {snapshot.error}", style="dim")
-        summary.update(head)
-        listing.show_files(snapshot.files)
-        await holder.mount_all([FileSection(item) for item in snapshot.files])
+        with self.app.batch_update():
+            summary.update(head)
+            listing.show_files(snapshot.files)
+            await self._sync_sections(holder, snapshot.files)
 
-    def on_resize(self, event: events.Resize) -> None:
-        self._key = None
-        self.reload()
+    async def _sync_sections(self, holder: Vertical, files: list[FileDiff]) -> None:
+        """Keep sections whose patch is unchanged, so nothing flickers."""
+        current = {section.item.key: section for section in holder.children
+                   if isinstance(section, FileSection)}
+        wanted = {item.key for item in files}
+        stale = [section for key, section in current.items() if key not in wanted]
+        if stale:
+            await holder.remove_children(stale)
+        for index, item in enumerate(files):
+            section = current.get(item.key)
+            if section is None:
+                section = FileSection(item)
+                if index < len(holder.children):
+                    await holder.mount(section, before=index)
+                else:
+                    await holder.mount(section)
+            elif holder.children.index(section) != index:
+                holder.move_child(section, before=index)
 
 
 class DiffToggle(Static):

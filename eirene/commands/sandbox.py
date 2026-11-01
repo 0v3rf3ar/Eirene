@@ -27,16 +27,28 @@ async def run(app, args):
     external = getattr(app.agent.provider, "owns_context", False)
     from ..core.permissions import full_access
     full = full_access(app.config)
+    problem, fixes = "", []
+    if sys.platform.startswith("linux") and not external and not full:
+        import asyncio
+        from ..tools.isolation import bubblewrap_problem
+        # Start a real (no-op) sandbox: an installed bwrap can still be blocked.
+        problem, fixes = await asyncio.to_thread(bubblewrap_problem)
+        available = not problem
     mode = app.agent.mode.value
     edits = ("Blocked" if mode == "plan" else "Automatic" if mode == "auto"
              else "Allowed for this session" if "session_edits" in app.agent.always
              else "Approval required")
     styles = _styles(app)
     width = 64
+    if problem:
+        # Room for the fix commands so they can be copied whole.
+        width = min(max(width, *(len(line) + 4 for line in [problem, *fixes])), 96)
     body = Text("╭─ sandbox " + "─" * (width - 10) + "─╮\n", style=styles["heading"])
     rows = [("Permissions", app.config.get("permissions", "sandboxed")),
             ("Runtime", "External CLI" if external else "Host (no isolation)" if full else runtime),
-            ("Status", "Full access" if full else "Managed by provider" if external else "Installed" if available else "Unavailable"),
+            ("Status", "Full access" if full else "Managed by provider" if external
+             else ("Ready" if available else "Unavailable") if sys.platform.startswith("linux")
+             else "Installed" if available else "Unavailable"),
             ("Workspace", str(app.sandbox.root)),
             ("Mode", mode),
             ("Edits", edits),
@@ -49,6 +61,12 @@ async def run(app, args):
         _append_box_line(body, line, width, styles)
     _append_rule(body, width, styles)
     notes = (["External CLI owns its sandbox.", "Eirene forwards its approval requests."] if external else notes)
+    if problem:
+        import textwrap
+        notes = [*textwrap.wrap(problem, width - 2),
+                 *(line for fix in fixes for line in textwrap.wrap(
+                     fix, width - 2, subsequent_indent="  ", break_on_hyphens=False)),
+                 "No unsandboxed fallback."]
     if full:
         notes = ["Host access; approvals follow the mode. OS privileges still apply.", "Plan mode remains read-only."]
     notes.append("Use /permissions to change access for this process.")

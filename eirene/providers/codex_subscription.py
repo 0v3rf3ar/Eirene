@@ -31,6 +31,8 @@ class CodexSubscription(Provider):
 
     def __init__(self, *, timeout: float = 300.0, binary: str = "codex") -> None:
         super().__init__(None, "", timeout=timeout)
+        self._fast_tiers: dict[str, str] = {}
+        self._tiers_loaded = False
         self.binary = binary
         self.root = Path.cwd()
         self.mode = "manual"
@@ -110,6 +112,7 @@ class CodexSubscription(Provider):
             return account
 
     async def models(self) -> list[str]:
+        from .chatgpt_plan import _fast_tier
         result = await (await self._server()).request(
             "model/list", {"limit": 100, "includeHidden": False})
         rows = result.get("data", []) if isinstance(result, dict) else []
@@ -119,7 +122,22 @@ class CodexSubscription(Provider):
                 name = str(row.get("model") or row.get("id") or "").strip()
                 if name and name not in names:
                     names.append(name)
+                    # Codex lists the tiers each model offers; "priority" is Fast.
+                    self._fast_tiers[name] = _fast_tier(
+                        row.get("serviceTiers") or row.get("additionalSpeedTiers"))
+        self._tiers_loaded = True
         return names
+
+    def fast_supported(self, model: str) -> bool:
+        return bool(self._fast_tiers.get(model))
+
+    async def check_fast(self, model: str) -> bool:
+        if not self._tiers_loaded:
+            try:
+                await self.models()
+            except ProviderError:
+                return False
+        return self.fast_supported(model)
 
     async def validate(self, model: str = "") -> str:
         account = await self.account(refresh=True)
@@ -161,6 +179,11 @@ class CodexSubscription(Provider):
             "cwd": str(self.root),
             **self._turn_policy(),
         }
+        if self.fast and not self._tiers_loaded:
+            await self.check_fast(model)
+        if self.fast_active(model):
+            # Per turn, so switching /fast off needs no thread setting reset.
+            turn_options["serviceTierForTurn"] = self._fast_tiers[model]
         result = await server.request("turn/start", turn_options)
         turn = result.get("turn", {}) if isinstance(result, dict) else {}
         self._turn_id = str(turn.get("id") or "")

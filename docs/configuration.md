@@ -61,6 +61,8 @@ without removing credentials.
 | `theme` | `default` | `/theme`; see [appearance](appearance.md). |
 | `notifications` | `false` | `/notification`; see [notifications](notifications.md). |
 | `prompt_suggest` | `false` | `/prompt-suggest`; extra model requests. |
+| `recap` | `true` | `/recap`; short `※ recap` line each time the chat grows about two screens; extra model requests. See [context and usage](context-and-usage.md#recaps). |
+| `fast_mode` | `false` | `/fast`; faster tier at a higher price where the provider offers one. See [fast mode](fast-mode.md). |
 | `reduce_motion` | `false` | Static activity markers; also `--reduce-motion`. |
 | `accessible_icons` | `false` | Accessible icon presentation. |
 | `check_updates` | `true` | Startup update checks; `/update check` remains available. |

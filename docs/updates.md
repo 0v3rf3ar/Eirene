@@ -23,9 +23,11 @@ enabled by default. Set `check_updates` to `false` in configuration, or set
 /update
 ```
 
-Eirene checks the release, downloads the matching asset, and attempts installation.
-Follow the result's restart instructions. If an update is already installed or
-scheduled, exit and restart before asking for another update.
+Eirene shows an update card that follows each step: the current and new
+version, a download progress bar, checksum verification and installation. When
+it finishes, run `/restart`. Eirene starts the new version and reopens the
+current session. If an update is already installed, `/update` reminds you to
+run `/restart` instead of downloading it again.
 
 `/update` only installs stable releases. To install the newest published version,
 including alpha, beta, and release candidates, use:

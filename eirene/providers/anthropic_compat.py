@@ -12,7 +12,8 @@ import httpx
 from .history import provider_history
 
 from ..core.errors import ProviderError
-from .base import (Done, Provider, TextDelta, ThinkingDelta, ToolCall, Usage,
+from .base import (ANTHROPIC_FAST_BETA, Done, Provider, TextDelta, ThinkingDelta,
+                   ToolCall, Usage, _retry_after, anthropic_fast_model,
                    loads_arguments, parse_json, raise_for_status, sse_lines,
                    wrap_transport_error)
 
@@ -42,6 +43,27 @@ class AnthropicCompatible(Provider):
         head.update(self.extra_headers)
         return head
 
+    def fast_supported(self, model: str) -> bool:
+        # Only Anthropic's own API has the fast tier; clones would reject it.
+        return self.host == "api.anthropic.com" and bool(anthropic_fast_model(model))
+
+    def _fast_request(self, payload: dict[str, Any], headers: dict[str, str], model: str) -> None:
+        payload["speed"] = "fast"
+        if anthropic_fast_model(model) != "5-5":
+            # Opus 5 and 4.8 still need the research-preview header.
+            beta = headers.get("anthropic-beta", "")
+            headers["anthropic-beta"] = ",".join(filter(None, (beta, ANTHROPIC_FAST_BETA)))
+
+    @staticmethod
+    def _standard_request(payload: dict[str, Any], headers: dict[str, str]) -> None:
+        payload.pop("speed", None)
+        beta = [part for part in headers.get("anthropic-beta", "").split(",")
+                if part and part != ANTHROPIC_FAST_BETA]
+        if beta:
+            headers["anthropic-beta"] = ",".join(beta)
+        else:
+            headers.pop("anthropic-beta", None)
+
     async def stream(self, messages, model, *, system="", tools=None,
                      max_tokens=8192) -> AsyncIterator:
         from .preflight import validate_history
@@ -61,31 +83,43 @@ class AnthropicCompatible(Provider):
                                  "description": spec.get("description", ""),
                                  "input_schema": spec.get("parameters", {})}
                                 for spec in tools]
+        headers = self.headers()
+        if self.fast_active(model):
+            self._fast_request(payload, headers, model)
         blocks: dict[int, dict[str, Any]] = {}
         stop = "stop"
         completed = False
         try:
             async with self._client() as client:
-                async with client.stream("POST", f"{self.base_url}/messages",
-                                         json=payload, headers=self.headers()) as response:
-                    if response.status_code >= 400:
-                        await response.aread()
-                        raise_for_status(response, self.host, model)
-                    async for name, data in sse_lines(response):
-                        chunk = parse_json(data)
-                        if not isinstance(chunk, dict):
-                            continue
-                        kind = chunk.get("type") or name
-                        if kind == "error":
-                            detail = chunk.get("error") or {}
-                            raise ProviderError(str(detail.get("message") or detail)[:200])
-                        for event in _consume(kind, chunk, blocks):
-                            yield event
-                        if kind == "message_delta":
-                            stop = (chunk.get("delta") or {}).get("stop_reason") or stop
-                        elif kind == "message_stop":
-                            completed = True
-                            break
+                while True:
+                    async with client.stream("POST", f"{self.base_url}/messages",
+                                             json=payload, headers=headers,
+                                             extensions={"eirene_fast": "speed" in payload}) as response:
+                        if response.status_code >= 400:
+                            await response.aread()
+                            if "speed" in payload and response.status_code in (429, 529):
+                                # Fast capacity is separate: carry on at standard
+                                # speed and try fast again after the cooldown.
+                                self.cool_fast(_retry_after(response))
+                                self._standard_request(payload, headers)
+                                continue
+                            raise_for_status(response, self.host, model)
+                        async for name, data in sse_lines(response):
+                            chunk = parse_json(data)
+                            if not isinstance(chunk, dict):
+                                continue
+                            kind = chunk.get("type") or name
+                            if kind == "error":
+                                detail = chunk.get("error") or {}
+                                raise ProviderError(str(detail.get("message") or detail)[:200])
+                            for event in _consume(kind, chunk, blocks):
+                                yield event
+                            if kind == "message_delta":
+                                stop = (chunk.get("delta") or {}).get("stop_reason") or stop
+                            elif kind == "message_stop":
+                                completed = True
+                                break
+                    break
         except httpx.HTTPError as exc:
             raise wrap_transport_error(exc, self.host) from exc
 

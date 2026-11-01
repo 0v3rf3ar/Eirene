@@ -255,7 +255,7 @@ function Get-ReleaseFile([string]$Uri, [string]$Destination, [switch]$ShowProgre
 
     Show-Eirene
     if ($fancy) {
-        Write-Raw "`n  $bold${cyan}E I R E N E$reset  $dim$middleDot  terminal coding agent$reset`n`n"
+        Write-Raw "`n  $bold${cyan}E I R E N E$reset  $dim$middleDot  terminal AI agent$reset`n`n"
     } else {
         Write-Host 'Eirene installer'
     }

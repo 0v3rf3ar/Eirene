@@ -15,7 +15,7 @@ from ..core.errors import (AuthError, ConnectionFailed, EireneError,
 from .base import ConnectionStatus
 from ..core.subprocesses import executable_argv, external_environment
 from ..tools import activity
-from .base import (Done, Event, PlanUpdate, Provider, ProviderTool, TextDelta,
+from .base import (Done, Event, PlanUpdate, Provider, ProviderTool, TextDelta, anthropic_fast_model,
                    ThinkingDelta, Usage)
 from .permission_proxy import (APPROVE_TOOL, ASK_TOOL, SERVER,
                                PermissionBroker, describe_change)
@@ -129,7 +129,9 @@ class ClaudeCode(Provider):
                 "--verbose", "--include-partial-messages", "--model", model,
                 "--permission-mode", self._permission_mode(),
                 "--settings", json.dumps({"sandbox": {"enabled": not native_windows and not full,
-                    "allowUnsandboxedCommands": self.approve is not None or native_windows or full, "failIfUnavailable": not native_windows and not full}}),
+                    "allowUnsandboxedCommands": self.approve is not None or native_windows or full, "failIfUnavailable": not native_windows and not full},
+                    # Eirene's /fast decides, whatever the user's own Claude settings say.
+                    "fastMode": self.fast_active(model)}),
                 "--append-system-prompt", _system_prompt(system, asking)]
         if native_windows and self.mode == "plan":
             args.extend(["--disallowedTools", "Bash,PowerShell,Write,Edit,NotebookEdit"])
@@ -306,6 +308,9 @@ class ClaudeCode(Provider):
         async for event in clone.stream(messages, model, system=system,
                                         tools=None, max_tokens=max_tokens):
             yield event
+
+    def fast_supported(self, model: str) -> bool:
+        return (model or "").strip().lower() == "opus" or bool(anthropic_fast_model(model))
 
     def _permission_mode(self) -> str:
         if getattr(self, "permissions", "sandboxed") == "full-access" and self.mode == "auto":

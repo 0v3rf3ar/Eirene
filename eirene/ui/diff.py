@@ -151,6 +151,10 @@ class ChangeView:
         self.note = note
         self.syntax = Syntax("", lexer_for(change.path), theme=SYNTAX_THEME,
                              background_color="default")
+        # Highlighting is width-independent and slow; do it once per row, and
+        # keep the last width's rows so repeated renders at one size are free.
+        self._codes: list[Text] | None = None
+        self._rows: tuple[int, list[Text]] | None = None
 
     def _code(self, text: str) -> Text:
         try:
@@ -197,16 +201,20 @@ class ChangeView:
 
     def rows(self, width: int) -> list[Text]:
         """The numbered code lines."""
+        if self._rows is not None and self._rows[0] == width:
+            return self._rows[1]
+        if self._codes is None:
+            self._codes = [self._code(row.text) for row in self.change.rows]
         out = []
         digits = self.gutter() - 4
-        for row in self.change.rows:
+        for row, code in zip(self.change.rows, self._codes):
             line = Text()
             number = str(row.number) if row.number else ""
             style = ADDED_GUTTER if row.sign == "+" else (
                 REMOVED_GUTTER if row.sign == "-" else "dim")
             line.append(f" {number:>{digits}} ", style=style)
             line.append(f"{row.sign} " if row.sign != " " else "  ", style=style)
-            line.append_text(self._code(row.text))
+            line.append_text(code)
             if row.sign != " ":
                 pad = width - line.cell_len
                 if pad > 0:
@@ -214,6 +222,7 @@ class ChangeView:
                 line.stylize(ADDED_BACKGROUND if row.sign == "+"
                              else REMOVED_BACKGROUND)
             out.append(line)
+        self._rows = (width, out)
         return out
 
     def _head(self) -> Text:

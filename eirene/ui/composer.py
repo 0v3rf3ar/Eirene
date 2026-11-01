@@ -519,6 +519,13 @@ class Prompt(TextArea):
         if delta > 0 and not self.navigator.is_last_wrapped_line(location):
             self.action_cursor_down()
             return
+        # An open /help (or other) window takes the arrows over history.
+        try:
+            aside = self.app.aside
+        except Exception:  # noqa: BLE001 - no window on this screen
+            aside = None
+        if aside is not None and aside.scroll_by_line(delta):
+            return
         self._recall(delta)
 
     def _recall(self, delta: int) -> None:

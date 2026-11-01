@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime
 
 from rich.text import Text
 from rich.style import Style
@@ -47,8 +48,32 @@ class ContextIndicator(Static):
                          if self.display else "", no_wrap=True, overflow="ellipsis"))
 
 
+# What the agent is doing, in one of five words.
+ACTIVITY = {"reasoning": "reasoning", "answering": "answering",
+            "writing": "coding", "running": "coding"}
+TOOL_ACTIVITY = {"write": "coding", "exec": "coding", "read": "searching"}
+
+
+def elapsed_label(seconds: float) -> str:
+    """3s, 1m 3s, 1h 2m 1s."""
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {seconds}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes}m {seconds}s"
+
+
+def clock_label(moment: datetime) -> str:
+    """7:38 PM; built by hand because %-I is not portable to Windows."""
+    hour = moment.hour % 12 or 12
+    return f"{hour}:{moment.minute:02d} {'AM' if moment.hour < 12 else 'PM'}"
+
+
 class StatusLine(Static):
-    """A spinner and a word while the model works."""
+    """A spinner, its word, the elapsed time and what the agent is doing."""
 
     DEFAULT_CSS = """
     StatusLine {
@@ -69,38 +94,44 @@ class StatusLine(Static):
         self.verb = art.verb()
         self._spinner_style = art.spinner_style()
         self.note = ""
+        self.note_icon = "dot"
         self._tick = 0
         self._timer = None
         self._last_activity = 0.0
         self._connection_wait = False
         self._active_tools: set[str] = set()
         self._writing_tools: set[str] = set()
+        self._tool_kinds: dict[str, str] = {}
 
     def on_mount(self) -> None:
         self._timer = self.set_interval(TICK, self._refresh)
 
-    def start(self) -> None:
+    def start(self, spinner: int | None = None) -> None:
+        """Begin a turn; pass the session's spinner to keep it for the whole session."""
         self.active = True
         self.started = time.monotonic()
         self._last_activity = self.started
         self._connection_wait = False
         self._active_tools.clear()
         self._writing_tools.clear()
+        self._tool_kinds.clear()
         self.input_tokens = 0
         self.output_tokens = 0
         self.phase = "thinking"
         self.note = ""
         self.verb = art.verb()
-        self._spinner_style = art.spinner_style()
+        self._spinner_style = art.spinner_style() if spinner is None else spinner
         self._refresh()
 
-    def stop(self, note: str = "") -> None:
+    def stop(self, note: str = "", icon: str = "dot") -> None:
         self.active = False
         self.phase = ""
         self._connection_wait = False
         self._active_tools.clear()
         self._writing_tools.clear()
+        self._tool_kinds.clear()
         self.note = note
+        self.note_icon = icon
         self._refresh()
 
     def set_phase(self, phase: str) -> None:
@@ -123,6 +154,7 @@ class StatusLine(Static):
 
     def start_tool(self, tool_id: str, kind: str = "") -> None:
         self._active_tools.add(tool_id)
+        self._tool_kinds[tool_id] = kind
         if kind == "write":
             self._writing_tools.add(tool_id)
         self.mark_activity()
@@ -130,7 +162,24 @@ class StatusLine(Static):
     def finish_tool(self, tool_id: str) -> None:
         self._active_tools.discard(tool_id)
         self._writing_tools.discard(tool_id)
+        self._tool_kinds.pop(tool_id, None)
         self.mark_activity()
+
+    @property
+    def activity(self) -> str:
+        """thinking, reasoning, coding, searching or answering; tools win over the phase."""
+        kinds = set(self._tool_kinds.values())
+        for kind in ("write", "exec", "read"):
+            if kind in kinds:
+                return TOOL_ACTIVITY[kind]
+        if self._active_tools:
+            return "thinking"
+        return ACTIVITY.get(self.phase, "thinking")
+
+    @property
+    def spinner_style(self) -> int:
+        """Which spinner this turn uses, so the window title can match it."""
+        return self._spinner_style
 
     @property
     def writing_files(self) -> bool:
@@ -171,7 +220,7 @@ class StatusLine(Static):
         if not self.active:
             body = Text()
             if self.note:
-                body.append(f"  {art.icon('dot')} {self.note}", style="dim")
+                body.append(f"  {art.icon(self.note_icon)} {self.note}", style="dim")
             self.update(body)
             return
 
@@ -179,11 +228,13 @@ class StatusLine(Static):
             self.update(Text("  • idle · waiting for background commands  esc to stop", style="dim"))
             return
 
-        # Just the spinner and its word; phase, time and tokens stay out of the way.
+        # spinner, word, then "(1m 3s · thinking)"; token counts stay out of the way.
         body = Text()
         config = getattr(self.app, "config", None) if self.is_mounted else None
         frame = "*" if config and config.get("reduce_motion", False) else art.spinner_frame(self._tick, self._spinner_style)
         working_style = self._working_style(self.shade_level)
         body.append(f"  {frame} ", style=working_style)
         body.append(f"{self.verb}…", style=working_style)
+        elapsed = elapsed_label(time.monotonic() - self.started)
+        body.append(f" ({elapsed} {art.icon('dot')} {self.activity})", style="dim")
         self.update(body)

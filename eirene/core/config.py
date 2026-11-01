@@ -39,6 +39,8 @@ DEFAULTS: dict[str, Any] = {
     "execution_isolation": "auto",
     "permissions": "sandboxed",
     "prompt_suggest": False,
+    "recap": True,
+    "fast_mode": False,
     "isolate_network": True,
     "plugins": {},
     "hooks": {},
@@ -291,6 +293,8 @@ def _merge_defaults(data: dict[str, Any]) -> dict[str, Any]:
             merged[key] = {}
     merged["auto_compact"] = bool(merged.get("auto_compact", False))
     merged["reduce_motion"] = bool(merged.get("reduce_motion", False))
+    merged["recap"] = bool(merged.get("recap", True))
+    merged["fast_mode"] = bool(merged.get("fast_mode", False))
     merged["companion"] = bool(merged.get("companion", False))
     merged["accessible_icons"] = bool(merged.get("accessible_icons", False))
     if merged.get("mouse") not in VALID_MOUSE:

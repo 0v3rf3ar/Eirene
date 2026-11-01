@@ -33,6 +33,9 @@ class RequestGate:
         if response.status_code == 429:
             if quota_exhaustion(response):
                 return
+            if _fast_request(response):
+                # Fast-tier limits are separate; standard requests carry on.
+                return
             self.failures = min(self.failures + 1, 6)
             delay = _retry_after(response)
             if delay is None:
@@ -41,6 +44,13 @@ class RequestGate:
             self.spread_until = self.until + 2
         elif response.status_code < 400:
             self.failures = 0
+
+
+def _fast_request(response) -> bool:
+    try:
+        return bool(response.request.extensions.get("eirene_fast"))
+    except RuntimeError:  # a response built without a request
+        return False
 
 
 def gate_for(provider):

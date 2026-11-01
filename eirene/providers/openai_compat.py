@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, AsyncIterator
 from urllib.parse import urlparse
 
@@ -14,6 +15,10 @@ from ..core.errors import ProviderError
 from .base import (Done, Provider, TextDelta, ThinkingDelta, ToolCall, Usage,
                    loads_arguments, parse_json, raise_for_status, sse_lines,
                    wrap_transport_error)
+
+
+# OpenAI models with Priority processing, which OpenAI now calls Fast mode.
+_OPENAI_FAST = re.compile(r"^(gpt-(4\.1|4o|5|6)|o3|o4-mini)(\b|[-.])")
 
 
 class OpenAICompatible(Provider):
@@ -41,6 +46,11 @@ class OpenAICompatible(Provider):
         head.update(self.extra_headers)
         return head
 
+    def fast_supported(self, model: str) -> bool:
+        # Only OpenAI's own API; other OpenAI-shaped hosts reject the field.
+        return ((self.name == "chatgpt" or self.host == "api.openai.com")
+                and bool(_OPENAI_FAST.match((model or "").lower())))
+
     def _body(self, messages, model, system, tools, max_tokens) -> dict[str, Any]:
         deepseek = (self.name == "deepseek" or self.host == "api.deepseek.com"
                     or "deepseek" in model.lower())
@@ -58,6 +68,10 @@ class OpenAICompatible(Provider):
             payload["stream_options"] = {"include_usage": True}
         if self.name == "omniroute":
             payload["stream_options"] = {"include_usage": True}
+        if self.fast_active(model):
+            # "priority" is accepted by every model with the tier; "fast" only
+            # by the newest. Fast and standard share one rate limit.
+            payload["service_tier"] = "priority"
         if tools and self.supports_tools:
             payload["tools"] = [{"type": "function", "function": spec} for spec in tools]
             payload["tool_choice"] = "auto"

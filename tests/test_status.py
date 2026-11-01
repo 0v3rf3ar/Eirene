@@ -154,3 +154,73 @@ def test_background_idle_has_no_spinner_and_resumes_on_thinking(clocked_status, 
     assert frames[-1].plain == "  • idle · waiting for background commands  esc to stop"
     status.set_phase("thinking")
     assert "waiting for background commands" not in frames[-1].plain
+
+
+def test_working_line_shows_timer_and_activity(clocked_status):
+    status, clock, frames = clocked_status
+    dot = status_mod.art.icon("dot")
+    status._refresh()
+    assert frames[-1].plain.endswith(f"… (0s {dot} thinking)")
+    clock.now = 100 + 63
+    status.set_phase("reasoning")
+    assert frames[-1].plain.endswith(f"… (1m 3s {dot} reasoning)")
+    status.set_phase("answering")
+    assert frames[-1].plain.endswith(f"{dot} answering)")
+    status.start_tool("a", "read")
+    assert frames[-1].plain.endswith(f"{dot} searching)")
+    status.start_tool("b", "write")
+    assert frames[-1].plain.endswith(f"{dot} coding)")
+    status.finish_tool("b")
+    status.finish_tool("a")
+    status.set_phase("running")
+    assert frames[-1].plain.endswith(f"{dot} coding)")
+    status.set_phase("waiting for confirmation")
+    assert frames[-1].plain.endswith(f"{dot} thinking)")
+
+
+def test_elapsed_label():
+    assert status_mod.elapsed_label(-1) == "0s"
+    assert status_mod.elapsed_label(59.9) == "59s"
+    assert status_mod.elapsed_label(63) == "1m 3s"
+    assert status_mod.elapsed_label(3721) == "1h 2m 1s"
+    assert status_mod.elapsed_label(3600) == "1h 0m 0s"
+    assert status_mod.elapsed_label(90061) == "25h 1m 1s"
+
+
+def test_clock_label_is_twelve_hour():
+    from datetime import datetime
+    assert status_mod.clock_label(datetime(2026, 11, 1, 19, 38)) == "7:38 PM"
+    assert status_mod.clock_label(datetime(2026, 11, 1, 0, 5)) == "12:05 AM"
+    assert status_mod.clock_label(datetime(2026, 11, 1, 12, 0)) == "12:00 PM"
+    assert status_mod.clock_label(datetime(2026, 11, 1, 9, 7)) == "9:07 AM"
+
+
+async def test_turn_note_ends_with_finish_time(workdir):
+    from datetime import datetime
+    from eirene.core.agent import TurnDone
+    from eirene.core.usage import Usage
+    from test_tui import start
+    app, pilot, context = await start(workdir)
+    try:
+        at = datetime(2026, 11, 1, 19, 38)
+        dot = status_mod.art.icon("tokens")
+        done = TurnDone(3.2, 0.5, Usage(output_tokens=190))
+        note = app._turn_note(done, at)
+        verb, rest = note.split(" for ", 1)
+        assert verb in status_mod.art.DONE_VERBS
+        assert rest == f"3s · {dot} 190 tokens · 7:38 PM"
+        done = TurnDone(63, 0.5, Usage(output_tokens=190))
+        assert " for 1m 3s · " in app._turn_note(done, at)
+        stopped = TurnDone(12, 0, Usage(), status="stopped")
+        assert app._turn_note(stopped, at) == "stopped · 12s · 7:38 PM"
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+def test_completed_note_uses_done_icon(clocked_status):
+    status, clock, frames = clocked_status
+    status.stop("Brewed for 3s", "done")
+    assert frames[-1].plain == f"  {status_mod.art.icon('done')} Brewed for 3s"
+    status.start()
+    status.stop("stopped")
+    assert frames[-1].plain == f"  {status_mod.art.icon('dot')} stopped"

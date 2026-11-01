@@ -16,6 +16,7 @@ support dragging. Close a popup with Esc, or use `[x]` when shown.
 | --- | --- | --- |
 | `/connect [provider]` | Connect or switch provider; append `!` to replace saved API settings. | [Providers](providers.md) |
 | `/model [name]` | Pick or set a model for the active provider. | [Providers](providers.md) |
+| `/fast [on\|off\|status]` | Same model on the provider's faster, pricier tier. Listed only for models that have one. | [Fast mode](fast-mode.md) |
 | `/think [think\|nothink]` | Toggle or set thinking for local Ollama only. | [Thinking](thinking.md) |
 | `/agents [auto\|manual\|plan]` | Pick or set the working mode. | [Permissions](harness.md) |
 | `/agents list` | List enabled plugin specialist profiles. | [Specialists](specialists.md) |
@@ -69,7 +70,8 @@ when a short alias is ambiguous. Built-in names always take precedence.
 | `/theme [name]` | Pick or apply an interface theme. | [Appearance](appearance.md) |
 | `/companion [on\|off]` | Toggle the optional animated companion. Listed only in image-capable terminals. | [Appearance](appearance.md) |
 | `/notification [on\|off\|test]` | Toggle, set, or test desktop notifications. | [Notifications](notifications.md) |
-| `/prompt-suggest [on\|off]` | Show controls or set optional follow-up suggestions. | [Suggestions](prompt-suggestions.md) |
+| `/prompt-suggest [on\|off]` | Pick On or Off from a menu, or set optional follow-up suggestions directly. | [Suggestions](prompt-suggestions.md) |
+| `/recap [on\|off]` | Pick On or Off from a menu, or set session recaps directly. | [Context and usage](context-and-usage.md#recaps) |
 | `/keybindings` | Show keyboard shortcuts. | [Terminal interface](terminal-interface.md) |
 | `/config` | Open `config.json` in your editor: the `editor` setting, then nvim, vim, or the system default. Terminal editors return to Eirene when closed. | [Configuration file](config-file.md) |
 | `/help` | Show commands, shortcuts, and usage tips. | [Terminal interface](terminal-interface.md) |
@@ -77,6 +79,8 @@ when a short alias is ambiguous. Built-in names always take precedence.
 | `/update` | Download and install the latest stable release. | [Updates](updates.md) |
 | `/update edge check` | Check for a newer release, including prereleases. | [Updates](updates.md) |
 | `/update edge` | Download and install the newest release, including prereleases. | [Updates](updates.md) |
+| `/restart` | Restart Eirene and reopen the current session; use it after `/update`. Asks again if work is still running. | [Updates](updates.md) |
+| `/pwd` | Show the working directory Eirene was started in. | [Sessions](sessions.md) |
 | `/exit` | Close Eirene. | [Sessions](sessions.md) |
 
 ## Launch options

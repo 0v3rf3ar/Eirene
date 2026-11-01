@@ -142,3 +142,63 @@ async def test_panel_follows_the_window_width(workdir):
         assert panel.display and not panel.has_class("full") and not toggle.display
     finally:
         await context.__aexit__(None, None, None)
+
+
+async def test_resizing_redraws_in_place_without_rereading_git(workdir, monkeypatch):
+    from eirene.ui.diff_panel import DiffRows
+    repo(workdir)
+    app, pilot, context = await start(workdir, size=(140, 40))
+    try:
+        panel = app.query_one(DiffPanel)
+        await type_line(pilot, "/diff")
+        for _ in range(50):
+            await pilot.pause(0.05)
+            if app.query(FileSection):
+                break
+        sections = list(app.query(FileSection))
+        assert len(sections) == 3
+        reads = []
+        real = diff_panel.collect
+
+        async def counted(root):
+            reads.append(root)
+            return await real(root)
+
+        monkeypatch.setattr(diff_panel, "collect", counted)
+        for width in (130, 120, 150, 110, 140):
+            await pilot.resize_terminal(width, 40)
+            await pilot.pause()
+            rows = app.query(DiffRows).first()
+            # The banded rows already span the panel's new width.
+            assert rows.render().cell_len >= rows.size.width
+            assert rows.size.width == panel.content_region.width - panel.scrollbar_size_vertical
+        assert list(app.query(FileSection)) == sections
+        assert reads == []
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_unchanged_files_keep_their_sections_when_another_changes(workdir):
+    repo(workdir)
+    app, pilot, context = await start(workdir, size=(140, 40))
+    try:
+        panel = app.query_one(DiffPanel)
+        await type_line(pilot, "/diff")
+        for _ in range(50):
+            await pilot.pause(0.05)
+            if app.query(FileSection):
+                break
+        before = {section.item.path: section for section in app.query(FileSection)}
+        (workdir / "app.py").write_text('__version__ = "0.3.0"\n', encoding="utf-8")
+        panel.reload()
+        for _ in range(50):
+            await pilot.pause(0.05)
+            now = {section.item.path: section for section in app.query(FileSection)}
+            if now.get("app.py") is not before["app.py"] and len(now) == 3:
+                break
+        assert now["README.md"] is before["README.md"]
+        assert now["TODO.md"] is before["TODO.md"]
+        assert now["app.py"] is not before["app.py"]
+        assert [s.item.path for s in app.query(FileSection)] == ["README.md", "app.py", "TODO.md"]
+    finally:
+        await context.__aexit__(None, None, None)

@@ -365,3 +365,49 @@ async def test_startup_notice_and_failure(monkeypatch):
     await Eirene._check_updates(app)
     app.say.assert_not_called()
     app.runtime_logger.debug.assert_called_once()
+
+
+async def test_update_card_walks_through_each_step(workdir, monkeypatch, tmp_path):
+    from eirene.commands import update
+    from eirene.ui.update_card import UpdateCard
+    import io
+    from rich.console import Console
+    from test_tui import start, content
+
+    def card_text(card):
+        console = Console(width=80, record=True, file=io.StringIO())
+        console.print(card.content)
+        return console.export_text()
+    release = updates.Release("v9.9.9", "9.9.9", {})
+    monkeypatch.setattr(updates, "check", AsyncMock(return_value=release))
+
+    async def download(release, progress):
+        progress(21_250_000, 42_500_000)
+        progress(42_500_000, 42_500_000)
+        return tmp_path / "eirene"
+    monkeypatch.setattr(updates, "download", download)
+    monkeypatch.setattr(updates, "install", Mock(return_value="installed"))
+    monkeypatch.setattr(update.sys, "frozen", True, raising=False)
+    app, pilot, context = await start(workdir)
+    try:
+        await update.run(app, "edge")
+        await pilot.pause()
+        card = next(b for b in app.transcript.children if isinstance(b, UpdateCard))
+        text = card_text(card)
+        assert "9.9.9" in text and "edge channel" in text
+        for line in ("Found Eirene 9.9.9", "Downloaded (42.5 MB)",
+                     "SHA-256 checksum verified", "Installed", "Run /restart to start Eirene 9.9.9."):
+            assert line in text
+        assert app._update_pending
+        await update.run(app, "")
+        await pilot.pause()
+        assert any("Run /restart" in content(b) for b in app.transcript.children[-2:])
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+def test_progress_bar_fills_proportionally():
+    from eirene.ui.update_card import progress_bar
+    assert progress_bar(0, 10) == "░" * 10
+    assert progress_bar(50, 10) == "█" * 5 + "░" * 5
+    assert progress_bar(150, 10) == "█" * 10

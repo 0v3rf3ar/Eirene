@@ -182,6 +182,17 @@ class NoticeBlock(OpensLinks, Block):
         super().__init__(body)
 
 
+class RecapBlock(Block):
+    """A dim one-line summary of the session so far."""
+
+    def __init__(self, text: str):
+        body = Text(style="dim")
+        body.append(f"{art.icon('recap')} recap: ", style="bold")
+        body.append(safe_notice(text))
+        body.append(" (/recap off to disable)", style="italic")
+        super().__init__(body)
+
+
 class ArtBlock(Block):
     """Pre-rendered ASCII art, never wrapped."""
 

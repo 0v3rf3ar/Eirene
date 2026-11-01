@@ -45,7 +45,12 @@ SMALL_BANNER = r"""
 TINY_BANNER = "e i r e n e"
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-SPINNERS = (SPINNER,)
+# A star that swells to the same ✻ that marks a finished turn, then shrinks.
+# ✳ is left out: some terminals draw it as a colour emoji.
+STAR_SPINNER = "·✢✶✻✽✻✶✢"
+MOON_SPINNER = "◐◓◑◒"
+# Each turn picks one at random.
+SPINNERS = (SPINNER, STAR_SPINNER, MOON_SPINNER)
 ACCESSIBLE = False
 
 ICONS = {
@@ -59,7 +64,7 @@ ICONS = {
     "up": "\u2191",
     "auto": "↯",
     "manual": "\u23f8",
-    "plan": "☑", "skill": "✧", "task": "⚑", "link": "↗",
+    "plan": "☑", "skill": "✧", "task": "⚑", "link": "↗", "recap": "※", "done": "✻",
     "dot": "\u00b7",
     "arrow": "\u2192",
     "bullet": "\u2022",
@@ -72,7 +77,7 @@ ASCII_ICONS = {
     "search": "S", "shell": "$", "ok": "+", "fail": "x", "warn": "!",
     "info": "i", "clock": "t", "tokens": "v", "up": "^", "auto": "A",
     "network": "@", "mcp": "K", "access": "K",
-    "manual": "M", "plan": "P", "skill": "K", "task": "T", "link": "@",
+    "manual": "M", "plan": "P", "skill": "K", "task": "T", "link": "@", "recap": "*", "done": "*",
     "dot": ".", "arrow": "->", "bullet": "*", "corner": "`",
 }
 
@@ -117,6 +122,15 @@ VERBS = [
     "Bamboozling", "Shenaniganing", "Discombobulating", "Flibbertigibbeting", "Hornswoggling",
     "Lollygagging", "Befuddling", "Kerfuffling", "Dillydallying", "Snacking",
     "Caffeinating", "Overthinking", "Daydreaming", "Procrastinating", "Moseying",
+]
+
+# "Churned for 3s" after a completed turn.
+DONE_VERBS = [
+    "Churned", "Brewed", "Tinkered", "Simmered", "Pondered", "Mulled",
+    "Cooked", "Whittled", "Conjured", "Wrangled", "Noodled", "Sifted",
+    "Distilled", "Percolated", "Marinated", "Forged", "Polished", "Kneaded",
+    "Stitched", "Crafted", "Baked", "Crunched", "Sautéed", "Steeped",
+    "Fermented", "Cogitated", "Puzzled", "Worked", "Mused", "Sculpted",
 ]
 
 TIPS = [
@@ -205,6 +219,12 @@ def spinner_frame(tick: int, style: int = 0) -> str:
     return "*" if ACCESSIBLE else frames[tick % len(frames)]
 
 
+def session_spinner(session_id: str) -> int:
+    """The same spinner for a session every time, across turns and restarts."""
+    import zlib
+    return zlib.crc32(session_id.encode()) % len(SPINNERS)
+
+
 def spinner_style() -> int:
     return random.randrange(len(SPINNERS))
 
@@ -213,6 +233,12 @@ def verb(seed: int | None = None) -> str:
     if seed is None:
         return random.choice(VERBS)
     return VERBS[seed % len(VERBS)]
+
+
+def done_verb(seed: int | None = None) -> str:
+    if seed is None:
+        return random.choice(DONE_VERBS)
+    return DONE_VERBS[seed % len(DONE_VERBS)]
 
 
 def tip(seed: int | None = None) -> str:

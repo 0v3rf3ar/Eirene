@@ -376,3 +376,77 @@ def test_windows_clipboard_receives_utf16_without_a_byte_order_mark(monkeypatch)
                         lambda command, **kwargs: sent.update(kwargs) or SimpleNamespace(returncode=0))
     assert terminal.copy_to_system("C:\\Users\\Jürgen 日本") == "clip.exe"
     assert sent["input"] == "C:\\Users\\Jürgen 日本".encode("utf-16-le")
+
+
+async def test_tab_title_drops_prefix_once_the_chat_is_named(workdir):
+    from test_tui import start
+    app, pilot, context = await start(workdir)
+    try:
+        app.session.name = ""
+        assert app.tab_label() == "eirene"
+        app.session.name = "Fixing windows test failures"
+        assert app.tab_label() == "Fixing windows test failures"
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_clear_restores_the_default_title(workdir):
+    from test_tui import start
+    from eirene.commands import dispatch
+    import eirene.app as app_mod
+    app, pilot, context = await start(workdir)
+    titles = []
+    original = app_mod.write_terminal_title
+    app_mod.write_terminal_title = lambda driver, text: titles.append(text) or True
+    try:
+        app.session.name = "Fixing windows test failures"
+        app.name_the_tab()
+        assert titles[-1] == "Fixing windows test failures"
+        await dispatch(app, "/clear")
+        await pilot.pause()
+        assert titles[-1] == app_mod.UNNAMED_TITLE
+    finally:
+        app_mod.write_terminal_title = original
+        await context.__aexit__(None, None, None)
+
+
+async def test_window_title_spinner_matches_the_chat(workdir, monkeypatch):
+    from test_tui import start
+    import eirene.app as app_mod
+    from eirene.ui import art
+    app, pilot, context = await start(workdir)
+    titles = []
+    monkeypatch.setattr(app_mod, "write_terminal_title", lambda driver, text: titles.append(text) or True)
+    try:
+        app.status._spinner_style = 2  # the half moon
+        app.config.set("reduce_motion", False)
+        app._busy = True
+        for tick in range(4):
+            app._tab_tick = tick
+            app.name_the_tab()
+        assert [t.split()[0] for t in titles[-4:]] == list(art.MOON_SPINNER)
+        app.config.set("reduce_motion", True)
+        app.name_the_tab()
+        assert titles[-1].startswith("* ")
+    finally:
+        app._busy = False
+        await context.__aexit__(None, None, None)
+
+
+async def test_turns_in_one_session_share_a_spinner(workdir):
+    from test_tui import start, Script, type_line
+    from eirene.providers.base import Done, TextDelta
+    from eirene.ui import art
+    app, pilot, context = await start(workdir, Script([TextDelta("ok"), Done("stop")]))
+    try:
+        seen = []
+        for prompt in ("one", "two", "three"):
+            await type_line(pilot, prompt)
+            seen.append(app.status.spinner_style)
+            for _ in range(40):
+                if app.turn and app.turn.done():
+                    break
+                await pilot.pause(0.05)
+        assert seen == [art.session_spinner(app.session.id)] * 3
+    finally:
+        await context.__aexit__(None, None, None)

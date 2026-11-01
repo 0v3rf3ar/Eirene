@@ -44,8 +44,8 @@ def lookup(name: str, app=None) -> Command | None:
 
 def _load() -> None:
     from . import (agents, btw, clear, compact, companion, config, connect, diff, exit as exit_cmd, plan, plugins,
-                   help as help_cmd, keybindings, mcp, model, notification, schedule, sessions, skills,
-                   permissions, review, sandbox, search_api, snow, subagents, prompt_suggest, tasks, theme, think, update, usage)  # noqa: F401
+                   help as help_cmd, keybindings, mcp, model, notification, pwd, restart, schedule, sessions, skills,
+                   fast, permissions, recap, review, sandbox, search_api, snow, subagents, prompt_suggest, tasks, theme, think, update, usage)  # noqa: F401
 
 
 async def dispatch(app, text: str) -> None:
@@ -87,6 +87,10 @@ def commands(app=None) -> list[Command]:
     visible = sorted(name for name, command in REGISTRY.items() if not command.hidden)
     if app is None or getattr(app.config, "provider", None) != "ollama-local":
         visible = [name for name in visible if name != "think"]
+    fast = getattr(getattr(app, "agent", None), "fast_supported", None)
+    if fast is None or not fast():
+        # Only models with a provider fast tier; /fast off still works typed.
+        visible = [name for name in visible if name != "fast"]
     if getattr(app, "_companion_renderer", None) is None:
         visible = [name for name in visible if name != "companion"]
     from .plugin_commands import commands as plugin_commands

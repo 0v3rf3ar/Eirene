@@ -5,9 +5,8 @@ from __future__ import annotations
 from rich.cells import cell_len
 from rich.text import Text
 from textual import events
-from textual.containers import VerticalScroll, Horizontal
+from textual.containers import VerticalScroll
 from textual.widgets import Static
-from textual.message import Message
 
 from . import art, markup, theme
 from .format import strip_escapes
@@ -39,51 +38,6 @@ class CloseButton(Static):
         text-style: bold;
     }}
     """
-
-
-class TextToggle(Static):
-    """Immediate, one-line toggle without switch animation."""
-
-    can_focus = True
-    BINDINGS: list = []
-    DEFAULT_CSS = """
-    TextToggle { width: 11; height: 1; padding: 0; background: transparent; }
-    TextToggle:hover, TextToggle:focus { text-style: bold reverse; }
-    """
-
-    class Changed(Message):
-        def __init__(self, toggle, value: bool):
-            super().__init__()
-            self.toggle = toggle
-            self.value = value
-
-    def __init__(self, value: bool = False, **kwargs):
-        super().__init__(**kwargs)
-        self.value = value
-
-    @property
-    def value(self) -> bool:
-        return self._value
-
-    @value.setter
-    def value(self, value: bool) -> None:
-        self._value = bool(value)
-        self.update(Text("<  ON  >" if self._value else "<  OFF  >"))
-
-    def action_toggle(self) -> None:
-        self.value = not self.value
-        self.post_message(self.Changed(self, self.value))
-
-    async def _on_key(self, event: events.Key) -> None:
-        if event.key in {"enter", "space", "left", "right"}:
-            event.stop()
-            event.prevent_default()
-            self.action_toggle()
-
-    def on_click(self, event: events.Click) -> None:
-        event.stop()
-        self.focus()
-        self.action_toggle()
 
 
 class AsideText(OpensLinks, Static):
@@ -121,7 +75,6 @@ class AsidePanel(DraggableWindow):
         border: round $primary;
         display: none;
     }}
-    #aside-toggle-row {{ height: 1; margin-top: 1; display: none; }}
     """
 
     def __init__(self) -> None:
@@ -133,13 +86,10 @@ class AsidePanel(DraggableWindow):
         self._content: Text | None = None
         self._content_width: int | None = None
         self._width = markup.DEFAULT_WIDTH
-        self._toggle_callback = None
 
     def compose(self):
         with AsideBody():
             yield AsideText(Text(""), id="aside-body")
-            with Horizontal(id="aside-toggle-row"):
-                yield TextToggle(False, id="aside-toggle")
         yield CloseButton(Text(CLOSE, style="bold"))
 
     def on_mount(self) -> None:
@@ -179,7 +129,6 @@ class AsidePanel(DraggableWindow):
     def ask(self, question: str) -> None:
         """Show the window with a pending answer."""
         self.reset_position()
-        self._hide_toggle()
         self._content = None
         self._content_width = None
         self.question = strip_escapes(question)
@@ -193,7 +142,6 @@ class AsidePanel(DraggableWindow):
     def show_content(self, content: Text) -> None:
         """Show a finished, selectable panel without adding it to the chat."""
         self.reset_position()
-        self._hide_toggle()
         self._content = content
         self._content_width = max(
             (cell_len(line) for line in content.plain.splitlines()),
@@ -207,28 +155,21 @@ class AsidePanel(DraggableWindow):
         self._place()
         self.refresh_body()
 
-    def show_toggle(self, content: Text, enabled: bool, callback) -> None:
-        toggle = self.query_one("#aside-toggle", TextToggle)
-        if self.open and self._toggle_callback == callback:
-            self._content = content
-            self.refresh_body()
+    def scroll_by_line(self, delta: int) -> bool:
+        """Arrow keys from the prompt scroll an open window that overflows.
+
+        False when there is nothing to scroll, so the arrows recall history.
+        """
+        if not self.display:
+            return False
+        body = self.query_one(AsideBody)
+        if body.max_scroll_y <= 0:
+            return False
+        if delta < 0:
+            body.scroll_up(animate=False)
         else:
-            self.show_content(content)
-            # Left/Right switch it right away; Escape returns to the prompt.
-            self.call_after_refresh(toggle.focus)
-        toggle.value = enabled
-        self._toggle_callback = callback
-        self.query_one("#aside-toggle-row").display = True
-        self.call_after_refresh(self._place)
-
-    def _hide_toggle(self) -> None:
-        self._toggle_callback = None
-        self.query_one("#aside-toggle-row").display = False
-
-    def on_text_toggle_changed(self, event: TextToggle.Changed) -> None:
-        if event.toggle.id == "aside-toggle" and self._toggle_callback:
-            event.stop()
-            self._toggle_callback(event.value)
+            body.scroll_down(animate=False)
+        return True
 
     def feed(self, text: str) -> None:
         self.answer += strip_escapes(text)
@@ -242,7 +183,6 @@ class AsidePanel(DraggableWindow):
 
     def close(self) -> None:
         self.reset_position()
-        self._hide_toggle()
         self.display = False
         self._content = None
         self._content_width = None
