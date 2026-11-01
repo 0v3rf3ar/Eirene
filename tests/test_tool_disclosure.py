@@ -121,11 +121,29 @@ async def test_restored_polling_is_hidden(workdir):
         await context.__aexit__(None, None, None)
 
 
+async def settled(app, pilot):
+    """Wait for the startup banner and notices, which mount after the app starts.
+
+    Lookups pushed before they land could be split by them, which is a timing
+    accident of the test rather than the grouping under test.
+    """
+    from eirene.ui.chat import ArtBlock, NoticeBlock
+    for _ in range(100):
+        await pilot.pause()
+        if app.transcript.query(ArtBlock):
+            break
+    seen = -1
+    while seen != len(app.transcript.children):
+        seen = len(app.transcript.children)
+        await pilot.pause(0.05)
+
+
 async def test_consecutive_lookups_share_one_summarised_group(workdir):
     from eirene.ui.chat import AnswerBlock, CommandBlock, ToolGroup
 
     app = Eirene(workdir)
     async with app.run_test(size=(100, 40)) as pilot:
+        await settled(app, pilot)
         reads = [await app.push(ToolBlock("read_file", "a.py")),
                  await app.push(ToolBlock("search_text", "needle")),
                  await app.push(ToolBlock("list_dir", "src"))]
@@ -157,6 +175,7 @@ async def test_long_groups_fold_their_earlier_rows(workdir):
 
     app = Eirene(workdir)
     async with app.run_test(size=(100, 40)) as pilot:
+        await settled(app, pilot)
         rows = [await app.push(ToolBlock("read_file", f"f{index}.py")) for index in range(9)]
         await pilot.pause()
         group = app.transcript.query_one(ToolGroup)
