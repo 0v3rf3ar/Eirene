@@ -353,3 +353,33 @@ def test_console_batches_replace_unpaired_surrogates():
 
     assert join_console_keys("", ["a", "\ude00", "b"]) == ("a�b", "")
     assert join_console_keys("\ud83d", ["x"]) == ("�x", "")
+
+
+async def test_quitting_mid_turn_records_no_crash(workdir, monkeypatch):
+    """Closing the app while a turn runs must not file a crash report."""
+    import asyncio
+    from eirene.core import crash
+    from test_tui import Script, start, type_line
+    from eirene.providers.base import TextDelta
+
+    class Slow(Script):
+        async def stream(self, *args, **kwargs):
+            yield TextDelta("x")
+            await asyncio.sleep(30)
+
+    recorded = []
+    monkeypatch.setattr(crash, "record", lambda error, **kw: recorded.append((error, kw)))
+    app, pilot, context = await start(workdir, Slow())
+    await type_line(pilot, "work")
+    for _ in range(20):
+        await pilot.pause()
+        if app.status.active:
+            break
+    turn = app.turn
+    assert turn and not turn.done()
+    await context.__aexit__(None, None, None)
+    # Quitting cancels the turn; its cleanup runs after the widgets are gone.
+    await asyncio.wait([turn], timeout=5)
+    await asyncio.sleep(0)
+    assert turn.done()
+    assert recorded == []

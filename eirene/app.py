@@ -1034,7 +1034,10 @@ class Eirene(App):
         if self._suggestion_task is not None and not self._suggestion_task.done():
             self._suggestion_task.cancel()
         self._suggestion_task = None
-        self.prompt.prompt_suggestion = ""
+        try:
+            self.prompt.prompt_suggestion = ""
+        except NoMatches:
+            pass  # The input is already gone while the app shuts down.
 
     def _set_suggestion_status(self, text: str) -> None:
         self._suggestion_status = text

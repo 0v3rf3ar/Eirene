@@ -979,7 +979,8 @@ async def test_status_line_reports_while_working(workdir):
             if app.status.active:
                 break
         text = content(app.status)
-        assert "…" in text and "s" in text
+        # Only the spinner and its word; the word is picked at random.
+        assert text.strip().endswith(f"{app.status.verb}…")
         assert app.status.active
         app.turn.cancel()
     finally:
