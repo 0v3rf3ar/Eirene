@@ -74,7 +74,7 @@ def test_trust_check_precedes_initialization_each_launch(
 
     def initialize(path, saved):
         seen.append(("initialize", path, saved))
-        return SimpleNamespace(run=lambda: seen.append("run"),
+        return SimpleNamespace(run=lambda: seen.append("run"), return_code=None,
                                session=SimpleNamespace(saved=False))
 
     monkeypatch.setattr("eirene.ui.trust.confirm_workspace_trust", confirm)

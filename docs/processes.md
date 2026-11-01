@@ -17,7 +17,8 @@ in one command is not a persistent change for later commands. Mention the releva
 package when a repository contains several projects.
 
 Manual mode asks for approval except for recognized harmless read operations.
-Auto mode permits commands within the available
+Accept mode runs commands without asking unless they can create, change,
+move or delete files. Auto mode permits commands within the available
 sandbox, but network and external host access can still need approval. Windows
 commands have additional approval requirements; see [permissions](harness.md).
 

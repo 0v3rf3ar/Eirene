@@ -15,7 +15,13 @@ BLOCK = "block"
 class Mode(str, Enum):
     AUTO = "auto"
     MANUAL = "manual"
+    ACCEPT = "accept"
     PLAN = "plan"
+
+    @classmethod
+    def _missing_(cls, value):
+        # Settings saved while this mode was called "tools".
+        return cls.ACCEPT if value == "tools" else None
 
     @property
     def label(self) -> str:
@@ -23,7 +29,7 @@ class Mode(str, Enum):
 
     @property
     def icon(self) -> str:
-        glyph = {"auto": "⚡︎", "manual": "⏸", "plan": "☷"}[self.value]
+        glyph = {"auto": "⚡︎", "manual": "⏸", "plan": "☷", "accept": "»"}[self.value]
         return terminal_icon(glyph)
 
     @property
@@ -32,20 +38,25 @@ class Mode(str, Enum):
             "auto": "acts without asking inside the sandbox",
             "manual": "asks before every write and command",
             "plan": "reads only; makes no changes",
+            "accept": "runs tools freely; asks before any file change",
         }[self.value]
 
 
-CYCLE = [Mode.MANUAL, Mode.AUTO, Mode.PLAN]
+CYCLE = [Mode.MANUAL, Mode.ACCEPT, Mode.AUTO, Mode.PLAN]
 
 POLICY: dict[Mode, dict[str, str]] = {
     Mode.AUTO: {READ: ALLOW, WRITE: ALLOW, EXEC: ALLOW},
     Mode.MANUAL: {READ: ASK, WRITE: ASK, EXEC: ASK},
     Mode.PLAN: {READ: ALLOW, WRITE: BLOCK, EXEC: BLOCK},
+    # Commands are allowed here, but the agent asks for any that can change files.
+    Mode.ACCEPT: {READ: ALLOW, WRITE: ASK, EXEC: ALLOW},
 }
 
 
 def parse(value: str | None) -> Mode:
     text = (value or "manual").strip().lower()
+    if text in {"tools", "accept-tools", "accept_tools", "acc"}:
+        return Mode.ACCEPT
     for mode in Mode:
         if mode.value == text or mode.value.startswith(text):
             return mode

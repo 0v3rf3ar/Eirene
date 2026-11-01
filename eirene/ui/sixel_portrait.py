@@ -53,6 +53,17 @@ class PortraitUpdate(CompositorUpdate):
 
     def render_segments(self, console):
         text = self.update.render_segments(console)
+        if self.portrait.broken:
+            return text
+        try:
+            return text + self._portrait_sequence()
+        except Exception:  # noqa: BLE001 - a decoration must never fail the frame
+            from ..core.logging import get as get_logger
+            get_logger().warning("portrait.render_failed", exc_info=True)
+            self.portrait.broken = True
+            return text
+
+    def _portrait_sequence(self) -> str:
         portrait = self.portrait
         if portrait.parent.display and portrait.image is not None:
             portrait.place_above_input(portrait.app.query("Composer Rule").first().region.y)
@@ -62,8 +73,8 @@ class PortraitUpdate(CompositorUpdate):
                 and not any(region.y <= y < region.bottom and x1 < region.right and x2 > region.x
                             for y, x1, x2 in spans)):
             # Typing below the picture does not erase it. Leave its pixels alone.
-            return text
-        return text + portrait.terminal_sequence()
+            return ""
+        return portrait.terminal_sequence()
 
 
 class SixelPortrait(Widget):
@@ -76,6 +87,8 @@ class SixelPortrait(Widget):
         self._placement_region = Region()
         self._encoded = None
         self._placed = False
+        # Set after a drawing failure; the companion then stays text-only.
+        self.broken = False
 
     @property
     def image(self):
@@ -94,6 +107,8 @@ class SixelPortrait(Widget):
             return
         from textual_image._terminal import get_cell_size
         cell = get_cell_size()
+        if not (cell.width and cell.height and self._image.width and self._image.height):
+            return  # The terminal did not report a usable cell size.
         width = max(1, round(6 * cell.height / cell.width * self._image.width / self._image.height))
         region = Region(max(0, self.app.size.width - width - 1), max(0, border_y - 6), width, 6)
         if region != self._placement_region:
@@ -114,6 +129,8 @@ class SixelPortrait(Widget):
         cell = get_cell_size()
         region = self._placement_region
         size = (region.width * cell.width, region.height * cell.height)
+        if not (size[0] and size[1]):
+            return ""
         if self._encoded is None or self._encoded[0] != size:
             self._encoded = (size, transparent_sixels(self._image.resize(size, Image.Resampling.NEAREST)))
         self._placed = True

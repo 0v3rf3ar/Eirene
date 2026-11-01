@@ -864,7 +864,7 @@ async def test_mouse_mode_defaults_to_terminal_selection_over_ssh(workdir, monke
         app._start_mouse_mode()
         assert app._mouse_captured is captured and calls == ["on" if captured else "off"]
         notices = " ".join(str(block.content) for block in app.query("NoticeBlock"))
-        assert ("your terminal's own selection" in notices) is (not captured)
+        assert "your terminal's own selection" not in notices  # Detecting SSH is silent.
         await pilot.press("f4")
         await pilot.pause()
         assert app._mouse_captured is (not captured) and calls[-1] == ("off" if captured else "on")

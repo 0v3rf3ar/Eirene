@@ -104,12 +104,16 @@ class PermissionBroker:
             return _allow(arguments)
         if tool_name == ASK_TOOL or tool_name in self.always:
             return _allow(arguments)
+        if tool_name == "WebSearch" and self.approve is not None:
+            return _allow(arguments)  # Searching only reads public results.
         if self.approve is None:
             return (_deny("plan mode makes no changes")
                     if self.fallback == "deny" else _allow(arguments))
         name, label, preview = describe_change(tool_name, arguments, self.root,
                                                full_access=self.full_access)
         reason = "Claude Code wants to modify files" if preview else "Claude Code tool"
+        if arguments.get("dangerouslyDisableSandbox"):
+            reason = "Claude Code wants to run this command outside its sandbox"
         answer = await self.approve(name, label, preview, reason)
         if answer == "always":
             self.always.add(tool_name)

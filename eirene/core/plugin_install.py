@@ -77,7 +77,8 @@ def install(source: str) -> tuple[str, int]:
                     ["git", "-c", "core.hooksPath=", "-c", "core.autocrlf=false", "clone", "--depth", "1",
                      *(["--branch", ref] if ref else []), "--",
                      f"https://github.com/{owner}/{name}.git", str(root)],
-                    capture_output=True, text=True, timeout=120, env=environment,
+                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120,
+                    env=environment,
                 )
             except FileNotFoundError as exc:
                 raise ValueError("Git is required to install from GitHub") from exc

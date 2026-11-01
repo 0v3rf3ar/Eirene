@@ -57,6 +57,11 @@ Fix the empty-state message in the settings page. Keep the layout unchanged and 
 Manual mode presents approval controls for writes, commands, and access outside
 the workspace boundary. Ordinary harmless workspace reads can proceed directly.
 Read the requested action and its access scope before accepting it.
+Accept mode (`/agents accept`) runs reads, searches and commands without a
+prompt, but still asks before any write, edit, new file, or command that can
+create, change, move or delete files (`rm`, `mv`, `sed -i`, `git checkout`,
+`npm install`, output redirects and the like). Commands it cannot read clearly
+also ask. Web search never asks, in any mode.
 Auto mode allows ordinary workspace actions without a prompt; external access
 still requires approval. See [modes and permissions](harness.md).
 

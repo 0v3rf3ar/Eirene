@@ -58,7 +58,7 @@ DEFAULTS: dict[str, Any] = {
     "editor": "",
 }
 
-VALID_MODES = {"auto", "manual", "plan"}
+VALID_MODES = {"auto", "manual", "accept", "plan"}
 VALID_MOUSE = {"auto", "eirene", "terminal"}
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 INTEGER_LIMITS = {
@@ -296,6 +296,8 @@ def _merge_defaults(data: dict[str, Any]) -> dict[str, Any]:
     if merged.get("mouse") not in VALID_MOUSE:
         merged["mouse"] = "auto"
     merged["seasonal_effects"] = bool(merged.get("seasonal_effects", True))
+    if merged.get("mode") == "tools":
+        merged["mode"] = "accept"  # Its name before it was shortened.
     if merged.get("mode") not in VALID_MODES:
         merged["mode"] = "manual"
     level = str(merged.get("log_level", "INFO")).upper()

@@ -7,7 +7,7 @@ from ..ui import art
 from . import register
 
 
-@register("agents", "change mode or list plugin specialists", "/agents [auto|manual|plan|list]")
+@register("agents", "change mode or list plugin specialists", "/agents [auto|manual|accept|plan|list]")
 async def run(app, args: str) -> None:
     wanted = args.strip().lower()
     if wanted == "list":
@@ -22,15 +22,17 @@ async def run(app, args: str) -> None:
             for name, (plugin, path, fields, _) in profiles.items()))
         return
     if wanted:
+        if wanted.startswith("acc") or wanted.startswith("too"):
+            wanted = Mode.ACCEPT.value
         for mode in Mode:
             if mode.value.startswith(wanted):
                 _apply(app, mode)
                 return
-        app.say(f"no mode called '{wanted}'; try auto, manual or plan", "warn")
+        app.say(f"no mode called '{wanted}'; try auto, manual, accept or plan", "warn")
         return
 
     # Avoid emoji/trigram width differences shifting the right border.
-    icons = {Mode.AUTO: "↯", Mode.MANUAL: "‖", Mode.PLAN: "≡"}
+    icons = {Mode.AUTO: "↯", Mode.MANUAL: "‖", Mode.PLAN: "≡", Mode.ACCEPT: "»"}
     options = [(mode.value, f"{icons[mode]} {mode.label}",
                 mode.blurb + (" (current)" if mode is app.agent.mode else ""))
                for mode in Mode]

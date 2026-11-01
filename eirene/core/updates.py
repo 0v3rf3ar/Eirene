@@ -27,6 +27,7 @@ from .. import __version__
 from . import paths
 
 REPOSITORY = "0v3rf3ar/Eirene"
+WINDOWS_INSTALLER_URL = f"https://raw.githubusercontent.com/{REPOSITORY}/master/install.ps1"
 API_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 RELEASES_URL = f"https://api.github.com/repos/{REPOSITORY}/releases"
 MAX_DOWNLOAD = 300 * 1024 * 1024
@@ -178,7 +179,8 @@ def _extract(archive: Path, destination: Path, windows: bool) -> None:
 
 
 def _smoke_test(binary: Path, version: str) -> None:
-    result = subprocess.run([str(binary), "--version"], capture_output=True, timeout=30,
+    result = subprocess.run([str(binary), "--version"], stdin=subprocess.DEVNULL,
+                            capture_output=True, timeout=30,
                             text=True, encoding="utf-8", errors="replace", env=external_environment())
     if result.returncode or result.stdout.strip() != f"eirene {version}":
         raise UpdateError("downloaded executable failed its version smoke test")
@@ -219,10 +221,30 @@ async def download(release: Release, *, client: httpx.AsyncClient | None = None,
         raise UpdateError(f"could not download update: {exc}") from exc
 
 
+def needs_installer() -> bool:
+    """Windows locks a running executable, so Eirene cannot replace its own eirene.exe."""
+    return os.name == "nt" and bool(getattr(sys, "frozen", False))
+
+
+def windows_update_command(release: Release, install_dir: Path) -> str:
+    """A PowerShell command that installs exactly this release over this installation.
+
+    The installer verifies the release checksum and waits for running Eirene
+    windows to close before replacing the executable. Single-quoted PowerShell
+    strings are literal, so only quotes need doubling in the path.
+    """
+    def literal(value: object) -> str:
+        return "'" + str(value).replace("'", "''") + "'"
+    return (f"& ([scriptblock]::Create((irm {literal(WINDOWS_INSTALLER_URL)}))) "
+            f"-Version {literal(release.tag)} -InstallDir {literal(install_dir)} -NoPathUpdate")
+
+
 def install(staged: Path) -> str:
     """Replace frozen binaries atomically; source runs only download a standalone binary."""
     if not getattr(sys, "frozen", False):
         return f"Downloaded and verified: {staged}. This is a source installation; use that standalone binary or update your checkout."
+    if needs_installer():
+        raise UpdateError("Windows updates run through the installer command that /update shows")
     target = Path(sys.executable).resolve()
     # Copy beside the executable so the final replacement stays on one filesystem.
     with tempfile.NamedTemporaryFile(prefix=".eirene-update-", suffix=target.suffix,
@@ -231,44 +253,8 @@ def install(staged: Path) -> str:
     try:
         shutil.copyfile(staged, pending)
         pending.chmod(target.stat().st_mode & 0o777)
-        if os.name != "nt":
-            os.replace(pending, target)
-            return "Update installed. Exit and restart Eirene to use the new version."
-        return _windows_install(pending, target)
+        os.replace(pending, target)
+        return "Update installed. Exit and restart Eirene to use the new version."
     except BaseException:
         pending.unlink(missing_ok=True)
         raise
-
-
-def _windows_install(pending: Path, target: Path) -> str:
-    """Wait for the running executable to unlock before replacement, preserving a backup."""
-    quote = lambda value: "'" + str(value).replace("'", "''") + "'"
-    script = pending.with_suffix(".ps1")
-    backup = target.with_suffix(".previous.exe")
-    error = target.with_suffix(".update-error.txt")
-    script.write_text(
-        "$ErrorActionPreference = 'Stop'\n"
-        f"$target = {quote(target)}\n$pending = {quote(pending)}\n$backup = {quote(backup)}\n"
-        f"$errorLog = {quote(error)}\n"
-        "try {\n"
-        f"  Wait-Process -Id {os.getpid()} -Timeout 3600 -ErrorAction SilentlyContinue\n"
-        f"  if (Get-Process -Id {os.getpid()} -ErrorAction SilentlyContinue) {{ throw 'Timed out waiting for Eirene to exit.' }}\n"
-        "  for ($attempt = 0; $attempt -lt 30; $attempt++) {\n"
-        "    try { [System.IO.File]::Replace($pending, $target, $backup); break }\n"
-        "    catch { if ($attempt -eq 29) { throw }; Start-Sleep -Seconds 1 }\n"
-        "  }\n"
-        "  Remove-Item -LiteralPath $errorLog -Force -ErrorAction SilentlyContinue\n"
-        "} catch {\n"
-        "  $_ | Out-File -LiteralPath $errorLog -Encoding utf8\n"
-        "  exit 1\n"
-        "} finally { Remove-Item -LiteralPath $PSCommandPath -Force }\n", encoding="utf-8-sig")
-    try:
-        subprocess.Popen(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                          "-File", str(script)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, cwd=str(target.parent),
-                         creationflags=0x00000008 | 0x00000200, env=external_environment())
-    except OSError:
-        script.unlink(missing_ok=True)
-        raise
-    return ("Update verified and scheduled. Close all Eirene processes, then wait a few seconds before restarting. "
-            f"If replacement fails, see {error}. The previous version is backed up at {backup}.")

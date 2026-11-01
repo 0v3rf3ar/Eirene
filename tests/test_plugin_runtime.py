@@ -1,5 +1,6 @@
 """Portable command and lifecycle behavior, independent of the selected model."""
 import json
+import asyncio
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -73,7 +74,8 @@ async def test_dispatch_sends_expanded_command_through_normal_turn(tmp_path, con
         pass
     async def run_turn(text, **kwargs):
         received.append((text, kwargs))
-    app = SimpleNamespace(config=config, turn=None, push=push, _run_turn=run_turn, say=lambda *a: None)
+    app = SimpleNamespace(config=config, turn=None, push=push, _run_turn=run_turn, say=lambda *a: None,
+                          spawn=lambda coroutine, **kwargs: asyncio.ensure_future(coroutine))
     await dispatch(app, '/demo:review src/main.py')
     await app.turn
     assert 'Inspect src/main.py; first src/main.py.' in received[0][0]

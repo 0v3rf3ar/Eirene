@@ -52,7 +52,7 @@ async def test_click_header_toggles_only_its_result(workdir):
             card.finish("tool result", False, 0)
             card.flush()
         await pilot.pause()
-        assert first._Static__content.plain == "ⓘ mcp__Cloudflare__whoami ▾"
+        assert first._Static__content.plain == "• Cloudflare · whoami ▾"
         await pilot.click(first, offset=(4, 0))
         assert first.expanded
         assert not second.expanded
@@ -119,3 +119,50 @@ async def test_restored_polling_is_hidden(workdir):
         assert any("Build completed." in content(block) for block in app.transcript.children)
     finally:
         await context.__aexit__(None, None, None)
+
+
+async def test_consecutive_lookups_share_one_summarised_group(workdir):
+    from eirene.ui.chat import AnswerBlock, CommandBlock, ToolGroup
+
+    app = Eirene(workdir)
+    async with app.run_test(size=(100, 40)) as pilot:
+        reads = [await app.push(ToolBlock("read_file", "a.py")),
+                 await app.push(ToolBlock("search_text", "needle")),
+                 await app.push(ToolBlock("list_dir", "src"))]
+        await app.push(CommandBlock("run_command", "pytest"))
+        later = await app.push(ToolBlock("read_file", "b.py"))
+        await pilot.pause()
+        groups = list(app.transcript.query(ToolGroup))
+        assert len(groups) == 2, "a command between lookups starts a new group"
+        assert all(row.parent is groups[0] for row in reads)
+        assert later.parent is groups[1]
+        header = groups[0].header._Static__content.plain
+        assert header.startswith("• Exploring")
+        for row in reads:
+            row.finish("ok", False, 0)
+            row.flush()
+        header = groups[0].header._Static__content.plain
+        assert header == "• Explored  1 file, 1 search, 1 folder"
+        assert reads[0]._Static__content.plain.startswith("  └ Read a.py")
+        assert reads[1]._Static__content.plain.startswith("    Search needle")
+
+        # Prose between lookups also starts a fresh group.
+        await app.push(AnswerBlock())
+        await app.push(ToolBlock("web_search", "query"))
+        assert len(list(app.transcript.query(ToolGroup))) == 3
+
+
+async def test_long_groups_fold_their_earlier_rows(workdir):
+    from eirene.ui.chat import ToolGroup
+
+    app = Eirene(workdir)
+    async with app.run_test(size=(100, 40)) as pilot:
+        rows = [await app.push(ToolBlock("read_file", f"f{index}.py")) for index in range(9)]
+        await pilot.pause()
+        group = app.transcript.query_one(ToolGroup)
+        assert [row.display for row in rows] == [False] * 4 + [True] * 5
+        assert "▸ 4 earlier" in group.header._Static__content.plain
+        assert rows[4]._Static__content.plain.startswith("  └ ")
+        await pilot.click(group.header)
+        assert all(row.display for row in rows)
+        assert rows[0]._Static__content.plain.startswith("  └ ")

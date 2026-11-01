@@ -263,7 +263,7 @@ def _icacls(path, *arguments):
     executable = str(Path(os.environ["SystemRoot"]) / "System32" / "icacls.exe")
     try:
         result = subprocess.run([executable, str(path), *arguments, "/L", "/Q"],
-                                capture_output=True, timeout=600, creationflags=0x08000000)
+                                stdin=subprocess.DEVNULL, capture_output=True, timeout=600, creationflags=0x08000000)
     except subprocess.TimeoutExpired as exc:
         raise ToolError(f"Windows sandbox ACL operation timed out: {path}") from exc
     if result.returncode:
@@ -531,7 +531,7 @@ class Owner:
             return
         executable = str(Path(os.environ["SystemRoot"]) / "System32" / "CheckNetIsolation.exe")
         subprocess.run([executable, "LoopbackExempt", "-a", f"-p={sid}"],
-                       capture_output=True, timeout=30, creationflags=0x08000000)
+                       stdin=subprocess.DEVNULL, capture_output=True, timeout=30, creationflags=0x08000000)
 
     def grant(self, path, sid, writable):
         path = _specific(path)

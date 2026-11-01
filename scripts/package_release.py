@@ -82,7 +82,7 @@ def main() -> None:
     parser.add_argument("--dist", type=Path, default=ROOT / "dist")
     parser.add_argument("--output", type=Path, default=ROOT / "release")
     parser.add_argument("--skip-smoke", action="store_true",
-                        help="skip executing the extracted archive (CI runs tests before building)")
+                        help="skip executing the extracted archive")
     args = parser.parse_args()
     check_host(args.target)
     binary = args.dist / ("eirene.exe" if args.target == "windows-amd64" else "eirene")

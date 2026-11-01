@@ -45,6 +45,8 @@ class KittyPortrait(Widget):
             return
         from textual_image._terminal import get_cell_size
         cell = get_cell_size()
+        if not (cell.width and cell.height and self._image.width and self._image.height):
+            return  # The terminal did not report a usable cell size.
         width = round(6 * cell.height / cell.width * self._image.width / self._image.height)
         self._placement_region = Region(max(0, self.app.size.width - width - 1),
                                         max(0, border_y - 6), width, 6)

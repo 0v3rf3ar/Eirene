@@ -39,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="supply a slash-command choice; repeat in prompt order")
     parser.add_argument("--command-input", action="append", default=[], metavar="TEXT",
                         help="supply slash-command text input; repeat in prompt order")
-    parser.add_argument("--mode", choices=("auto", "manual", "plan"), default="auto",
+    parser.add_argument("--mode", choices=("auto", "manual", "accept", "plan"), default="auto",
                         help="permission mode for -p (default: auto)")
     parser.add_argument("--doctor", action="store_true",
                         help="print read-only installation diagnostics and exit")
@@ -49,6 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="disable terminal colour for this run")
     parser.add_argument("--reduce-motion", action="store_true",
                         help="disable animated terminal title indicators")
+    parser.add_argument("--debug", action="store_true",
+                        help="log at debug level and show where unexpected errors happen")
     parser.add_argument("--permission-proxy", metavar="PORT:TOKEN",
                         help=argparse.SUPPRESS)
     parser.add_argument("--attachment-reader", metavar="SESSION", help=argparse.SUPPRESS)
@@ -100,6 +102,13 @@ def open_session(sandbox: Path, resume: str) -> int:
         return 2
     except KeyboardInterrupt:
         return 130
+    except Exception as exc:  # noqa: BLE001 - failed before the interface could report it
+        from .core import crash
+        report = crash.record(exc, where="startup", fatal=True)
+        sys.stderr.write(f"eirene could not start: {crash.summary(exc)}\n")
+        if report is not None:
+            sys.stderr.write(f"crash report: {report}\n")
+        return 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -125,6 +134,8 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["NO_COLOR"] = "1"
     if args.reduce_motion:
         os.environ["EIRENE_REDUCE_MOTION"] = "1"
+    if args.debug:
+        os.environ["EIRENE_DEBUG"] = "1"
 
     if args.doctor:
         from .core.config import Config

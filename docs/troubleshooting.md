@@ -99,6 +99,21 @@ The runtime log is `logs/eirene.jsonl` beneath the data directory. Record the
 version, OS, provider, exact command or prompt, and the displayed error. For plugin
 issues, include `/plugins inspect NAME` and `/plugins doctor NAME` output.
 
+## Something went wrong, but Eirene kept running
+
+An unexpected error inside one action, such as a paste, a click or a background
+task, no longer closes the interface. Eirene shows a warning naming the error,
+keeps the session, and writes a crash report to `logs/crashes/` beneath the data
+directory. If errors repeat several times within a few seconds, Eirene treats it
+as a crash loop, exits, and prints the report path.
+
+Each report holds the traceback, version, platform, Textual version and terminal
+type (`TERM`, `TERM_PROGRAM` and whether tmux or Windows Terminal are in use). It never includes local variables, so API keys held in memory stay out of
+it. The newest 20 reports are kept; `eirene --doctor` lists the latest five.
+
+Run `eirene --debug` to log at debug level and to name the failing handler in
+each warning, for example `Prompt#prompt.on_paste`.
+
 Remove API keys, private URLs, conversation content, and other secrets before
 sharing logs or exports. Use the repository's [security policy](../SECURITY.md)
 for a security issue. Back up data before manually replacing configuration; do not

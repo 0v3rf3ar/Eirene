@@ -35,7 +35,7 @@ def main() -> int:
     art = portrait()
     escaped = "".join(f"\\u{ord(c):04x}" if ord(c) > 127 else c for c in art)
     patterns = {
-        "install.sh": (r"(?<=cat <<'EIRENE_ART'\n).*?(?=\nEIRENE_ART)", art),
+        "install.sh": (r"(?<=<<'EIRENE_ART'\n).*?(?=\nEIRENE_ART)", art),
         "install.ps1": (r"(?<=\$portrait = \[regex\]::Unescape\(@'\n).*?(?=\n'@\))", escaped),
     }
     changed = []

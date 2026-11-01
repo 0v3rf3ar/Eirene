@@ -95,6 +95,10 @@ class HeadlessApp:
     async def switch_session(self, session_id, **kwargs):
         raise CommandError("session switching is not available in headless runs")
 
+    def spawn(self, coroutine, *, name, background=True):
+        """The interface's task contract; dispatch awaits the turn, so failures surface there."""
+        return asyncio.create_task(coroutine, name=f"eirene:{name}")
+
     async def _run_turn(self, text, *, record_text=None):
         self.ensure_provider()
         self.refresh_mode_line()

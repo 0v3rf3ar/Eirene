@@ -101,22 +101,3 @@ and Windows system path variables, then add explicit tool/server environment
 values. They do not inherit every credential/loader variable. Outside isolation,
 process inheritance differs. PTY execution is unavailable in Eirene's Windows
 runtime. For server mounts/env, see [MCP fields](config-file.md#standalone-mcp-declarations).
-
-## Experimental Android / Termux beta
-
-See the [Android / Termux guide](android-termux.md) for installation, supported
-features, command permissions, and companion requirements.
-
-Beta tags also attempt an optional ARM64 Termux `.deb` build. The job runs in
-the official Termux Docker image and uploads a package only after native import,
-command, file-read, CLI, and PTY UI checks pass. This tests Android/Bionic
-userspace, not a physical Android device. Stable releases do not run this job.
-
-Use the standard F-Droid/GitHub `com.termux` distribution. The
-[Bash installer](installation.md#android--termux) installs or upgrades the newest
-compatible package and its Termux Python 3.14 dependencies through APT.
-Alternatively, install a downloaded package using
-`apt install ./eirene-Termux-aarch64-VERSION.deb`.
-Arbitrary commands require explicit approval; plan mode only supports fixed
-file/search tools. Scheduling, desktop self-updates, and Android integration
-features are not supported yet. See the beta release notes for limitations.

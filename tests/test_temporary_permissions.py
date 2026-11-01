@@ -113,16 +113,16 @@ async def test_dont_ask_again_covers_tools_that_leave_the_sandbox(workdir, outsi
     assert runner.config.get("permissions") == "sandboxed"
 
 
-async def test_dont_ask_again_for_web_search_never_widens_host_access(workdir, monkeypatch):
+async def test_dont_ask_again_for_web_fetch_never_widens_host_access(workdir, monkeypatch):
     import eirene.core.agent as agent_mod
     seen = []
-    async def search(*args, **kwargs):
-        return "1. Example\nhttps://example.com\n"
-    monkeypatch.setattr(agent_mod.tools.browser, "search", search)
+    async def fetch(*args, **kwargs):
+        return "Example page"
+    monkeypatch.setattr(agent_mod.tools.browser, "fetch_text", fetch)
     provider = Script(
-        [ToolCall("one", "web_search", {"query": "football"}), Done("tool_calls")],
+        [ToolCall("one", "web_fetch", {"url": "https://example.com/a"}), Done("tool_calls")],
         [TextDelta("found"), Done("stop")],
-        [ToolCall("two", "web_search", {"query": "basketball"}), Done("tool_calls")],
+        [ToolCall("two", "web_fetch", {"url": "https://example.com/b"}), Done("tool_calls")],
         [TextDelta("found again"), Done("stop")],
     )
     runner = build(workdir, provider, mode=Mode.MANUAL)
@@ -139,7 +139,7 @@ async def test_dont_ask_again_for_web_search_never_widens_host_access(workdir, m
     await drive(runner)
     granted_by_answer = len(seen)
     finished = [e for e in await drive(runner, "again") if isinstance(e, ToolFinished)]
-    assert asked == ["web_search"]
+    assert asked == ["web_fetch"]
     assert not finished[0].is_error
     assert len(seen) == granted_by_answer  # The remembered answer adds no host access.
 
@@ -317,3 +317,56 @@ async def test_mcp_restarts_for_approved_access_and_closes_after_response(workdi
     assert not result.is_error
     assert len(managers) == 2 and all(manager.closed for manager in managers)
     assert runner.config.get("permissions") == "sandboxed"
+
+
+async def test_web_search_never_asks_in_any_mode(workdir, monkeypatch):
+    import eirene.core.agent as agent_mod
+    async def search(*args, **kwargs):
+        return "1. Example\nhttps://example.com\n"
+    monkeypatch.setattr(agent_mod.tools.browser, "search", search)
+    for mode in (Mode.MANUAL, Mode.ACCEPT, Mode.AUTO, Mode.PLAN):
+        provider = Script(
+            [ToolCall("one", "web_search", {"query": "football"}), Done("tool_calls")],
+            [TextDelta("found"), Done("stop")])
+        runner = build(workdir, provider, mode=mode)
+        asked = []
+        async def approve(name, *args):
+            asked.append(name)
+            return "yes"
+        runner.approve = approve
+        finished = [e for e in await drive(runner) if isinstance(e, ToolFinished)]
+        assert asked == [], mode
+        assert finished and not finished[0].is_error, mode
+
+
+@pytest.mark.parametrize("call,asks", [
+    (("run_command", {"command": "ls"}), False),
+    (("run_command", {"command": "git status"}), False),
+    (("run_command", {"command": "rm -f gone.txt"}), True),
+    (("run_command", {"command": "echo x > made.txt"}), True),
+    (("read_file", {"path": "kept.txt"}), False),
+    (("write_file", {"path": "new.txt", "content": "x"}), True),
+    (("edit_file", {"path": "kept.txt", "old_string": "a", "new_string": "b"}), True),
+])
+async def test_accept_mode_asks_only_for_file_changes(workdir, call, asks):
+    (workdir / "kept.txt").write_text("a\n")
+    name, arguments = call
+    provider = Script([ToolCall("one", name, arguments), Done("tool_calls")],
+                      [TextDelta("done"), Done("stop")])
+    runner = build(workdir, provider, mode=Mode.ACCEPT)
+    asked = []
+    async def approve(tool, *args):
+        asked.append(tool)
+        return "no"
+    runner.approve = approve
+    await drive(runner)
+    assert bool(asked) == asks, asked
+
+
+def test_native_providers_follow_accept_mode():
+    from eirene.core.agent import _native_tool_runs_freely
+    assert _native_tool_runs_freely("run_command", "pytest -q", "Claude Code tool")
+    assert not _native_tool_runs_freely("run_command", "rm -rf build", "Claude Code tool")
+    assert not _native_tool_runs_freely(
+        "run_command", "ls", "Claude Code wants to run this command outside its sandbox")
+    assert not _native_tool_runs_freely("native_edit_file", "a.py", "Codex file change")

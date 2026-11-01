@@ -69,7 +69,7 @@ class ClaudeCode(Provider):
     async def account(self) -> dict[str, Any] | None:
         process = await asyncio.create_subprocess_exec(
             *executable_argv(self._executable(), "auth", "status", "--json"),
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             cwd=str(self.root), env=external_environment())
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), 20)
@@ -155,7 +155,7 @@ class ClaudeCode(Provider):
         try:
             self._process = await asyncio.create_subprocess_exec(
                 *executable_argv(self._executable(), *args), cwd=str(self.root),
-                stdout=asyncio.subprocess.PIPE,
+                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, env=external_environment())
         except OSError as exc:
             if broker is not None:

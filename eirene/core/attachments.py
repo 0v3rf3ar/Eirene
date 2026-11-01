@@ -16,43 +16,54 @@ MAX_IMAGE_BYTES = 10_000_000
 IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 DEFAULT_ATTACHMENT_BYTES = 20_000_000
 MAX_DROPPED_FILES = 10
+# A drop of MAX_DROPPED_FILES long paths fits easily; anything larger is prose,
+# and splitting megabytes of it as shell words would stall the interface.
+MAX_DROP_CHARS = 64 * 1024
 
 
 def dropped_paths(text: str, root: Path) -> list[Path]:
     """Recognize terminal drops: quoted/escaped paths or local file URIs.
 
     Only a paste consisting entirely of existing files is treated as a drop.
+    Never raises: any paste that is not clearly a drop is ordinary text.
     """
     raw = text.strip()
-    if not raw:
+    if not raw or len(raw) > MAX_DROP_CHARS:
         return []
-
-    def resolve(value: str) -> Path | None:
-        if value.startswith("file://"):
-            uri = urlsplit(value)
-            if uri.netloc not in {"", "localhost"} or uri.query or uri.fragment:
-                return None
-            value = unquote(uri.path)
-        path = Path(value).expanduser()
-        if not path.is_absolute():
-            if not value.startswith(("./", "../")):
-                return None
-            path = root / path
-        try:
-            return path.resolve() if path.is_file() else None
-        except (OSError, ValueError, RuntimeError):
-            return None
-
-    single = resolve(raw)
+    single = _dropped_file(raw, root)
     if single is not None:
         return [single]
     try:
         values = shlex.split(raw, posix=os.name != "nt")
     except ValueError:
         return []
-    paths = [resolve(value.strip('"') if os.name == "nt" else value)
-             for value in values]
-    return list(dict.fromkeys(paths)) if paths and all(paths) else []
+    paths: list[Path] = []
+    for value in values:
+        path = _dropped_file(value.strip('"') if os.name == "nt" else value, root)
+        if path is None:
+            return []  # One word that is not a file makes the whole paste text.
+        paths.append(path)
+    return list(dict.fromkeys(paths))
+
+
+def _dropped_file(value: str, root: Path) -> Path | None:
+    """The existing regular file one dropped word names, or None."""
+    try:
+        if value.startswith("file://"):
+            uri = urlsplit(value)
+            if uri.netloc not in {"", "localhost"} or uri.query or uri.fragment:
+                return None
+            value = unquote(uri.path)
+        # "~name" expands through the user database, which raises for unknown
+        # names; a paste that merely starts with "~" is still just text.
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            if not value.startswith(("./", "../")):
+                return None
+            path = root / path
+        return path.resolve() if path.is_file() else None
+    except (OSError, ValueError, RuntimeError):
+        return None
 
 
 def attachment_path(attachment_id: str) -> Path:
@@ -70,19 +81,28 @@ def store_attachment(path: Path, max_bytes: int = DEFAULT_ATTACHMENT_BYTES) -> d
             raise ToolError(f"attachment exceeds the {max_bytes / 1_000_000:g} MB limit")
         with path.open("rb") as handle:
             data = handle.read(max_bytes + 1)
-        if len(data) > max_bytes:
-            raise ToolError(f"attachment exceeds the {max_bytes / 1_000_000:g} MB limit")
-        attachment_id = uuid.uuid4().hex
-        target = attachment_path(attachment_id)
+    except OSError as exc:
+        raise ToolError(f"cannot read attachment {path.name}: {exc}") from exc
+    return store_attachment_bytes(path.name, data, max_bytes)
+
+
+def store_attachment_bytes(name: str, data: bytes,
+                           max_bytes: int = DEFAULT_ATTACHMENT_BYTES) -> dict:
+    """Keep attachment bytes that have no file of their own, such as a pasted picture."""
+    if len(data) > max_bytes:
+        raise ToolError(f"attachment exceeds the {max_bytes / 1_000_000:g} MB limit")
+    attachment_id = uuid.uuid4().hex
+    target = attachment_path(attachment_id)
+    try:
         target.parent.mkdir(parents=True, exist_ok=True)
         paths._tighten(target.parent)
         with target.open("xb") as handle:
             target.chmod(0o600)
             handle.write(data)
     except OSError as exc:
-        raise ToolError(f"cannot read attachment {path.name}: {exc}") from exc
-    return {"id": attachment_id, "name": path.name, "size": len(data),
-            "mime_type": mimetypes.guess_type(path.name)[0] or "application/octet-stream"}
+        raise ToolError(f"cannot store attachment {name}: {exc}") from exc
+    return {"id": attachment_id, "name": name, "size": len(data),
+            "mime_type": mimetypes.guess_type(name)[0] or "application/octet-stream"}
 
 
 def attachment_manifest(text: str, files: list[dict]) -> str:

@@ -2,22 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+
 from rich.text import Text
 from textual import events
 from textual.containers import Container, Horizontal
+from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import Static, TextArea
 
-from ..core.modes import Mode
 from ..core.attachments import dropped_paths
-from . import art, theme
+from ..core.modes import Mode
+from ..core.text import safe_text
+from . import art, clipboard, theme
+from .clipboard import ClipboardImage
 from .format import pasted_label
 
 MAX_ROWS = 10
 FOLD_LINES = 4
 FOLD_CHARS = 240
 MASK = "•"
+DROP_CHECK_SECONDS = 2.0
 
 
 class Rule(Static):
@@ -69,7 +75,7 @@ class ModeLine(Static):
         self.mode = mode
         self.detail = detail
         body = Text()
-        body.append(f"  {mode.icon} {mode.label} on", style="dim")
+        body.append(f"  {mode.icon} {mode.label}", style="dim")
         if self.detail:
             body.append(f"  | {self.detail}", style="dim")
         self.update(body)
@@ -181,7 +187,9 @@ class Prompt(TextArea):
     }
     """
 
-    BINDINGS: list = []
+    # Ctrl+V comes from TextArea. Windows Terminal keeps Ctrl+V for its own paste,
+    # so Alt+V offers the same picture paste there.
+    BINDINGS = [Binding("alt+v", "paste", "paste a picture", show=False)]
 
     class Sent(Message):
         """Text the user sent."""
@@ -215,6 +223,13 @@ class Prompt(TextArea):
         def __init__(self, delta: int):
             super().__init__()
             self.delta = delta
+
+    class ImagePasted(Message):
+        """A picture taken from the desktop clipboard, to attach as a file."""
+
+        def __init__(self, image: ClipboardImage):
+            super().__init__()
+            self.image = image
 
     class Accept(Message):
         """Enter or tab while a menu is open."""
@@ -381,11 +396,18 @@ class Prompt(TextArea):
         """Fold a big paste into a short token."""
         event.stop()
         event.prevent_default()
-        text = event.text.replace("\r\n", "\n").replace("\r", "\n")
+        # Escape sequences in copied terminal output would repaint the screen when
+        # the prompt draws them, and lone surrogates cannot be encoded for output.
+        if not event.text:
+            # Some terminals answer their paste key with an empty paste when the
+            # clipboard holds only a picture.
+            await self._paste_clipboard_image()
+            return
+        text = safe_text(event.text.replace("\r\n", "\n").replace("\r", "\n"))
         if not text:
             return
         if not self._secret and not getattr(self.app, "_text_future", None):
-            paths = dropped_paths(text, self.app.sandbox.root)
+            paths = await self._dropped_paths(text)
             if paths:
                 self.post_message(self.FilesDropped(paths))
                 return
@@ -396,6 +418,38 @@ class Prompt(TextArea):
         else:
             self.insert(text)
         self._announce()
+
+    async def action_paste(self) -> None:
+        """Ctrl+V / Alt+V: a picture on the clipboard attaches as a file; else paste text."""
+        if not await self._paste_clipboard_image():
+            super().action_paste()
+
+    async def _paste_clipboard_image(self) -> bool:
+        """Attach the desktop clipboard's picture, if there is one; True when it was."""
+        if self._secret or getattr(self.app, "_text_future", None):
+            return False
+        try:
+            image = await asyncio.wait_for(asyncio.to_thread(clipboard.read_image),
+                                           clipboard.HELPER_SECONDS + 2)
+        except TimeoutError:
+            return False
+        if image is None:
+            return False
+        self.post_message(self.ImagePasted(image))
+        return True
+
+    async def _dropped_paths(self, text: str) -> list[Path]:
+        """Files a paste names, checked off the event loop.
+
+        Checking a path can block for a long time (a sleeping network share, a
+        UNC path on Windows). Keys typed meanwhile queue behind this handler, so
+        their order is kept; past the timeout the paste is simply text.
+        """
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(dropped_paths, text, self.app.sandbox.root), DROP_CHECK_SECONDS)
+        except TimeoutError:
+            return []
 
     async def _on_key(self, event: events.Key) -> None:
         key = event.key

@@ -32,8 +32,7 @@ def icon_path() -> str:
 MAC_TERMINALS = {"Apple_Terminal": "com.apple.Terminal", "iTerm.app": "com.googlecode.iterm2"}
 
 # Linux notifiers, best first: freedesktop, KDE, GNOME/XFCE, then dbus directly.
-LINUX_TOOLS = ("notify-send", "kdialog", "zenity", "gdbus", "dbus-send",
-               "termux-notification", "notify-send.py")
+LINUX_TOOLS = ("notify-send", "kdialog", "zenity", "gdbus", "dbus-send", "notify-send.py")
 
 
 def linux_tool() -> str:
@@ -100,9 +99,6 @@ def _linux(tool: str, title: str, body: str) -> list[str]:
     if tool == "zenity":
         return ["zenity", "--notification",
                 f"--text={APP_NAME}: {title}\n{body}".rstrip()]
-    if tool == "termux-notification":
-        return ["termux-notification", "--title", f"{APP_NAME}: {title}",
-                "--content", body]
     if tool == "gdbus":
         return ["gdbus", "call", "--session",
                 "--dest", "org.freedesktop.Notifications",
@@ -219,7 +215,8 @@ def _replaceable() -> bool:
     if IS_MAC or IS_WINDOWS or not shutil.which("notify-send"):
         return False
     try:
-        usage = subprocess.run(["notify-send", "--help"], capture_output=True, text=True,
+        usage = subprocess.run(["notify-send", "--help"], stdin=subprocess.DEVNULL,
+                               capture_output=True, text=True,
                                timeout=5, env=external_environment()).stdout
     except (OSError, subprocess.SubprocessError):
         return False
@@ -323,7 +320,8 @@ def _terminal_app() -> str:
 
 def _quiet(argv: list[str]) -> str:
     try:
-        return subprocess.run(argv, capture_output=True, text=True, timeout=5,
+        return subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True,
+                              text=True, timeout=5,
                               env=external_environment()).stdout
     except (OSError, subprocess.SubprocessError):
         return ""

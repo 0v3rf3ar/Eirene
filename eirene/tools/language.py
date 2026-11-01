@@ -51,7 +51,8 @@ async def diagnostics(box: Sandbox, path: str, timeout: float = 30, *,
     if command is None:
         raise ToolError(f"no installed diagnostic engine supports {suffix or 'this file'}")
     process = await asyncio.create_subprocess_exec(
-        *executable_argv(command[0], *command[1:]), cwd=str(box.root), stdout=asyncio.subprocess.PIPE,
+        *executable_argv(command[0], *command[1:]), cwd=str(box.root), stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT, env=external_environment())
     try:
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout)

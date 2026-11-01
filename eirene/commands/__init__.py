@@ -75,8 +75,11 @@ async def dispatch(app, text: str) -> None:
         app.say(f"/{name}: {exc.user_message()}", "warn")
     except EireneError as exc:
         app.say(exc.user_message(), "fail")
-    except Exception as exc:  # noqa: BLE001
-        app.say(f"/{name} failed: {exc}", "fail")
+    except Exception as exc:  # noqa: BLE001 - one command's bug must not end the session
+        from ..core import crash
+        report = crash.record(exc, where=f"/{name}")
+        detail = f" (details: {report})" if report is not None else ""
+        app.say(f"/{name} failed: {crash.summary(exc)}{detail}", "fail")
 
 
 def commands(app=None) -> list[Command]:

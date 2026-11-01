@@ -290,7 +290,7 @@ async def test_click_command_toggles_inline_saved_output(workdir):
     from eirene.ui.chat import CommandBlock
     app, pilot, context = await start(workdir)
     writer = artifacts.Writer()
-    writer.feed("first line\nsecond line\nthird line\nfourth line\n")
+    writer.feed("first line\nsecond line\nthird line\nfourth line\nfifth line\nsixth line\n")
     writer.close()
     try:
         card = await app.push(CommandBlock("run_command", "echo demo"))
@@ -298,16 +298,18 @@ async def test_click_command_toggles_inline_saved_output(workdir):
         card.finish("short result", False, 0.1)
         card.flush()
         await pilot.pause()
-        assert "first line" in content(card) and "second line" in content(card)
-        assert "third line" not in content(card)
+        # Collapsed, only the last lines show, under a count of the rest.
+        assert "+3 lines" in content(card)
+        assert "fifth line" in content(card) and "sixth line" in content(card)
+        assert "second line" not in content(card)
         original_screen = app.screen
         await pilot.click(card, offset=(1, 0))
         await pilot.pause()
         assert app.screen is original_screen and card.expanded
-        assert "third line" in content(card) and "fourth line" in content(card)
+        assert "first line" in content(card) and "second line" in content(card)
         await pilot.click(card, offset=(1, 0))
         await pilot.pause()
-        assert not card.expanded and "third line" not in content(card)
+        assert not card.expanded and "second line" not in content(card)
     finally:
         await context.__aexit__(None, None, None)
 
@@ -336,9 +338,9 @@ async def test_inline_output_streaming_and_missing_artifact_fallback(workdir):
     try:
         card = await app.push(CommandBlock("run_command", "echo demo"))
         card.artifact_id = "missing"
-        card.feed("one\ntwo\nthree\n")
+        card.feed("one\ntwo\nthree\nfour\nfive\n")
         card.flush()
-        assert "three" not in content(card)
+        assert "one" not in content(card) and "five" in content(card)
         card.expanded = True
         card.feed("four\n")
         card.flush()

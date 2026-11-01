@@ -149,7 +149,8 @@ async def interact(url: str, actions: list[dict], *, timeout: float = 30) -> str
         # DevToolsActivePort, avoiding races and platform-specific socket passing.
         argv += ["--remote-debugging-port=0", "about:blank"]
         process = await asyncio.create_subprocess_exec(
-            *executable_argv(argv[0], *argv[1:]), stdout=asyncio.subprocess.DEVNULL,
+            *executable_argv(argv[0], *argv[1:]), stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE, env=external_environment())
         try:
             endpoint = await _devtools_endpoint(Path(profile), process, timeout)
@@ -485,7 +486,8 @@ async def _run(argv: list[str], timeout: float) -> tuple[bytes, bytes, int]:
     process = None
     try:
         process = await asyncio.create_subprocess_exec(
-            *executable_argv(argv[0], *argv[1:]), stdout=asyncio.subprocess.PIPE,
+            *executable_argv(argv[0], *argv[1:]), stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE, env=external_environment(), **shell._spawn_kwargs())
         stdout, stderr = shell._Capture(MAX_DOM), shell._Capture(8000)
 

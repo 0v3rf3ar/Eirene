@@ -80,7 +80,7 @@ async def at_bottom(app, pilot, frames=10):
 
 
 def blocks(app, kind):
-    return [w for w in app.transcript.children if isinstance(w, kind)]
+    return list(app.transcript.query(kind))
 
 
 def content(widget) -> str:
@@ -464,7 +464,7 @@ async def test_mode_line_matches_the_spec(workdir):
     try:
         app.mode_line.show(Mode.MANUAL, "test test-model")
         line = content(app.query_one(ModeLine))
-        assert "manual mode on" in line
+        assert "manual mode" in line
         assert "| test test-model" in line
         assert "shift + tab to change mode" not in line
     finally:
@@ -534,8 +534,12 @@ async def test_shift_tab_cycles_modes(workdir):
         assert app.agent.mode is Mode.MANUAL
         await pilot.press("shift+tab")
         await pilot.pause()
+        assert app.agent.mode is Mode.ACCEPT
+        assert "accept mode" in content(app.query_one(ModeLine))
+        await pilot.press("shift+tab")
+        await pilot.pause()
         assert app.agent.mode is Mode.AUTO
-        assert "auto mode on" in content(app.query_one(ModeLine))
+        assert "auto mode" in content(app.query_one(ModeLine))
         await pilot.press("shift+tab")
         await pilot.pause()
         assert app.agent.mode is Mode.PLAN
@@ -820,7 +824,7 @@ async def test_tool_calls_appear_as_cards(workdir):
         cards = blocks(app, CommandBlock)
         assert cards and "echo made" in content(cards[0])
         assert "made" in content(cards[0])
-        assert "Ran (echo made)" in content(cards[0])
+        assert "Ran echo made" in content(cards[0])
         assert not cards[0].is_error
     finally:
         await context.__aexit__(None, None, None)
@@ -833,24 +837,24 @@ async def test_command_card_has_running_success_and_error_states(workdir):
     try:
         card = CommandBlock("run_command", "pytest -q")
         await app.push(card)
-        assert "• Running (pytest -q)" in content(card)
+        assert "• Running pytest -q" in content(card)
         assert card._Static__content.get_style_at_offset(app.console, 0).color.name == palette.YELLOW
         assert not any(span.style == "underline" for span in card._Static__content.spans)
 
         card.expanded = True
         card.flush()
-        assert "• Running (pytest -q)" in content(card)
+        assert "• Running pytest -q" in content(card)
         assert not any(span.style == "underline" for span in card._Static__content.spans)
         card.expanded = False
 
         card.finish("Still running as managed process p1", False, 1.0)
         card.flush()
-        assert "• Running (pytest -q)" in content(card)
+        assert "• Running pytest -q" in content(card)
         assert card._Static__content.get_style_at_offset(app.console, 0).color.name == palette.YELLOW
 
         card.finish("12 passed\nsecond line", False, 2.0)
         card.flush()
-        assert "• Ran (pytest -q)" in content(card)
+        assert "• Ran pytest -q" in content(card)
         assert card._Static__content.get_style_at_offset(app.console, 0).color.name == palette.GREEN
         assert content(card).splitlines()[1:] == ["  └ 12 passed", "    second line"]
 
@@ -858,7 +862,7 @@ async def test_command_card_has_running_success_and_error_states(workdir):
         await app.push(failed)
         failed.finish("exit 3", True, 1.0)
         failed.flush()
-        assert "• Failed (exit 3)" in content(failed)
+        assert "• Failed exit 3" in content(failed)
         assert failed._Static__content.get_style_at_offset(app.console, 0).color.name == palette.RED
         assert failed.is_error
     finally:
@@ -995,6 +999,7 @@ async def test_picker_keys_still_work_during_a_command(workdir):
                 break
         assert app.picker.waiting, "the picker never opened"
         assert app.picker.options[app.picker.index][0] == "auto"
+        await pilot.press("down")
         await pilot.press("down")
         await pilot.press("down")
         await pilot.press("enter")
@@ -1510,7 +1515,7 @@ async def test_resume_redraws_saved_command_state(workdir):
     try:
         await pilot.pause()
         card = blocks(app, CommandBlock)[0]
-        assert "• Ran (pytest -q)" in content(card)
+        assert "• Ran pytest -q" in content(card)
         assert "└ 12 passed" in content(card)
         assert card.finished and not card.is_error and card.seconds == 3.0
     finally:
@@ -2018,9 +2023,7 @@ async def test_the_tab_spins_while_the_agent_works(workdir):
         await context.__aexit__(None, None, None)
 
 
-async def test_answers_carry_file_icons_on_tool_cards(workdir):
-    from eirene.ui import art
-
+async def test_file_reads_name_their_action_and_path(workdir):
     provider = Script(
         [ToolCall("c1", "read_file", {"path": "main.py"}), Done("tool_use")],
         [TextDelta("read it"), Done("stop")])
@@ -2034,7 +2037,7 @@ async def test_answers_carry_file_icons_on_tool_cards(workdir):
             if app.turn and app.turn.done():
                 break
         card = blocks(app, ToolBlock)[0]
-        assert art.file_icon("main.py") in content(card)
+        assert "Read main.py" in content(card)
     finally:
         await context.__aexit__(None, None, None)
 
@@ -2815,7 +2818,7 @@ async def test_agents_picker_uses_single_cell_symbols(workdir, mode):
         await pilot.pause()
         picker = app.picker
         assert picker.waiting
-        assert len(picker.options) == 3
+        assert len(picker.options) == 4
         assert picker.options[picker.index][0] == mode.value
         for _, label, _ in picker.options:
             symbol = label.split()[0]
@@ -3700,7 +3703,7 @@ async def test_gruvbox_paints_each_section_its_own_colour(workdir):
         rendered = tool._Static__content
         label = next(str(span.style) for span in rendered.spans
                      if rendered.plain[span.start:span.end] == "calc.py")
-        assert label == "bold #8ec07c", "tools get their own colour"
+        assert label == "#8ec07c", "tools get their own colour"
         assert markup.STYLES["code"] == "#b8bb26 on #3c3836"
     finally:
         await context.__aexit__(None, None, None)
@@ -4148,7 +4151,7 @@ async def test_long_command_is_abbreviated_but_expansion_and_approval_show_it_al
         assert "…" in card.render().plain
         card.expanded = True
         card.flush()
-        assert f"Running ({command})" in card.render().plain
+        assert f"Running {command}" in card.render().plain
         assert "…" not in card.render().plain
         card.expanded = False
         card.flush()
@@ -4314,7 +4317,7 @@ async def test_resume_background_completion_updates_original_card(workdir, autom
         assert len(cards) == 1
         card = cards[0]
         action = 'Failed' if exit_code else 'Ran'
-        assert f'{action} (example)' in content(card)
+        assert f'{action} example' in content(card)
         assert 'finished output' in content(card)
         assert card.is_error == (exit_code != 0)
         colour = palette.GREEN if exit_code == 0 else palette.RED
@@ -4368,8 +4371,8 @@ async def test_live_background_completion_updates_original_card(workdir, python_
         card = cards[0]
         assert card.finished and card.is_error == (exit_code != 0), card.result
         action = 'Failed' if exit_code else 'Ran'
-        assert f'{action} (' in content(card)
-        assert 'Running (' not in content(card)
+        assert f'{action} ' in content(card)
+        assert 'Running ' not in content(card)
         colour = palette.GREEN if exit_code == 0 else palette.RED
         assert card._Static__content.get_style_at_offset(app.console, 0).color.name == colour
     finally:

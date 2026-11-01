@@ -16,7 +16,6 @@ from ..tools import registry as tools
 from ..tools.sandbox import Sandbox
 from . import prompt as prompts
 from . import questions
-from .platforms import is_termux
 from . import skills as skills_mod
 from .errors import Cancelled, EireneError, ProviderError, SandboxError, ToolError
 from .modes import ALLOW, ASK, BLOCK, Mode, decide
@@ -53,6 +52,19 @@ ANSWERING = "answering"
 WAITING = "waiting for confirmation"
 
 YES, NO, ALWAYS = "yes", "no", "always"
+
+# Reasons a native provider gives when a command wants to leave its sandbox.
+NATIVE_ESCAPE = "outside its sandbox"
+
+
+def _native_tool_runs_freely(name: str, label: str, reason: str) -> bool:
+    """Whether accept mode lets a native provider's tool run unasked."""
+    if NATIVE_ESCAPE in (reason or "") or name in {"native_execution", "request_full_access"}:
+        return False
+    if name == "run_command":
+        from ..tools.file_changes import changes_files
+        return not changes_files(label)
+    return False
 
 
 @dataclass
@@ -502,6 +514,8 @@ class Agent:
         edit = name in {"native_write_file", "native_edit_file"}
         approval_key = "session_edits" if edit else name
         if self.mode is Mode.AUTO and full_access(self.config):
+            return YES
+        if self.mode is Mode.ACCEPT and not edit and _native_tool_runs_freely(name, label, reason):
             return YES
         host_approval = not edit and not full_access(self.config)
         if approval_key in self.always:
@@ -1067,14 +1081,10 @@ class Agent:
                 raise ToolError("reason is required for temporary full access")
             escape = "request temporary full host access: " + str(call.arguments.get("reason", ""))
         network_tools = {"web_search", "web_fetch", "http_request", "browser_inspect", "browser_interact", "browser_screenshot"}
-        if call.name in network_tools and self.config.get("isolate_network", True):
+        # Web search only reads public results, so it never asks.
+        if (call.name in network_tools and call.name != "web_search"
+                and self.config.get("isolate_network", True)):
             escape = escape or "this tool requires network access outside command isolation"
-        native_unisolated = (is_termux() and
-                          self.config.get("execution_isolation", "auto") == "auto" and
-                          call.name in {"run_command", "start_process", "language_diagnostics"})
-        if native_unisolated:
-            host = "Termux" if is_termux() else "Windows"
-            escape = f"{host} native execution has no kernel filesystem or network isolation; approve this command with your user account's access"
         from .permissions import full_access
         unrestricted = full_access(self.config) and self.mode is not Mode.PLAN
         if unrestricted:
@@ -1083,13 +1093,14 @@ class Agent:
         self.sandbox.full_access = full_access(self.config)
         if unrestricted and self.mode is Mode.AUTO:
             verdict, reason = ALLOW, ""
-        if native_unisolated and self.mode is Mode.PLAN:
-            verdict, reason = BLOCK, "native commands cannot enforce plan mode; use portable file/search tools"
         if (platform.system() == "Windows" and self.mode is Mode.PLAN and
                 call.name in {"run_command", "start_process", "language_diagnostics"}):
             verdict, reason = BLOCK, "plan mode uses portable file/search tools on Windows"
         if verdict != BLOCK and not escape and tools.harmless(call.name, call.arguments):
             verdict, reason = ALLOW, ""
+        if (self.mode is Mode.ACCEPT and verdict == ALLOW and not unrestricted
+                and tools.may_change_files(call.name, call.arguments)):
+            verdict, reason = ASK, "this command can create, change or delete files"
         outside = tools.escape_paths(call.name, call.arguments) if escape else []
         if verdict == ASK and escape and self.approve is None:
             verdict = BLOCK
@@ -1189,10 +1200,10 @@ class Agent:
                         timeout=float(self.config.get("shell_timeout", 120) or 120),
                         max_bytes=min(result_limit, int(self.config.get("max_output_bytes", 200_000) or 200_000)),
                         output=output, expected_file=expected_file,
-                        isolation="none" if native_unisolated or unrestricted else str(self.config.get("execution_isolation", "auto")),
+                        isolation="none" if unrestricted else str(self.config.get("execution_isolation", "auto")),
                         isolate_network=not unrestricted and bool(self.config.get("isolate_network", True)) and call.name not in network_tools,
                         plan_scope=self.session.id,
-                        read_only=(self.mode is Mode.PLAN or kind == tools.READ) and not native_unisolated and not unrestricted):
+                        read_only=(self.mode is Mode.PLAN or kind == tools.READ) and not unrestricted):
                         if isinstance(item, ToolOutput):
                             yield item
                         else:
@@ -1207,7 +1218,9 @@ class Agent:
             raise
         except (ToolError, EireneError) as exc:
             result, is_error = exc.user_message(), True
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - a tool bug becomes a tool error, not a dead turn
+            self.logger.exception("tool.crashed", extra={"session_id": self.session.id,
+                                                         "tool": call.name})
             result, is_error = f"tool failed: {exc}", True
 
         try:
@@ -1430,7 +1443,8 @@ class Agent:
             answer = await self.choose(question, options)
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - a broken picker means "talk it through"
+            self.logger.exception("choice.ui_failed", extra={"session_id": self.session.id})
             answer = None
 
         if answer is None or answer == tools.CHAT_OPTION:
@@ -1453,7 +1467,9 @@ class Agent:
             answer = await self.approve(call.name, label, preview, reason)
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - fail closed: a broken prompt never approves
+            self.logger.exception("approval.ui_failed", extra={"session_id": self.session.id,
+                                                               "tool": call.name})
             return NO
         return answer if answer in (YES, NO, ALWAYS) else NO
 

@@ -108,10 +108,19 @@ VERBS = [
     "Pollinating", "Percolating", "Untangling", "Rummaging", "Marinating",
     "Whittling", "Tinkering", "Conjuring", "Simmering", "Wrangling",
     "Noodling", "Sifting", "Puzzling", "Distilling", "Cogitating",
+    "Pondering", "Musing", "Brewing", "Weaving", "Mulling",
+    "Sketching", "Composing", "Forging", "Polishing", "Kneading",
+    "Stitching", "Tending", "Charting", "Sculpting", "Steeping",
+    "Foraging", "Mapping", "Fermenting", "Crafting", "Gathering",
+    "Harmonizing", "Orchestrating", "Spelunking", "Deciphering", "Assembling",
+    "Enchanting",
+    "Bamboozling", "Shenaniganing", "Discombobulating", "Flibbertigibbeting", "Hornswoggling",
+    "Lollygagging", "Befuddling", "Kerfuffling", "Dillydallying", "Snacking",
+    "Caffeinating", "Overthinking", "Daydreaming", "Procrastinating", "Moseying",
 ]
 
 TIPS = [
-    "Press shift + tab to change mode (manual, auto, or plan).",
+    "Press shift + tab to change mode (manual, accept, auto, or plan).",
     "Use /btw for a quick side question without changing the main conversation.",
     f"Select input or transcript text, then press {COPY_LABEL} to copy it.",
     "Click the running-command bar to inspect or stop active commands.",

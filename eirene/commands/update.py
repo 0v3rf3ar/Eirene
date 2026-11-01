@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
+
+from rich.text import Text
 
 from .. import __version__
 from ..core import updates
+from ..ui.terminal import copy_to_system
 from . import register
 
 
 @register("update", "install the latest stable release, or use edge for prereleases", "/update [edge] [check]")
 async def run(app, args: str) -> None:
-    from ..core.platforms import is_termux
-    if is_termux():
-        app.say("On Android/Termux, rerun the installer to install or update the newest compatible package (including betas): bash <(curl -fsSL https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.sh)")
-        return
     args = args.strip()
     if args not in {"", "check", "edge", "edge check", "check edge"}:
         app.say("usage: /update [edge] [check]", "warn")
@@ -35,6 +35,9 @@ async def run(app, args: str) -> None:
             return
         if check_only:
             app.say(f"Eirene {release.version} is available (current: {__version__}). Run {command} to install it.")
+            return
+        if updates.needs_installer():
+            _show_windows_command(app, release)
             return
         app.say(f"Downloading Eirene {release.version}…")
         last_percent = -10
@@ -56,3 +59,20 @@ async def run(app, args: str) -> None:
     finally:
         if not getattr(app.status, "active", False):
             app.status.stop()
+
+
+def _show_windows_command(app, release: updates.Release) -> None:
+    """Windows keeps a running eirene.exe locked, so the installer replaces it instead."""
+    command = updates.windows_update_command(release, Path(sys.executable).resolve().parent)
+    copied = bool(copy_to_system(command))
+    app.say(f"Eirene {release.version} is available (current: {__version__}). "
+            "Run the update command shown in the panel" + (" (copied to your clipboard)." if copied else "."))
+    body = Text()
+    body.append(f"Update to Eirene {release.version}\n\n", style="bold")
+    body.append("Windows cannot replace eirene.exe while it is running. Run this in PowerShell,\n"
+                "in any window, before or after you exit Eirene:\n\n")
+    body.append(command + "\n\n", style="bold")
+    body.append(f"It downloads {release.tag}, verifies its SHA-256 checksum, waits for every\n"
+                "Eirene window to close, then replaces the executable. Start Eirene again\n"
+                "afterwards; your sessions and settings are kept.")
+    app.aside.show_content(body)

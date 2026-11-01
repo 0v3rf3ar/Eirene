@@ -109,6 +109,7 @@ eirene [options]
 | `--json` | Return a final headless JSON result, or JSON diagnostics with `--doctor`. |
 | `--no-color` | Disable colored output. |
 | `--reduce-motion` | Use reduced-motion interface behavior. |
+| `--debug` | Log at debug level and name the failing handler in error warnings. |
 
 Provider, model, and mode overrides apply to `-p` runs. Interactive launches use
 saved settings and their slash commands. Headless prompts starting with `/`

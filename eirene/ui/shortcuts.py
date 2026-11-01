@@ -30,6 +30,7 @@ EDITING_KEYS = (
     ("esc", "Close a popup or stop work"),
     ("ctrl + e", "Jump to the latest output"),
     (COPY_LABEL, "Copy selected text"),
+    ("ctrl + v / alt + v", "Paste a picture from the clipboard as a file"),
     ("ctrl + d", "Exit"),
     ("up / down", "Recall prompt history"),
     ("Tab / →", "Copy a suggestion into empty input"),

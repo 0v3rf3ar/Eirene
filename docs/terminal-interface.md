@@ -54,7 +54,7 @@ supply them before submitting the task. Escape closes the active popup.
 | Ctrl+B | View output or stop running commands. |
 | Ctrl+T | Pick a theme. |
 | Ctrl+P | Toggle prompt suggestions. |
-| Shift+Tab | Cycle Manual, Auto, and Plan modes. |
+| Shift+Tab | Cycle Manual, Accept, Auto, and Plan modes. |
 | Escape | Close a popup or interrupt current work. |
 | Ctrl+E | Jump to the latest transcript output. |
 | PageUp / PageDown | Scroll the transcript while typing. |
@@ -149,7 +149,17 @@ the selection. This works with mouse selection and keyboard selection in the
 input. Right click does not copy.
 Each copy shows `copied N characters` in the bottom-right corner for two seconds.
 
-Linux may need `wl-clipboard` or `xclip` for system clipboard copying. Terminal
+To paste a picture, such as a screenshot, press Ctrl+V (Alt+V in Windows
+Terminal, which keeps Ctrl+V for itself). It is attached as a file, like a
+dropped one, shown as `[pasted-image.png]`. Eirene reads the picture from your
+desktop clipboard with `wl-paste` (Wayland), `xclip` (X11), `osascript` (macOS)
+or PowerShell (Windows and WSL); PNG, JPEG, WebP and GIF keep their format and
+other formats become PNG. When the clipboard holds no picture, the key pastes
+text as before. Over SSH the server's clipboard is not yours, so the key only
+pastes text there.
+
+Linux may need `wl-clipboard` or `xclip` for system clipboard copying and
+picture pasting. Terminal
 clipboard integration and host utilities affect whether the copy reaches your
 desktop clipboard. `/theme`, `--no-color`, and `--reduce-motion` control display;
 see [appearance](appearance.md).

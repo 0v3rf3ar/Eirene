@@ -26,6 +26,3 @@ htmlcov/
 # Local recovery artifacts
 .recovery/
 
-# Experimental Termux CI staging
-termux-input/
-termux-output/

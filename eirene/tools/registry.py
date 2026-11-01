@@ -363,13 +363,23 @@ def harmless(name: str, args: dict[str, Any]) -> bool:
     """True when a call cannot change anything."""
     if name == "ask_user":
         return True
-    if name in {"web_search", "web_fetch"}:
-        # They are read-only and valid in plan mode, but manual mode should still
-        # disclose that a query or URL is about to leave the machine.
+    if name == "web_search":
+        # A search only reads public results; it never needs a confirmation.
+        return True
+    if name == "web_fetch":
+        # Read-only, but manual mode still discloses a URL leaving the machine.
         return False
     if name == "run_command":
         return shell.is_safe(str(args.get("command", "")))
     return kind_of(name) == READ
+
+
+def may_change_files(name: str, args: dict[str, Any]) -> bool:
+    """True when a command tool could create, change, move or delete files."""
+    if name not in {"run_command", "start_process"}:
+        return False
+    from .file_changes import changes_files
+    return changes_files(str(args.get("command", "")))
 
 
 def kind_of(name: str) -> str:

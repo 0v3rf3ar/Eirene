@@ -85,7 +85,8 @@ async def test_mcp_entry_command_checks_enablement_and_provider_locally(tmp_path
     async def turn(text, **kwargs):
         requests.append(text)
     app = SimpleNamespace(config=config, turn=None, agent=SimpleNamespace(mode="auto", provider=None),
-        say=lambda *a: messages.append(a), push=push, _run_turn=turn)
+        say=lambda *a: messages.append(a), push=push, _run_turn=turn,
+        spawn=lambda coroutine, **kwargs: asyncio.ensure_future(coroutine))
     assert lookup("playwright", app)
     await dispatch(app, "/playwright https://example.com")
     assert "/mcp" in messages[-1][0]

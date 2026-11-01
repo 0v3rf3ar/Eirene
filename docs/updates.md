@@ -40,9 +40,25 @@ selected by edge. This choice applies to that command only; startup checks remai
 stable. Both channels require a matching binary and verified checksums.
 
 An active standalone process continues running its existing program until restart.
-On Windows, replacing an in-use executable can require exit. Download, verification,
-or write failures are reported; do not assume the version changed until a new
-process confirms it.
+Download, verification, or write failures are reported; do not assume the version
+changed until a new process confirms it.
+
+### On Windows
+
+Windows locks a running `eirene.exe`, so Eirene cannot replace itself. On Windows,
+`/update` and `/update edge` check GitHub and then show a PowerShell command in a
+panel, also copying it to your clipboard when possible, for example:
+
+```powershell
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.ps1'))) -Version 'v0.2.1' -InstallDir 'C:\Users\you\AppData\Local\Programs\eirene' -NoPathUpdate
+```
+
+Run it in PowerShell, in any window, before or after you exit Eirene. It installs
+exactly the release `/update` found into the folder Eirene is running from,
+verifies the SHA-256 checksum, and waits for every Eirene started from that file
+to close (up to 30 minutes) before replacing it. Your PATH, sessions and settings
+are unchanged. It runs the installer in memory, so PowerShell's script execution
+policy does not block it.
 
 ```sh
 eirene --version
@@ -50,13 +66,8 @@ eirene --version
 
 ## Use the installer again
 
-On Android/Termux, rerun the [Bash installer](installation.md#android--termux).
-It finds the newest compatible Android package, including betas, verifies its
-checksum and metadata, and upgrades through Termux APT without downgrading an
-installed newer version. The in-application `/update` command points to this method.
-
 The original [installer commands](installation.md) can also replace an existing
-installation. Close Eirene first on Windows. Use the same installation directory
+installation. On Windows it waits for Eirene to close. Use the same installation directory
 and a real `EIRENE_VERSION` release tag when you want a specific version rather
 than the latest one.
 

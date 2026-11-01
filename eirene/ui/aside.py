@@ -11,6 +11,7 @@ from textual.message import Message
 
 from . import art, markup, theme
 from .format import strip_escapes
+from .links import OpensLinks
 from .palette import FOREGROUND
 from .window import DraggableWindow
 
@@ -85,6 +86,10 @@ class TextToggle(Static):
         self.action_toggle()
 
 
+class AsideText(OpensLinks, Static):
+    """The answer itself; its Markdown links open like the transcript's."""
+
+
 class AsideBody(VerticalScroll):
     """The scrolling part."""
 
@@ -132,7 +137,7 @@ class AsidePanel(DraggableWindow):
 
     def compose(self):
         with AsideBody():
-            yield Static(Text(""), id="aside-body")
+            yield AsideText(Text(""), id="aside-body")
             with Horizontal(id="aside-toggle-row"):
                 yield TextToggle(False, id="aside-toggle")
         yield CloseButton(Text(CLOSE, style="bold"))

@@ -10,6 +10,7 @@ to the workspace or can access the host. These are separate choices.
 
 ```text
 /agents manual
+/agents accept
 /agents auto
 /agents plan
 ```
@@ -21,6 +22,7 @@ defaults to Auto unless you pass `--mode`.
 | Mode | Reads | File changes | Arbitrary commands |
 | --- | --- | --- | --- |
 | Manual | Harmless workspace reads allowed | Approval required | Approval required; recognized harmless read commands can proceed |
+| Accept | Allowed in the workspace | Approval required | Allowed, except commands that can create, change, move or delete files |
 | Auto | Allowed in the workspace | Allowed in the workspace | Allowed within available isolation |
 | Plan | Workspace reads allowed | Blocked | Blocked |
 

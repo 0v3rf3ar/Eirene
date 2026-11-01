@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -354,3 +355,24 @@ def test_a_bare_linux_box_reports_no_notifier(monkeypatch):
     monkeypatch.setattr(notify.shutil, "which", lambda name: None)
     assert notify.linux_tool() == ""
     assert notify.available() is False
+
+
+def test_osc52_long_copies_survive_gnu_screen():
+    import base64
+    import re
+    text = "copied over ssh " * 400
+    wrapped = terminal.osc52(text, {"STY": "1.pts"})
+    pieces = re.findall(r"\x1bP(.*?)\x1b\\", wrapped, re.DOTALL)
+    assert pieces and all(len(piece) <= terminal.SCREEN_CHUNK for piece in pieces)
+    assert "".join(pieces) == terminal.osc52(text, {})
+    payload = "".join(pieces)[len("\x1b]52;c;"):-1]
+    assert base64.b64decode(payload).decode() == text
+
+
+def test_windows_clipboard_receives_utf16_without_a_byte_order_mark(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(terminal, "clipboard_tool", lambda: ["clip.exe"])
+    monkeypatch.setattr(terminal.subprocess, "run",
+                        lambda command, **kwargs: sent.update(kwargs) or SimpleNamespace(returncode=0))
+    assert terminal.copy_to_system("C:\\Users\\Jürgen 日本") == "clip.exe"
+    assert sent["input"] == "C:\\Users\\Jürgen 日本".encode("utf-16-le")

@@ -59,6 +59,7 @@ disables this automatic migration.
 └── logs/
     ├── eirene.jsonl                     rotating runtime diagnostics
     ├── eirene.jsonl.1                   newest rotated log, when present
+    ├── crashes/crash-<time>-<pid>-<n>.txt  unexpected-error reports (newest 20)
     ├── eirene-<task-id>.log             launchd task stdout/stderr, when used
     └── ...
 ```

@@ -281,64 +281,67 @@ async def test_invalid_update_arguments_do_not_check(monkeypatch):
     assert "usage:" in app.say.call_args.args[0]
 
 
-def test_windows_helper_waits_retries_and_preserves_backup(tmp_path, monkeypatch):
-    pending = tmp_path / "pending's-é.exe"
-    target = tmp_path / "eirene.exe"
-    pending.write_bytes(b"new")
-    spawn = Mock()
-    monkeypatch.setattr(updates.subprocess, "Popen", spawn)
-    message = updates._windows_install(pending, target)
-    script_path = pending.with_suffix(".ps1")
-    assert script_path.read_bytes().startswith(b"\xef\xbb\xbf")
-    script = script_path.read_text(encoding="utf-8-sig")
-    assert "Wait-Process" in script and "Get-Process" in script
-    assert "pending''s-é.exe" in script
-    assert "[System.IO.File]::Replace($pending, $target, $backup)" in script
-    assert "Copy-Item" not in script and "Move-Item" not in script
-    assert "Out-File -LiteralPath $errorLog" in script
-    assert "if ($attempt -eq 29) { throw }" in script
-    assert "$attempt -lt 30" in script
-    assert "scheduled" in message
-    assert spawn.call_args.args[0][0] == "powershell.exe"
-    assert spawn.call_args.kwargs["cwd"] == str(target.parent)
-    assert str(target.with_suffix(".update-error.txt")) in message
+def test_windows_update_command_targets_this_installation_exactly():
+    release = updates.Release("v0.2.1b2", "0.2.1b2", {})
+    command = updates.windows_update_command(release, Path(r"C:\Users\O'Brien $x\Programs\eirene"))
+    assert command == (
+        "& ([scriptblock]::Create((irm "
+        "'https://raw.githubusercontent.com/0v3rf3ar/Eirene/master/install.ps1'))) "
+        "-Version 'v0.2.1b2' -InstallDir 'C:\\Users\\O''Brien $x\\Programs\\eirene' -NoPathUpdate")
 
 
-def test_windows_helper_launch_failure_cleans_script(tmp_path, monkeypatch):
-    pending = tmp_path / "pending.exe"
-    pending.write_bytes(b"new")
-    monkeypatch.setattr(updates.subprocess, "Popen", Mock(side_effect=OSError("launch failed")))
-    with pytest.raises(OSError, match="launch failed"):
-        updates._windows_install(pending, tmp_path / "eirene.exe")
-    assert not pending.with_suffix(".ps1").exists()
-    assert pending.read_bytes() == b"new"
+def test_windows_frozen_install_refuses_self_replacement(tmp_path, monkeypatch):
+    staged = tmp_path / "eirene-0.2.0.exe"
+    staged.write_bytes(b"new")
+    monkeypatch.setattr(updates.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(updates.os, "name", "nt")
+    with pytest.raises(updates.UpdateError, match="installer command"):
+        updates.install(staged)
 
 
-@pytest.mark.skipif(updates.os.name != "nt", reason="native Windows PowerShell replacement")
-def test_windows_helper_replaces_binary_and_existing_backup(tmp_path, monkeypatch):
-    root = tmp_path / "Eirene's-é"
-    root.mkdir()
-    target, pending = root / "eirene.exe", root / "pending.exe"
-    backup = target.with_suffix(".previous.exe")
-    error = target.with_suffix(".update-error.txt")
-    target.write_bytes(b"old")
-    pending.write_bytes(b"new")
-    backup.write_bytes(b"older")
-    error.write_text("stale error")
-    # An absent PID lets the helper run without waiting for the pytest process.
-    monkeypatch.setattr(updates.os, "getpid", lambda: 2147483647)
-    with monkeypatch.context() as patch:
-        patch.setattr(updates.subprocess, "Popen", Mock())
-        updates._windows_install(pending, target)
-    result = updates.subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-         "-File", str(pending.with_suffix(".ps1"))], capture_output=True, timeout=45)
-    assert result.returncode == 0, result.stderr.decode(errors="replace")
-    assert target.read_bytes() == b"new"
-    assert backup.read_bytes() == b"old"
-    assert not pending.exists()
-    assert not pending.with_suffix(".ps1").exists()
-    assert not error.exists()
+@pytest.mark.parametrize("args,tag", [("", "v0.2.0"), ("edge", "v0.3.0b1")])
+async def test_windows_update_shows_installer_command_instead_of_replacing(monkeypatch, tmp_path, args, tag):
+    from eirene.commands import update
+    release = updates.Release(tag, tag[1:], {})
+    monkeypatch.setattr(updates, "check", AsyncMock(return_value=release))
+    download = AsyncMock()
+    monkeypatch.setattr(updates, "download", download)
+    monkeypatch.setattr(updates, "needs_installer", lambda: True)
+    monkeypatch.setattr(update.sys, "executable", str(tmp_path / "eirene.exe"))
+    copied = []
+    monkeypatch.setattr(update, "copy_to_system", lambda text: copied.append(text) or "clip.exe")
+    panel = SimpleNamespace(show_content=Mock())
+    app = SimpleNamespace(say=Mock(), status=SimpleNamespace(stop=Mock()), aside=panel)
+    await update.run(app, args)
+    download.assert_not_awaited()
+    expected = updates.windows_update_command(release, tmp_path.resolve())
+    assert copied == [expected]
+    shown = panel.show_content.call_args.args[0].plain
+    assert expected in shown and "waits for every" in shown
+    assert "copied to your clipboard" in app.say.call_args.args[0]
+    assert not getattr(app, "_update_pending", False)
+
+
+async def test_windows_update_without_clipboard_does_not_claim_a_copy(monkeypatch, tmp_path):
+    from eirene.commands import update
+    monkeypatch.setattr(updates, "check", AsyncMock(return_value=updates.Release("v0.2.0", "0.2.0", {})))
+    monkeypatch.setattr(updates, "needs_installer", lambda: True)
+    monkeypatch.setattr(update.sys, "executable", str(tmp_path / "eirene.exe"))
+    monkeypatch.setattr(update, "copy_to_system", lambda text: "")
+    app = SimpleNamespace(say=Mock(), status=SimpleNamespace(stop=Mock()),
+                          aside=SimpleNamespace(show_content=Mock()))
+    await update.run(app, "")
+    assert "clipboard" not in app.say.call_args.args[0]
+
+
+def test_only_frozen_windows_needs_the_installer(monkeypatch):
+    monkeypatch.setattr(updates.os, "name", "nt")
+    monkeypatch.setattr(updates.sys, "frozen", False, raising=False)
+    assert not updates.needs_installer()
+    monkeypatch.setattr(updates.sys, "frozen", True, raising=False)
+    assert updates.needs_installer()
+    monkeypatch.setattr(updates.os, "name", "posix")
+    assert not updates.needs_installer()
 
 
 async def test_typo_alias_dispatches_update(monkeypatch):

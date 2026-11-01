@@ -12,11 +12,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  version:
+    name: Validate release tag
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      prerelease: ${{ steps.channel.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Match the tag to the package version
+        id: channel
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          prerelease=$(python3 scripts/release_metadata.py --tag "$RELEASE_TAG")
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
   checks:
+    needs: version
     uses: ./.github/workflows/platforms.yml
 
   publish:
-    needs: checks
+    needs: [version, checks]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
@@ -36,31 +55,29 @@ jobs:
           set -euo pipefail
           cd release
           version=${RELEASE_TAG#v}
-          for asset in "eirene-Linux-amd64-$version.tar.gz" "eirene-Linux-arm64-$version.tar.gz" "eirene-MacOS-silicon-$version.tar.gz" "eirene-Windows-amd64-$version.zip"; do
-            test -f "$asset"
+          expected=(
+            "eirene-Linux-amd64-$version.tar.gz"
+            "eirene-Linux-arm64-$version.tar.gz"
+            "eirene-MacOS-silicon-$version.tar.gz"
+            "eirene-Windows-amd64-$version.zip"
+          )
+          for asset in "${expected[@]}"; do
+            test -s "$asset" || { echo "::error::missing or empty release archive: $asset"; exit 1; }
           done
-          shopt -s nullglob
-          sha256sum eirene-*.tar.gz eirene-*.zip eirene-Termux-*.deb > SHA256SUMS
-      - name: Classify release channel
-        id: channel
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          prerelease=$(python scripts/release_metadata.py --tag "$RELEASE_TAG")
-          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          cp ../install.sh install.sh
+          sha256sum "${expected[@]}" install.sh > SHA256SUMS
+          cat SHA256SUMS
       - name: Publish complete GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
           GH_REPO: ${{ github.repository }}
-          IS_PRERELEASE: ${{ steps.channel.outputs.prerelease }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          IS_PRERELEASE: ${{ needs.version.outputs.prerelease }}
         shell: bash
         run: |
           set -euo pipefail
-          if gh release view "$RELEASE_TAG" --json isDraft > release-state.json 2>/dev/null; then
-            python -c 'import json; assert json.load(open("release-state.json"))["isDraft"], "Release already published; use a new tag"'
+          if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > release-state.txt 2>/dev/null; then
+            [[ "$(cat release-state.txt)" == true ]] || { echo "::error::$RELEASE_TAG is already published; use a new tag"; exit 1; }
           else
             gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "Eirene $RELEASE_TAG"
           fi
@@ -68,10 +85,16 @@ jobs:
           if [[ -f "$notes" ]]; then
             gh release edit "$RELEASE_TAG" --notes-file "$notes"
           fi
-          shopt -s nullglob
-          gh release upload "$RELEASE_TAG" release/*.tar.gz release/*.zip release/*.deb release/SHA256SUMS --clobber
+          version=${RELEASE_TAG#v}
+          gh release upload "$RELEASE_TAG" --clobber \
+            "release/eirene-Linux-amd64-$version.tar.gz" \
+            "release/eirene-Linux-arm64-$version.tar.gz" \
+            "release/eirene-MacOS-silicon-$version.tar.gz" \
+            "release/eirene-Windows-amd64-$version.zip" \
+            release/install.sh \
+            release/SHA256SUMS
           if [[ "$IS_PRERELEASE" == true ]]; then
             gh release edit "$RELEASE_TAG" --prerelease --draft=false --latest=false
           else
-            gh release edit "$RELEASE_TAG" --prerelease=false --draft=false
+            gh release edit "$RELEASE_TAG" --prerelease=false --draft=false --latest
           fi

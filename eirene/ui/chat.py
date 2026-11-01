@@ -16,6 +16,7 @@ from textual.widgets import Static
 from . import art, diff, markup, palette, theme
 from .composer import PromptRow
 from .format import safe_notice, strip_escapes
+from .links import OpensLinks
 from .snow import Snowfall
 
 PANEL_LABEL = "Tip:"
@@ -23,7 +24,6 @@ PANEL_DIVIDER = "│"
 MAX_TOOL_OUTPUT_LINES = 14
 MAX_COMMAND_LABEL_CHARS = 120
 FLUSH_INTERVAL = 1 / 60
-FILE_TOOLS = ("read_file", "write_file", "edit_file", "list_dir", "glob")
 
 
 class Block(Static):
@@ -168,7 +168,7 @@ class BackToBottom(Static):
         self.screen.query_one(Transcript).go_to_bottom()
 
 
-class NoticeBlock(Block):
+class NoticeBlock(OpensLinks, Block):
     """A short system line."""
 
     def __init__(self, text: str, kind: str = "info", *, markdown: bool = False):
@@ -180,9 +180,6 @@ class NoticeBlock(Block):
         else:
             body.append(safe_notice(text), style="dim" if kind == "info" else "bold")
         super().__init__(body)
-
-    def action_open_link(self, url: str) -> None:
-        self.app.open_url(url)
 
 
 class ArtBlock(Block):
@@ -380,7 +377,7 @@ class ThinkingBlock(Block):
         self.update(Text(f"{art.icon('think')} reasoning", style=quiet))
 
 
-class AnswerBlock(Block):
+class AnswerBlock(OpensLinks, Block):
     """Streamed assistant prose."""
 
     DEFAULT_CSS = """
@@ -434,10 +431,6 @@ class AnswerBlock(Block):
             self._rendered = key
             self.update(markup.render(*key))
 
-    def action_open_link(self, url: str) -> None:
-        """Open a link from rendered assistant Markdown."""
-        self.app.open_url(url)
-
     def get_selection(self, selection):
         """Copy what is on screen, without the panel padding."""
         shown = markup.Markdown(self.buffer[:self._visible].rstrip(), self._width())
@@ -448,18 +441,100 @@ class AnswerBlock(Block):
         return not self.buffer.strip()
 
 
+# Read-only lookups that gather context. Consecutive ones share one group.
+EXPLORE_TOOLS = frozenset({
+    "read_file", "read_attachment", "read_image", "list_dir", "glob", "search_text",
+    "file_search", "find_symbol", "find_references", "project_info", "list_processes",
+    "web_search", "web_fetch", "Read", "NotebookRead", "Glob", "Grep", "LS",
+    "WebSearch", "WebFetch",
+})
+# Tools whose results stay folded until clicked.
+QUIET_TOOLS = EXPLORE_TOOLS | {"load_skill"}
+TOOL_VERBS = {
+    "read_file": "Read", "Read": "Read", "NotebookRead": "Read",
+    "read_attachment": "Read", "read_image": "View",
+    "list_dir": "List", "LS": "List",
+    "glob": "Find", "Glob": "Find",
+    "search_text": "Search", "file_search": "Search", "Grep": "Search",
+    "find_symbol": "Symbol", "find_references": "References",
+    "project_info": "Inspect", "list_processes": "Processes",
+    "web_search": "Web search", "WebSearch": "Web search",
+    "web_fetch": "Fetch", "WebFetch": "Fetch",
+    "load_skill": "Skill", "language_diagnostics": "Diagnostics",
+    "browser_inspect": "Inspect", "browser_interact": "Browse",
+    "browser_screenshot": "Screenshot", "http_request": "Request",
+    "stop_process": "Stop", "delegate_tasks": "Delegate",
+    "request_full_access": "Access", "ask_user": "Ask",
+    "write_file": "Write", "edit_file": "Edit", "Write": "Write",
+    "Edit": "Edit", "MultiEdit": "Edit", "NotebookEdit": "Edit",
+}
+# How a group counts its steps, by kind: (singular, plural).
+TOOL_KINDS = {
+    "files": ("file", "files"), "searches": ("search", "searches"),
+    "folders": ("folder", "folders"), "web": ("web lookup", "web lookups"),
+    "other": ("lookup", "lookups"),
+}
+COMMAND_PREVIEW_LINES = 3
+
+
+def _base_tool(name: str) -> str:
+    """The plain tool name, without an MCP server prefix."""
+    return name.rsplit("__", 1)[-1] if name.startswith("mcp__") else name
+
+
+def tool_kind(name: str) -> str:
+    name = _base_tool(name)
+    if name in {"read_file", "read_attachment", "read_image", "Read", "NotebookRead"}:
+        return "files"
+    if name in {"list_dir", "LS"}:
+        return "folders"
+    if name in {"web_search", "web_fetch", "WebSearch", "WebFetch"}:
+        return "web"
+    if name in {"glob", "Glob", "search_text", "file_search", "Grep",
+                "find_symbol", "find_references"}:
+        return "searches"
+    return "other"
+
+
+def tool_verb(name: str) -> str:
+    """A short verb for the transcript, or the tool's own name."""
+    if name == "MCP":
+        return "MCP"
+    if name.startswith("mcp__"):
+        parts = name.split("__")
+        return f"{parts[1]} · {parts[-1]}" if len(parts) >= 3 else name
+    return TOOL_VERBS.get(name, name)
+
+
+def _status(finished: bool, is_error: bool, pending: bool = False) -> str:
+    if is_error:
+        return palette.RED
+    if not finished or pending:
+        return palette.YELLOW
+    return palette.GREEN
+
+
 class ToolBlock(Block):
-    """A tool call with live output."""
+    """A tool call with live output.
+
+    On its own it reads ``● Verb target`` with output under a corner; inside a
+    ``ToolGroup`` it is one compact row.
+    """
 
     auto_links = False
 
+    DEFAULT_CSS = """
+    ToolBlock {
+        padding: 0 1;
+    }
+    """
+
     def __init__(self, name: str, label: str, *, hide_output: bool = False):
-        quiet_tools = {"read_attachment", "read_file", "web_search", "web_fetch",
-                       "file_search", "search_text", "glob", "grep", "list_dir", "Read", "NotebookRead",
-                       "WebSearch", "WebFetch", "Glob", "Grep", "LS"}
-        self.hide_output = (hide_output or name in quiet_tools
+        self.hide_output = (hide_output or name in QUIET_TOOLS
                             or name == "MCP" or name.startswith("mcp__")
-                            or any(name.endswith(f"__{tool}") for tool in quiet_tools))
+                            or any(name.endswith(f"__{tool}") for tool in QUIET_TOOLS))
+        self.explore = name in EXPLORE_TOOLS or any(
+            name.endswith(f"__{tool}") for tool in EXPLORE_TOOLS)
         self.expanded = False
         self.tool = name
         self.label = strip_escapes(label)
@@ -488,41 +563,170 @@ class ToolBlock(Block):
         self.seconds = seconds
         self.finished = True
 
+    @property
+    def group(self) -> "ToolGroup | None":
+        parent = self.parent
+        return parent if isinstance(parent, ToolGroup) else None
+
+    def _target(self) -> str:
+        if self.tool == "MCP" or self.tool.startswith("mcp__"):
+            # The verb already names the server and tool.
+            return "" if self.label in {self.tool, ""} else self.label
+        return self.label if self.label != self.tool else ""
+
     def flush(self) -> None:
+        group = self.group
         body = Text()
-        mark = art.icon("ok") if self.finished and not self.is_error else (
-            art.icon("dot") if self.is_error else art.icon("clock"))
-        if not self.hide_output:
-            body.append(f"{mark} ")
-        tool_icon = art.tool_icon(self.tool)
-        spacing = "  " if tool_icon == "🌐︎" else " "
-        body.append(f"{tool_icon}{spacing}", style="dim")
-        if self.tool in FILE_TOOLS and self.tool not in {"write_file", "edit_file"} \
-                and self.label:
-            body.append(f"{art.file_icon(self.label)} ", style="dim")
         accent = theme.for_widget(self)
-        named = f"bold {accent.tool}" if accent and accent.tool else "bold"
-        body.append(self.label or self.tool, style=named)
+        if group is not None:
+            body.append("  └ " if group.first_row is self else "    ", style="dim")
+        else:
+            body.append(f"{art.icon('bullet')} ",
+                        style=f"bold {_status(self.finished, self.is_error)}")
+        body.append(tool_verb(self.tool), style="bold" if group is None else "")
+        target = self._target()
+        if target:
+            body.append(" ")
+            body.append(target, style=accent.tool if accent and accent.tool else "")
         if self.finished and self.seconds >= 1:
             body.append(f"  {self.seconds:.0f}s", style="dim")
+        if self.is_error:
+            body.append(f"  {art.icon('fail')}", style=f"bold {palette.RED}")
+        if not self.finished and group is not None:
+            body.append("  …", style="dim")
         if self.hide_output:
             triangle = ("^" if self.expanded else "v") if art.ACCESSIBLE else (
                 "▴" if self.expanded else "▾")
-            if self.is_error:
-                body.append(f"  {art.icon('fail')}", style="bold")
             body.append(f" {triangle}", style="dim")
             body.stylize(Style(meta={"@click": "toggle_output"}), 0, len(body))
         detail = "" if self.hide_output and not self.expanded and not self.is_error else (
             self.result if self.finished else self.output)
         lines = detail.splitlines() if self.hide_output and self.expanded else _tail(detail)
-        for line in lines:
-            body.append("\n  ")
+        indent = "      " if group is not None else "  "
+        for index, line in enumerate(lines):
+            body.append("\n")
+            if group is None and index == 0:
+                body.append(f"  {art.icon('corner')} ", style="dim")
+            else:
+                body.append(indent if group is not None else "    ", style="dim")
             body.append(line, style="dim")
         self.update(body)
+        if group is not None:
+            group.refresh_header()
+
+
+class ToolGroupHeader(Static):
+    """The summary line above a run of lookups; click it to show every row."""
+
+    DEFAULT_CSS = """
+    ToolGroupHeader {
+        width: 1fr;
+        height: auto;
+        background: transparent;
+    }
+    """
+
+    def on_click(self, event) -> None:
+        event.stop()
+        group = self.parent
+        if isinstance(group, ToolGroup) and group.hidden_rows:
+            group.show_all = not group.show_all
+            group.relayout()
+
+
+class ToolGroup(Widget):
+    """Consecutive read-only lookups, summarised under one heading."""
+
+    VISIBLE_ROWS = 5
+
+    DEFAULT_CSS = """
+    ToolGroup {
+        width: 1fr;
+        height: auto;
+        layout: vertical;
+        padding: 0 1;
+        margin-bottom: 1;
+        background: transparent;
+    }
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.header = ToolGroupHeader(Text(""))
+        self.show_all = False
+        self.hidden_rows = 0
+
+    def compose(self):
+        yield self.header
+
+    @property
+    def rows(self) -> list[ToolBlock]:
+        return [child for child in self.children if isinstance(child, ToolBlock)]
+
+    @property
+    def first_row(self) -> ToolBlock | None:
+        for row in self.rows:
+            if row.display:
+                return row
+        return None
+
+    async def add(self, row: ToolBlock) -> None:
+        # Rows sit flush under the heading, unlike standalone blocks.
+        row.styles.margin = 0
+        row.styles.padding = 0
+        await self.mount(row)
+        self.relayout()
+
+    def relayout(self) -> None:
+        """Fold early rows once the group grows long."""
+        rows = self.rows
+        limit = self.VISIBLE_ROWS
+        self.hidden_rows = 0 if self.show_all or len(rows) <= limit + 1 else len(rows) - limit
+        for index, row in enumerate(rows):
+            row.display = index >= self.hidden_rows
+        for row in rows:
+            row.flush()
+        self.refresh_header()
+
+    def restyle(self) -> None:
+        self.relayout()
+
+    def refresh_header(self) -> None:
+        rows = self.rows
+        running = any(not row.finished for row in rows)
+        failed = any(row.is_error for row in rows)
+        web_only = rows and all(tool_kind(row.tool) == "web" for row in rows)
+        title = ("Researching" if running else "Researched") if web_only else (
+            "Exploring" if running else "Explored")
+        counts: dict[str, int] = {}
+        for row in rows:
+            kind = tool_kind(row.tool)
+            counts[kind] = counts.get(kind, 0) + 1
+        parts = []
+        for kind, (one, many) in TOOL_KINDS.items():
+            if counts.get(kind):
+                number = counts[kind]
+                parts.append(f"{number} {one if number == 1 else many}")
+        body = Text()
+        body.append(f"{art.icon('bullet')} ", style=f"bold {_status(not running, failed)}")
+        body.append(title, style="bold")
+        if parts:
+            body.append(f"  {', '.join(parts)}", style="dim")
+        if self.hidden_rows:
+            body.append(f"  ▸ {self.hidden_rows} earlier", style="dim")
+        elif self.show_all:
+            body.append("  ▾ fold", style="dim")
+        self.header.update(body)
 
 
 class CommandBlock(ToolBlock):
     """A shell command with an explicit running/success/failure state."""
+
+    DEFAULT_CSS = """
+    CommandBlock {
+        padding: 0 1;
+    }
+    """
 
     def on_resize(self, event) -> None:
         self.flush()
@@ -532,6 +736,7 @@ class CommandBlock(ToolBlock):
         self._saved_key = None
         self._saved_output = ""
         super().__init__(name, label)
+        self.explore = False
 
     def on_click(self, event) -> None:
         event.stop()
@@ -558,38 +763,46 @@ class CommandBlock(ToolBlock):
         return self.output or self.result
 
     def flush(self) -> None:
-        # Keep the collapsed preview to two physical rows, even for long lines.
+        # Keep the collapsed preview short: the last few lines matter most.
         body = Text(no_wrap=not self.expanded, overflow="crop" if not self.expanded else "fold")
-        if not self.finished:
-            color, action = palette.YELLOW, "Running"
+        background = self.finished and self.result.startswith("Still running as managed process")
+        if not self.finished or background:
+            action = "Running"
         elif self.is_error:
-            color, action = palette.RED, "Failed"
-        elif self.result.startswith("Still running as managed process"):
-            color, action = palette.YELLOW, "Running"
+            action = "Failed"
         else:
-            color, action = palette.GREEN, "Ran"
-        marker = art.icon("bullet")
-        body.append(f"{marker} ", style=f"bold {color}")
+            action = "Ran"
+        color = _status(self.finished, self.is_error, pending=background)
+        body.append(f"{art.icon('bullet')} ", style=f"bold {color}")
         body.append(action, style="bold")
-        body.append(" (")
+        body.append(" ")
         label = self.label
         if not self.expanded:
             label = " ".join(label.split())
-            limit = min(MAX_COMMAND_LABEL_CHARS, max(self.content_size.width - 32, 24))
+            limit = min(MAX_COMMAND_LABEL_CHARS, max(self.content_size.width - 16, 24))
             if len(label) > limit:
                 label = label[:limit - 1] + "…"
-        body.append(label or "(empty)")
-        body.append(")")
-        body.append("  ▾ collapse" if self.expanded else "  ▸ expand", style="dim")
+        accent = theme.for_widget(self)
+        body.append(label or "(empty)", style=accent.tool if accent and accent.tool else "")
         if self.finished and self.seconds >= 1:
             body.append(f"  {self.seconds:.0f}s", style="dim")
-        lines = self._detail().splitlines()
-        if not self.expanded:
-            lines = lines[:2]
-        for index, line in enumerate(lines):
+        lines = [line.rstrip() for line in self._detail().splitlines()]
+        while lines and not lines[-1].strip():
+            lines.pop()
+        hidden = 0
+        if not self.expanded and len(lines) > COMMAND_PREVIEW_LINES + 1:
+            hidden = len(lines) - COMMAND_PREVIEW_LINES
+            lines = lines[-COMMAND_PREVIEW_LINES:]
+        rows: list[tuple[str, str]] = []
+        if hidden:
+            rows.append((f"… +{hidden} lines (click to expand)", "dim italic"))
+        rows.extend((line, "dim") for line in lines)
+        if self.expanded and len(lines) > COMMAND_PREVIEW_LINES + 1:
+            rows.append(("(click to collapse)", "dim italic"))
+        for index, (line, style) in enumerate(rows):
             body.append("\n")
             body.append(f"  {art.icon('corner')} " if index == 0 else "    ", style="dim")
-            body.append(line, style="dim")
+            body.append(line, style=style)
         self.update(body)
 
 
@@ -791,7 +1004,15 @@ class Transcript(VerticalScroll):
             if self._snowfall.override is not True:
                 self._snowfall.stop()
         follow = self._following
-        await self.mount(block)
+        if isinstance(block, ToolBlock) and block.explore:
+            last = self.children[-1] if self.children else None
+            group = last if isinstance(last, ToolGroup) else None
+            if group is None:
+                group = ToolGroup()
+                await self.mount(group)
+            await group.add(block)
+        else:
+            await self.mount(block)
         if live:
             self._live.append(block)
         if follow:

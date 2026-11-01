@@ -11,6 +11,7 @@ TABLE = [
     (Mode.AUTO, READ, ALLOW), (Mode.AUTO, WRITE, ALLOW), (Mode.AUTO, EXEC, ALLOW),
     (Mode.MANUAL, READ, ASK), (Mode.MANUAL, WRITE, ASK), (Mode.MANUAL, EXEC, ASK),
     (Mode.PLAN, READ, ALLOW), (Mode.PLAN, WRITE, BLOCK), (Mode.PLAN, EXEC, BLOCK),
+    (Mode.ACCEPT, READ, ALLOW), (Mode.ACCEPT, WRITE, ASK), (Mode.ACCEPT, EXEC, ALLOW),
 ]
 
 
@@ -45,7 +46,7 @@ def test_plan_reason_explains_itself():
 
 def test_cycle_visits_every_mode():
     seen = [Mode.MANUAL]
-    for _ in range(2):
+    for _ in range(3):
         seen.append(next_mode(seen[-1]))
     assert set(seen) == set(Mode)
     assert next_mode(seen[-1]) == Mode.MANUAL
@@ -54,6 +55,7 @@ def test_cycle_visits_every_mode():
 @pytest.mark.parametrize("text,expected", [
     ("auto", Mode.AUTO), ("a", Mode.AUTO), ("plan", Mode.PLAN),
     ("p", Mode.PLAN), ("manual", Mode.MANUAL), ("", Mode.MANUAL),
+    ("accept", Mode.ACCEPT), ("tools", Mode.ACCEPT), ("accept-tools", Mode.ACCEPT),
     (None, Mode.MANUAL), ("nonsense", Mode.MANUAL),
 ])
 def test_parse(text, expected):
@@ -67,7 +69,7 @@ def test_each_mode_describes_itself():
         assert mode.label.endswith("mode")
 
 
-@pytest.mark.parametrize("platform", ["win32", "linux", "darwin", "android"])
+@pytest.mark.parametrize("platform", ["win32", "linux", "darwin"])
 def test_mode_icons_are_monochrome_on_every_platform(monkeypatch, platform):
     monkeypatch.setattr("sys.platform", platform)
     assert Mode.MANUAL.icon == "Ⅱ"
@@ -92,4 +94,5 @@ def test_reading_files_needs_no_approval():
     assert tools.harmless("write_file", {"path": "a", "content": "x"}) is False
     assert tools.harmless("edit_file", {"path": "a"}) is False
     assert tools.kind_of("web_search") == READ
-    assert tools.harmless("web_search", {"query": "news"}) is False
+    assert tools.harmless("web_search", {"query": "news"}) is True
+    assert tools.harmless("web_fetch", {"url": "https://example.com"}) is False

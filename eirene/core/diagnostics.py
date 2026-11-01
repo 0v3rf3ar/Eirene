@@ -9,7 +9,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import paths
+from . import crash, paths
 from .config import CONFIG_VERSION, Config
 from ..providers import registry as providers
 from . import credentials
@@ -45,6 +45,7 @@ def collect(config: Config | None = None) -> dict:
         "sessions": _count(paths.sessions_dir(), "*.jsonl"),
         "skills": _count(paths.skills_dir(), "*.md"),
         "runtime_log": str(paths.runtime_log()),
+        "crash_reports": [str(path) for path in crash.recent(5)],
         "scheduler_tools": scheduler_tools,
         "execution_isolation": config.get("execution_isolation", "none"),
         "seatbelt_available": sys.platform == "darwin" and bool(shutil.which("sandbox-exec")),
@@ -67,6 +68,10 @@ def render(report: dict, *, json_output: bool = False) -> str:
              f"  Provider: {report['active_provider'] or 'not configured'}",
              f"  Sessions: {report['sessions']}", f"  Skills: {report['skills']}",
              f"  Log: {report['runtime_log']}"]
+    crashes = report.get("crash_reports") or []
+    if crashes:
+        lines.append(f"  Recent crash reports ({len(crashes)}, newest first):")
+        lines.extend(f"    {path}" for path in crashes)
     if not report["data_home_writable"]:
         lines.append("  WARNING: data directory is not writable")
     if not report["active_provider_known"]:

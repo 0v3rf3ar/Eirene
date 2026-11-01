@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
 
 from ..core.modes import Mode
@@ -49,4 +48,4 @@ review summary. Do not praise the code or summarize the diff before findings."""
             app.refresh_mode_line()
 
     app.refresh_mode_line()
-    app.turn = asyncio.create_task(review())
+    app.turn = app.spawn(review(), name="review", background=False)

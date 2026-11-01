@@ -3,30 +3,33 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 import os
 import re
 import sys
 import textwrap
+import threading
 import time
+from collections.abc import Callable, Coroutine
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 from rich.text import Text
 from textual import events
+from textual._compositor import CompositorUpdate
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from .ui.shortcuts import COPY_KEYS, INERT_COPY_KEYS, SHORTCUTS
 from textual.css.query import NoMatches
-from textual._compositor import CompositorUpdate
 
 from . import __version__, commands
 from .core import agent as agent_mod
-from .core.attachments import MAX_DROPPED_FILES, store_attachment, attachment_manifest
-from .core import notify, paths, questions
-from .core import skills as skills_mod
-from .core import plans as plan_mod
-from .core.config import Config
+from .core import crash, notify, paths, questions
 from .core import logging as runtime_logging
+from .core import plans as plan_mod
+from .core import skills as skills_mod
+from .core.attachments import (MAX_DROPPED_FILES, attachment_manifest, store_attachment,
+                               store_attachment_bytes)
+from .core.config import Config
 from .core.errors import EireneError, ProviderError
 from .core.modes import Mode, next_mode
 from .core.session import Session, clean_title, name_from
@@ -35,8 +38,9 @@ from .providers import registry as providers
 from .tools import registry as tool_registry
 from .tools import processes
 from .tools.sandbox import Sandbox
-from .ui import art, markup
+from .ui import art, guard, input_guard, links, markup
 from .ui import theme as theme_mod
+from .ui.shortcuts import COPY_KEYS, INERT_COPY_KEYS, SHORTCUTS
 from .ui.terminal import copy_to_system, osc52, remote_session, write_terminal_title
 from .ui.theme import THEMES
 from .ui.format import display_path
@@ -62,6 +66,9 @@ IDLE_ESCAPE_WINDOW = 2.0
 
 
 SHELL_TOOLS = ("run_command", "start_process", "poll_process", "Bash", "BashOutput", "KillShell")
+PLAN_TOOLS = frozenset({"plan_update", "plan_set_status", "plan_clear"})
+# Polling tools only refresh an earlier card; they never get one of their own.
+HIDDEN_TOOLS = frozenset({"poll_process", "read_output"})
 
 
 def _fit(value: str, width: int) -> str:
@@ -96,16 +103,30 @@ class Eirene(App):
          for key in INERT_COPY_KEYS] + [Binding(key, action, hint, priority=True, show=False)
          for key, action, _, hint in SHORTCUTS]
 
+    CONTAIN_ERRORS = True
+    """Recover from unexpected handler errors instead of exiting; tests opt out."""
+    EXIT_CONFIRM_SECONDS = 3.0
+    """How long a second ctrl+d has to confirm exiting while work is running."""
+
     def __init__(self, sandbox: Path, resume: str = ""):
         super().__init__()
+        guard.install()
+        input_guard.install()
+        self._error_budget = guard.ErrorBudget()
+        # Containment starts once the widget tree exists; earlier failures are fatal.
+        self._containing = False
+        self._fatal: tuple[BaseException, Path | None] | None = None
+        self._debug = bool(os.environ.get("EIRENE_DEBUG"))
+        self._previous_hooks: tuple[Any, Any] | None = None
         paths.ensure_tree()
         self.sandbox = Sandbox(sandbox)
         self.config = Config.load()
         if os.environ.get("EIRENE_REDUCE_MOTION"):
             self.config.set("reduce_motion", True)
         art.set_accessible(bool(self.config.get("accessible_icons", False)))
-        self._companion_renderer = prepare_renderer(self.config)
+        # Before the graphics probe, so its warnings reach the log, not the screen.
         self.runtime_logger = runtime_logging.configure(self.config)
+        self._companion_renderer = prepare_renderer(self.config)
         self.session = Session.create(self.sandbox.root, resume or None)
         paths.use_session_temp(self.sandbox.root, self.session.id)
         self._resume_id = resume
@@ -130,6 +151,9 @@ class Eirene(App):
         self._suggestion_task = None
         self._suggestion_status = "Waiting for a completed reply"
         self._last_suggestion_exchange = None
+        self._mouse_captured = True
+        self._clipboard_hinted = False
+        self._exit_armed = float("-inf")
 
     # layout
 
@@ -200,22 +224,30 @@ class Eirene(App):
     def tasks(self) -> TaskList:
         return self.query_one(TaskList)
 
+    @property
+    def companion(self) -> Companion:
+        return self.query_one(Companion)
+
     # lifecycle
 
     def on_mount(self) -> None:
+        self._containing = True
+        self._install_error_hooks()
         for theme in THEMES.values():
             self.register_theme(theme)
         selected = str(self.config.get("theme", "default"))
         self.theme = THEMES.get(selected, THEMES["default"]).name
         self.call_after_refresh(self._show_intro)
         self.agent.mode = Mode(self.config.mode)
-        skills_mod.remove_seeded_examples()
+        # Each optional step fails alone: a broken skill or plugin export must
+        # not leave the prompt unfocused or the live transcript unflushed.
         from .core.plugin_install import export_installed_skills
-        export_installed_skills()
-        self.agent.reload_skills()
-        self._restore_provider()
+        self._attempt("startup: remove seeded skills", skills_mod.remove_seeded_examples)
+        self._attempt("startup: export plugin skills", export_installed_skills)
+        self._attempt("startup: load skills", self.agent.reload_skills)
+        self._attempt("startup: restore provider", self._restore_provider)
         self.refresh_mode_line()
-        self.refresh_plan()
+        self._attempt("startup: load plan", self.refresh_plan)
         self._flusher = self.set_interval(FLUSH_INTERVAL, self._flush_live)
         self.name_the_tab()
         self.prompt.focus()
@@ -232,6 +264,141 @@ class Eirene(App):
                 self.say(f"Eirene {release.version} is available (current: {__version__}). Run /update to install it.")
         except (updates.UpdateError, OSError, TimeoutError) as exc:
             self.runtime_logger.debug("update.check_failed", extra={"reason": str(exc)})
+
+    # errors
+
+    def contain_error(self, error: BaseException, where: str) -> bool:
+        """Record an unexpected error; True when the app recovered and keeps running.
+
+        Called by the dispatch guard, for failed background tasks, and as the
+        last-chance handler. False means the caller must let the app exit.
+        """
+        contained = (self.CONTAIN_ERRORS and self._containing
+                     and isinstance(error, Exception) and not guard.escalated(error)
+                     and self._error_budget.spend())
+        report = crash.record(error, where=where, fatal=not contained,
+                              context={"session": self.session.id})
+        if not contained:
+            self._fatal = (error, report)
+            guard.mark_escalated(error)
+            return False
+        try:
+            self._tell_error(error, where, report)
+        except Exception:  # noqa: BLE001 - already recorded; never fail while reporting
+            pass
+        return True
+
+    def _tell_error(self, error: BaseException, where: str, report: Path | None) -> None:
+        message = f"Something went wrong ({crash.summary(error)}). Eirene recovered; your session is intact."
+        if self._debug:
+            message += f" In {where}."
+        if report is not None:
+            message += f" Details: {display_path(report, 90)}"
+        self.say(message, "warn")
+
+    def _handle_exception(self, error: Exception) -> None:
+        """Textual's last-chance handler: timers, workers, callbacks and rendering."""
+        if not guard.escalated(error) and self.contain_error(error, "background"):
+            return
+        if self._fatal is None or self._fatal[0] is not error:
+            self._fatal = (error, crash.record(error, where="unhandled", fatal=True))
+        super()._handle_exception(error)
+
+    def _fatal_error(self) -> None:
+        """Exit after an unrecoverable error, without Textual's local-variable dump.
+
+        Locals of the failing frames can hold API keys and configuration; they
+        stay out of the terminal and its scrollback. The crash report has the rest.
+        """
+        from rich.segment import Segments
+        from rich.traceback import Traceback
+
+        error, report = self._fatal or (sys.exc_info()[1], None)
+        if error is None:
+            super()._fatal_error()
+            return
+        self.bell()
+        traceback = Traceback.from_exception(type(error), error, error.__traceback__,
+                                             show_locals=False, max_frames=20, width=None)
+        notice = Text("\nEirene stopped after an unexpected error.", style="bold")
+        if report is not None:
+            notice.append(f"\nCrash report: {report}", style="")
+        self._exit_renderables.append(Segments(self.console.render(traceback, self.console.options)))
+        self._exit_renderables.append(Segments(self.console.render(notice, self.console.options)))
+        self._close_messages_no_wait()
+
+    @property
+    def crash_report(self) -> Path | None:
+        """The report for the error that ended this run, if one did."""
+        return self._fatal[1] if self._fatal else None
+
+    def _attempt(self, where: str, step: Callable[[], object]) -> None:
+        """Run a step whose failure should be reported rather than end the app."""
+        try:
+            step()
+        except Exception as error:  # noqa: BLE001
+            if not self.contain_error(error, where):
+                raise
+
+    def spawn(self, coroutine: Coroutine[Any, Any, Any], *, name: str,
+              background: bool = True) -> asyncio.Task:
+        """Start a task whose unexpected failure is reported instead of silently lost.
+
+        Background tasks are cancelled at shutdown; turns and commands are
+        tracked by their own attributes instead.
+        """
+        task = asyncio.create_task(coroutine, name=f"eirene:{name}")
+        if background:
+            self.asides.add(task)
+            task.add_done_callback(self.asides.discard)
+        task.add_done_callback(self._task_done)
+        return task
+
+    def _task_done(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is None:
+            return
+        if not self.contain_error(error, f"task {task.get_name()}"):
+            if isinstance(error, Exception):
+                self._handle_exception(error)
+            else:
+                self.exit(return_code=1)
+
+    def _install_error_hooks(self) -> None:
+        """Route asyncio and thread failures to the log rather than the screen."""
+        loop = asyncio.get_running_loop()
+        self._previous_hooks = (loop.get_exception_handler(), threading.excepthook)
+        loop.set_exception_handler(self._loop_exception)
+        threading.excepthook = self._thread_exception
+
+    def _remove_error_hooks(self) -> None:
+        if self._previous_hooks is None:
+            return
+        loop_handler, thread_hook = self._previous_hooks
+        self._previous_hooks = None
+        try:
+            asyncio.get_running_loop().set_exception_handler(loop_handler)
+        except RuntimeError:
+            pass
+        if threading.excepthook == self._thread_exception:
+            threading.excepthook = thread_hook
+
+    def _loop_exception(self, loop: asyncio.AbstractEventLoop, context: dict) -> None:
+        """Library tasks that fail unobserved are logged, not shown: they are not ours to report."""
+        error = context.get("exception")
+        detail = str(context.get("message") or "")
+        if isinstance(error, BaseException):
+            crash.record(error, where=f"asyncio: {detail or 'unobserved task'}")
+        else:
+            self.runtime_logger.warning("asyncio.error", extra={"detail": detail[:500]})
+
+    def _thread_exception(self, args: threading.ExceptHookArgs) -> None:
+        if args.exc_type is SystemExit or args.exc_value is None:
+            return
+        name = args.thread.name if args.thread is not None else "unknown"
+        crash.record(args.exc_value, where=f"thread {name}")
 
     def watch_theme(self, theme_name: str) -> None:
         """Re-colour every section that follows the theme's accents."""
@@ -348,12 +515,8 @@ class Eirene(App):
                         card = await self.push(ChangeBlock(
                             label, str(call.get("preview") or ""),
                             str(call.get("action") or "Update")))
-                    elif call.get("name") in SHELL_TOOLS:
-                        card = await self.push(CommandBlock(call.get("name", ""), label))
                     else:
-                        card = await self.push(ToolBlock(call.get("name", ""), label,
-                            hide_output=call.get("name") == "web_search" and
-                            getattr(self.agent.provider, "profile", None) is not None))
+                        card = await self.push(self._tool_card(call.get("name", ""), label))
                     cards[str(call.get("id", ""))] = card
                     if attachment_id:
                         attachment_cards[attachment_id] = card
@@ -464,7 +627,7 @@ class Eirene(App):
 
     def on_prompt_draft(self, message: Prompt.Draft) -> None:
         """Keep the slash menu in step with the draft."""
-        self.query_one(Companion).wake()
+        self.companion.wake()
         if message.text:
             self.clear_prompt_suggestion()
         # Bold the command name once it is completely written.
@@ -498,7 +661,7 @@ class Eirene(App):
 
     def on_key(self, event: events.Key) -> None:
         """Any printable key types into the input."""
-        self.query_one(Companion).wake()
+        self.companion.wake()
         if event.key != "escape":
             self._idle_escape_at = 0.0
         if self.picker.waiting or self.permission.waiting:
@@ -519,15 +682,25 @@ class Eirene(App):
 
     async def on_prompt_files_dropped(self, message: Prompt.FilesDropped) -> None:
         for path in message.paths:
-            if len([token for token in self.prompt._files if token in self.prompt.text]) >= MAX_DROPPED_FILES:
-                self.say(f"attach up to {MAX_DROPPED_FILES} files per message", "warn")
+            if not self._attach(lambda limit: store_attachment(path, limit)):
                 break
-            try:
-                item = store_attachment(path, int(self.config.get("max_attachment_bytes", 20_000_000)))
-                self.prompt.attach_file(item)
-            except EireneError as exc:
-                self.say(str(exc), "warn")
         self.prompt.focus()
+
+    async def on_prompt_image_pasted(self, message: Prompt.ImagePasted) -> None:
+        image = message.image
+        self._attach(lambda limit: store_attachment_bytes(image.filename, image.data, limit))
+        self.prompt.focus()
+
+    def _attach(self, store: Callable[[int], dict]) -> bool:
+        """Store one attachment and put its token in the prompt; False once the limit is reached."""
+        if len([token for token in self.prompt._files if token in self.prompt.text]) >= MAX_DROPPED_FILES:
+            self.say(f"attach up to {MAX_DROPPED_FILES} files per message", "warn")
+            return False
+        try:
+            self.prompt.attach_file(store(int(self.config.get("max_attachment_bytes", 20_000_000))))
+        except EireneError as exc:
+            self.say(str(exc), "warn")
+        return True
 
     async def on_prompt_sent(self, message: Prompt.Sent) -> None:
         self._idle_escape_at = 0.0
@@ -563,7 +736,8 @@ class Eirene(App):
             self.session.name = name_from(text)
             self.name_the_tab()
         await self.push(UserBlock(text, file_tokens=[item["token"] for item in message.files]))
-        self.turn = asyncio.create_task(self._run_turn(sent_text, files=message.files))
+        self.turn = self.spawn(self._run_turn(sent_text, files=message.files),
+                               name="turn", background=False)
 
     def _start_command(self, text: str) -> None:
         """Run a slash command in its own task."""
@@ -573,7 +747,7 @@ class Eirene(App):
         if self.command and not self.command.done():
             self.say("finish the current command first, or press esc", "warn")
             return
-        self.command = asyncio.create_task(self._run_command(text))
+        self.command = self.spawn(self._run_command(text), name="command", background=False)
 
     async def _run_command(self, text: str) -> None:
         """Run a slash command off the message pump."""
@@ -650,7 +824,7 @@ class Eirene(App):
         rows = [(str(option), str(option), "") for option in options]
         rows.append((tool_registry.CHAT_OPTION, "chat about this",
                      "type an answer instead"))
-        companion = self.query_one(Companion)
+        companion = self.companion
         companion.begin_question()
         try:
             return await self.picker.choose(question, rows)
@@ -677,7 +851,7 @@ class Eirene(App):
         if preview and name not in ("run_command",) + agent_mod.CHANGE_TOOLS:
             if not native_change:
                 await self.push(DiffBlock(title, preview))
-        companion = self.query_one(Companion)
+        companion = self.companion
         companion.begin_question()
         try:
             return await self.permission.ask(
@@ -693,7 +867,7 @@ class Eirene(App):
                         files: list[dict] | None = None) -> None:
         self.clear_prompt_suggestion()
         self.status.start()
-        self.query_one(Companion).start_turn()
+        self.companion.start_turn()
         self.mark_busy(True)
         answer: AnswerBlock | None = None
         reply_text = ""
@@ -707,7 +881,7 @@ class Eirene(App):
                 options["files"] = files
             async for event in self.agent.run(text, record_text=record_text, **options):
                 if isinstance(event, (agent_mod.ToolStarted, agent_mod.ToolPreview,
-                                      agent_mod.ToolFinished)) and event.name in {"poll_process", "read_output"}:
+                                      agent_mod.ToolFinished)) and event.name in HIDDEN_TOOLS:
                     continue
                 if isinstance(event, agent_mod.Answer):
                     if event.text:
@@ -748,7 +922,7 @@ class Eirene(App):
                                     self._change_action(event.label)), live=True)
                 elif isinstance(event, agent_mod.ToolStarted):
                     self.status.start_tool(event.id, event.kind)
-                    self.query_one(Companion).refresh_companion()
+                    self.companion.refresh_companion()
                     self.clear_prompt_suggestion()
                     answer = None
                     if event.attachment_id and event.attachment_id in attachment_cards:
@@ -759,13 +933,8 @@ class Eirene(App):
                         card.output = ""
                         card.result = ""
                         card.flush()
-                    if (event.name not in {"plan_update", "plan_set_status", "plan_clear"}
-                            and event.id not in cards):
-                        block = (CommandBlock(event.name, event.label)
-                                 if event.name in SHELL_TOOLS
-                                 else ToolBlock(event.name, event.label,
-                                     hide_output=event.name == "web_search" and
-                                     getattr(self.agent.provider, "profile", None) is not None))
+                    if event.name not in PLAN_TOOLS and event.id not in cards:
+                        block = self._tool_card(event.name, event.label)
                         cards[event.id] = await self.push(block, live=True)
                         if event.attachment_id:
                             attachment_cards[event.attachment_id] = block
@@ -781,17 +950,12 @@ class Eirene(App):
                     self.status.finish_tool(event.id)
                     if event.reused:
                         continue
-                    if event.name in {"plan_update", "plan_set_status", "plan_clear"}:
+                    if event.name in PLAN_TOOLS:
                         self.refresh_plan()
                         continue
                     card = cards.get(event.id)
                     if card is None:
-                        block = (CommandBlock(event.name, event.label)
-                                 if event.name in SHELL_TOOLS
-                                 else ToolBlock(event.name, event.label,
-                                     hide_output=event.name == "web_search" and
-                                     getattr(self.agent.provider, "profile", None) is not None))
-                        card = await self.push(block)
+                        card = await self.push(self._tool_card(event.name, event.label))
                     card.finish(event.result, event.is_error, card.seconds + event.seconds)
                     card.artifact_id = event.artifact_id
                     card.flush()
@@ -811,7 +975,7 @@ class Eirene(App):
                 elif isinstance(event, agent_mod.TurnDone):
                     self.transcript.settle()
                     self.status.stop(self._turn_note(event))
-                    self.query_one(Companion).finish_turn(
+                    self.companion.finish_turn(
                         event.status == "completed" and questions.wants_an_answer(reply_text))
                     self._announce_done(event, answer)
                     self._name_the_session(record_text or text, answer)
@@ -824,7 +988,7 @@ class Eirene(App):
             try:
                 self.transcript.settle()
                 self.status.stop("stopped")
-                self.query_one(Companion).finish_turn(False)
+                self.companion.finish_turn(False)
                 await self.push(NoticeBlock("stopped", "warn"))
             except NoMatches:
                 pass
@@ -849,16 +1013,15 @@ class Eirene(App):
             return
         self._titled = True
         reply = getattr(answer, "buffer", "") or ""
-        task = asyncio.create_task(self._ask_for_a_title(request, reply))
-        self.asides.add(task)
-        task.add_done_callback(self.asides.discard)
+        self.spawn(self._ask_for_a_title(request, reply), name="session title")
 
     async def _ask_for_a_title(self, request: str, reply: str) -> None:
         try:
             raw = await self.agent.title(request, reply)
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - a missing title is cosmetic
+            self.runtime_logger.warning("session.title_failed", exc_info=True)
             return
         title = clean_title(raw)
         if not title or not self.session.saved:
@@ -946,13 +1109,11 @@ class Eirene(App):
                 self._set_suggestion_status("Ready · Tab or → to accept")
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - suggestions are optional
+                self.runtime_logger.warning("suggestion.failed", exc_info=True)
                 detail = "Request timed out" if isinstance(exc, asyncio.TimeoutError) else "Provider request failed"
                 self._set_suggestion_status(detail + "; switch off/on to retry")
-        task = asyncio.create_task(generate())
-        self._suggestion_task = task
-        self.asides.add(task)
-        task.add_done_callback(self.asides.discard)
+        self._suggestion_task = self.spawn(generate(), name="prompt suggestion")
 
     def _offer_choices(self, answer) -> None:
         """A question in prose still becomes a choice."""
@@ -961,9 +1122,7 @@ class Eirene(App):
         body = getattr(answer, "buffer", "") or ""
         if not body.strip() or not questions.wants_an_answer(body):
             return
-        task = asyncio.create_task(self._choices_for(body))
-        self.asides.add(task)
-        task.add_done_callback(self.asides.discard)
+        self.spawn(self._choices_for(body), name="answer choices")
 
     async def _choices_for(self, body: str) -> None:
         options = questions.options_from(body)
@@ -972,7 +1131,8 @@ class Eirene(App):
                 options = await self.agent.options_for(body)
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - choices are a convenience
+                self.runtime_logger.warning("choices.failed", exc_info=True)
                 options = []
         if len(options) < 2:
             return
@@ -983,7 +1143,7 @@ class Eirene(App):
         if not chosen or chosen == tool_registry.CHAT_OPTION:
             return
         await self.push(UserBlock(chosen))
-        self.turn = asyncio.create_task(self._run_turn(chosen))
+        self.turn = self.spawn(self._run_turn(chosen), name="turn", background=False)
 
     @staticmethod
     def _friendly_failure(detail: str) -> str:
@@ -994,6 +1154,14 @@ class Eirene(App):
             return "I couldn’t reach the model. Your progress is saved; reconnect and continue when it’s available."
         # Configuration and permission failures still need their actionable reason.
         return detail
+
+    def _tool_card(self, name: str, label: str) -> ToolBlock:
+        """The transcript card for one tool call."""
+        if name in SHELL_TOOLS:
+            return CommandBlock(name, label)
+        # Profile-driven providers summarise their own searches in the answer.
+        return ToolBlock(name, label, hide_output=name == "web_search" and
+                         getattr(self.agent.provider, "profile", None) is not None)
 
     def _change_action(self, label: str) -> str:
         """Create or Update, from what is on disk."""
@@ -1091,7 +1259,7 @@ class Eirene(App):
             except NoMatches:
                 text = ""
         if not text:
-            if not getattr(self, "_mouse_captured", True):
+            if not self._mouse_captured:
                 return  # The terminal owns selection and copying in this mode.
             self.say("nothing selected - drag over the text first", "warn")
             return
@@ -1114,7 +1282,7 @@ class Eirene(App):
 
     def _clipboard_hint(self) -> None:
         """Over SSH only the user's terminal can reach their clipboard; say how once."""
-        if getattr(self, "_clipboard_hinted", False):
+        if self._clipboard_hinted:
             return
         self._clipboard_hinted = True
         self.say("copied through your terminal (OSC 52) to the computer you are typing on. "
@@ -1123,16 +1291,34 @@ class Eirene(App):
                  + ".")
 
     def open_url(self, url: str, *, new_tab: bool = True) -> None:
-        """Over SSH a browser here would open on the server: show the whole link to the
-        user's own terminal instead, and offer it to their clipboard too."""
-        if not remote_session():
-            super().open_url(url, new_tab=new_tab)
+        """Open a transcript link on the user's desktop, never blocking or crashing the UI.
+
+        Over SSH a browser here would open on the server: show the whole link to the
+        user's own terminal instead, and offer it to their clipboard too. Links that
+        are not web or mail addresses are copied, never launched (see ui.links).
+        """
+        if remote_session():
+            self.copy_to_clipboard(url)
+            self.show_outside(url)
             return
-        self.copy_to_clipboard(url)
-        self.show_outside(url)
+        if not links.launchable(url):
+            self.copy_to_clipboard(url)
+            self.say("only web and mail links open from Eirene; copied this one to the clipboard "
+                     "instead", "warn")
+            return
+        self.run_worker(self._launch_link(url), group="open-link")
+
+    async def _launch_link(self, url: str) -> None:
+        try:
+            await asyncio.wait_for(asyncio.to_thread(links.open_external, url),
+                                   links.LAUNCH_SECONDS + 5)
+        except (links.LinkError, OSError, TimeoutError) as exc:
+            self.runtime_logger.info("link.open_failed", extra={"reason": str(exc)[:300]})
+            self.copy_to_clipboard(url)
+            self.say(f"couldn't open the link ({exc}); copied it to the clipboard instead", "warn")
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
-        companion = self.query_one(Companion)
+        companion = self.companion
         if event.button == 1 and companion.poke_at(event.screen_x, event.screen_y):
             event.stop()
             event.prevent_default()
@@ -1224,10 +1410,14 @@ class Eirene(App):
         finally:
             splash.finish()
 
+    def _modal_open(self) -> bool:
+        """A popup screen, choice, approval or text request is waiting on the user."""
+        return bool(len(self.screen_stack) > 1 or self.picker.waiting or self.permission.waiting
+                    or self._text_future and not self._text_future.done())
+
     def _shortcut_command(self, command: str) -> None:
         # Leave active choices and secret/text-entry requests undisturbed.
-        if (len(self.screen_stack) > 1 or self.picker.waiting or self.permission.waiting
-                or self._text_future and not self._text_future.done()):
+        if self._modal_open():
             return
         self.slash.close()
         self.prompt.menu_open = False
@@ -1249,8 +1439,7 @@ class Eirene(App):
         self._shortcut_command("/theme")
 
     def action_toggle_suggestions(self) -> None:
-        if (len(self.screen_stack) > 1 or self.picker.waiting or self.permission.waiting
-                or self._text_future and not self._text_future.done()):
+        if self._modal_open():
             return
         self.set_prompt_suggestions(not self.config.get("prompt_suggest", False))
         if not (self.aside.open and self.aside._toggle_callback == self.set_prompt_suggestions):
@@ -1261,9 +1450,6 @@ class Eirene(App):
         """Over SSH default to the terminal's own selection, copying and link clicks."""
         setting = self.config.get("mouse", "auto")
         self._apply_mouse(setting == "eirene" or (setting == "auto" and not remote_session()))
-        if not self._mouse_captured:
-            self.say("Mouse: your terminal's own selection - drag to select, copy with your terminal's "
-                     "shortcut (Ctrl+Shift+C), Ctrl+click links. PageUp/PageDown scroll. F4 switches.")
 
     def _apply_mouse(self, captured: bool) -> None:
         """Turn mouse reporting on (Eirene handles clicks) or off (the terminal does)."""
@@ -1280,7 +1466,7 @@ class Eirene(App):
             driver.flush()
 
     def action_toggle_mouse(self) -> None:
-        self._apply_mouse(not getattr(self, "_mouse_captured", True))
+        self._apply_mouse(not self._mouse_captured)
         self.say("Mouse: Eirene - click blocks and links, drag then Ctrl+Shift+C to copy."
                  if self._mouse_captured else
                  "Mouse: your terminal's own selection - drag to select, copy with your terminal's "
@@ -1315,7 +1501,7 @@ class Eirene(App):
             except (OSError, ValueError):
                 pass
         # Resuming re-enables mouse reporting.
-        self._apply_mouse(getattr(self, "_mouse_captured", True))
+        self._apply_mouse(self._mouse_captured)
 
     def action_jump_to_end(self) -> None:
         try:
@@ -1323,12 +1509,10 @@ class Eirene(App):
         except NoMatches:
             pass
 
-    EXIT_CONFIRM_SECONDS = 3.0
-
     def action_leave(self) -> None:
         """Exit, asking for a second press while work would be cut off."""
         busy = self._running_work()
-        armed = time.monotonic() - getattr(self, "_exit_armed", float("-inf"))
+        armed = time.monotonic() - self._exit_armed
         if busy and armed > self.EXIT_CONFIRM_SECONDS:
             self._exit_armed = time.monotonic()
             verb = "is" if busy in (["the agent"], ["1 command"]) else "are"
@@ -1366,10 +1550,7 @@ class Eirene(App):
             self._aside_task.cancel()
         panel = self.aside
         panel.ask(question)
-        task = asyncio.create_task(self._aside(question))
-        self._aside_task = task
-        self.asides.add(task)
-        task.add_done_callback(self.asides.discard)
+        self._aside_task = self.spawn(self._aside(question), name="btw")
 
     async def _aside(self, question: str) -> None:
         panel = self.aside
@@ -1388,8 +1569,10 @@ class Eirene(App):
                 panel.finish(exc.user_message(), failed=True)
             return
         except Exception as exc:  # noqa: BLE001
+            report = crash.record(exc, where="btw")
             if asyncio.current_task() is self._aside_task:
-                panel.finish(f"btw failed: {exc}", failed=True)
+                detail = f" (details: {display_path(report, 90)})" if report else ""
+                panel.finish(f"btw failed: {crash.summary(exc)}{detail}", failed=True)
             return
         if asyncio.current_task() is self._aside_task:
             panel.finish(panel.answer.strip() or "(no answer)")
@@ -1420,9 +1603,16 @@ class Eirene(App):
         self.session.close()
 
     async def on_unmount(self) -> None:
-        self.shutdown()
-        await processes.stop_all()
-        await self.agent.close()
+        # Teardown steps are independent: a failure in one must not skip the rest,
+        # or managed processes and provider subprocesses outlive the app.
+        self._attempt("shutdown: save session", self.shutdown)
+        for where, step in (("shutdown: stop processes", processes.stop_all),
+                            ("shutdown: close agent", self.agent.close)):
+            try:
+                await step()
+            except Exception as error:  # noqa: BLE001
+                crash.record(error, where=where)
+        self._remove_error_hooks()
 
 
 def invocation() -> str:
@@ -1448,4 +1638,4 @@ def run(sandbox: Path, resume: str = "") -> int:
     if app.session.saved:
         sys.stdout.write(
             f"{art.BANNERS[0]}\n{invocation()} --resume {app.session.id}\n")
-    return 0
+    return app.return_code or 0

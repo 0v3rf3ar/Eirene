@@ -49,13 +49,20 @@ def configure(config) -> logging.Logger:
     logger = logging.getLogger(LOGGER_NAME)
     if _configured == target and logger.handlers:
         return logger
-    for handler in list(logger.handlers):
-        handler.close()
-        logger.removeHandler(handler)
-    paths.ensure_tree()
-    handler = logging.handlers.RotatingFileHandler(
-        target, maxBytes=int(config.get("log_max_bytes", 2_000_000)),
-        backupCount=int(config.get("log_backups", 3)), encoding="utf-8")
+    root = logging.getLogger()
+    for stale in list(logger.handlers):
+        stale.close()
+        logger.removeHandler(stale)
+        root.removeHandler(stale)
+    handler: logging.Handler
+    try:
+        paths.ensure_tree()
+        handler = logging.handlers.RotatingFileHandler(
+            target, maxBytes=_setting(config, "log_max_bytes", 2_000_000),
+            backupCount=_setting(config, "log_backups", 3), encoding="utf-8")
+    except OSError:
+        # A read-only or full disk costs the log, never the session.
+        handler = logging.NullHandler()
     if os.name != "nt":
         try:
             target.chmod(0o600)
@@ -63,7 +70,15 @@ def configure(config) -> logging.Logger:
             pass
     handler.setFormatter(JsonFormatter())
     logger.addHandler(handler)
-    logger.setLevel(str(config.get("log_level", "INFO")).upper())
+    # Libraries log through the root logger. With no handler there, Python prints
+    # their warnings to stderr, which is the terminal Eirene is drawing on.
+    root.addHandler(handler)
+    level = "DEBUG" if os.environ.get("EIRENE_DEBUG") else str(config.get("log_level", "INFO"))
+    try:
+        logger.setLevel(level.upper())
+    except ValueError:
+        # An unknown level in the config file must not stop the app from starting.
+        logger.setLevel(logging.INFO)
     logger.propagate = False
     _configured = target
     logger.info("runtime.started", extra={"python": platform.python_version(),
@@ -73,3 +88,10 @@ def configure(config) -> logging.Logger:
 
 def get() -> logging.Logger:
     return logging.getLogger(LOGGER_NAME)
+
+
+def _setting(config, key: str, default: int) -> int:
+    try:
+        return max(0, int(config.get(key, default)))
+    except (TypeError, ValueError):
+        return default

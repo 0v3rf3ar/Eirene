@@ -48,7 +48,7 @@ class ContextIndicator(Static):
 
 
 class StatusLine(Static):
-    """Spinner, elapsed time and token counts."""
+    """A spinner and a word while the model works."""
 
     DEFAULT_CSS = """
     StatusLine {
@@ -179,19 +179,11 @@ class StatusLine(Static):
             self.update(Text("  • idle · waiting for background commands  esc to stop", style="dim"))
             return
 
-        elapsed = time.monotonic() - self.started
+        # Just the spinner and its word; phase, time and tokens stay out of the way.
         body = Text()
         config = getattr(self.app, "config", None) if self.is_mounted else None
         frame = "*" if config and config.get("reduce_motion", False) else art.spinner_frame(self._tick, self._spinner_style)
         working_style = self._working_style(self.shade_level)
         body.append(f"  {frame} ", style=working_style)
-        body.append(f"{self.verb}… ", style=working_style)
-        if self.phase:
-            body.append(f"{self.phase} ", style="dim")
-        body.append(f"({elapsed:.0f}s", style="dim")
-        if self.output_tokens:
-            body.append(f" {art.icon('dot')} {art.icon('tokens')} "
-                        f"{self.output_tokens} tokens", style="dim")
-        body.append(")", style="dim")
-        body.append("  esc to stop", style="dim")
+        body.append(f"{self.verb}…", style=working_style)
         self.update(body)

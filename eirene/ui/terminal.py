@@ -10,6 +10,7 @@ import shutil
 import subprocess
 
 IS_WINDOWS = os.name == "nt"
+SCREEN_CHUNK = 76
 
 # Clipboard helpers, best first.
 WRITERS: list[tuple[str, list[str]]] = [
@@ -64,8 +65,11 @@ def copy_to_system(text: str) -> str:
     command = clipboard_tool()
     if not command:
         return ""
+    # clip.exe reads UTF-8 as the console code page (mojibake) and keeps a UTF-16
+    # byte-order mark as a character; little-endian UTF-16 without one is exact.
+    data = text.encode("utf-16-le") if command[0] in {"clip.exe", "clip"} else text.encode("utf-8")
     try:
-        process = subprocess.run(command, input=text.encode("utf-8"),
+        process = subprocess.run(command, input=data,
                                  stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL, timeout=5, env=external_environment())
     except (OSError, subprocess.SubprocessError):
@@ -85,5 +89,8 @@ def osc52(text: str, env=None) -> str:
     if env.get("TMUX"):
         return sequence + "\x1bPtmux;" + sequence.replace("\x1b", "\x1b\x1b") + "\x1b\\"
     if env.get("STY"):  # GNU screen
-        return "\x1bP" + sequence + "\x1b\\"
+        # screen drops a DCS string longer than 768 bytes, which is any copy past
+        # ~500 characters; it concatenates consecutive short ones instead.
+        return "".join(f"\x1bP{sequence[start:start + SCREEN_CHUNK]}\x1b\\"
+                       for start in range(0, len(sequence), SCREEN_CHUNK))
     return sequence

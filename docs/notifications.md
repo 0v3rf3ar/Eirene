@@ -23,7 +23,7 @@ your desktop's notification visibility when working with private project data.
 
 | System | Notification utility |
 | --- | --- |
-| Linux | `notify-send` preferred; also `kdialog`, `zenity`, `gdbus`, `dbus-send`, `termux-notification`, or `notify-send.py`. |
+| Linux | `notify-send` preferred; also `kdialog`, `zenity`, `gdbus`, `dbus-send`, or `notify-send.py`. |
 | macOS | `terminal-notifier` when available, otherwise `osascript`. |
 | Windows | `pwsh` or Windows PowerShell. |
 

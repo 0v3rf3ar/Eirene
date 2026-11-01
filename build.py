@@ -108,7 +108,7 @@ def main() -> int:
     parser.add_argument("--skip-tests", action="store_true",
                         help="build without running the tests")
     parser.add_argument("--skip-smoke", action="store_true",
-                        help="skip executable smoke checks (CI runs its tests before building)")
+                        help="skip executable smoke checks")
     parser.add_argument("--no-install", action="store_true",
                         help="use this Python environment without downloading dependencies")
     parser.add_argument("--dist-dir", type=Path, default=DIST,

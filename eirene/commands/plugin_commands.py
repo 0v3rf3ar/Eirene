@@ -1,7 +1,6 @@
 """Resolve plugin commands locally; send task instructions through agent turns."""
 from __future__ import annotations
 
-import asyncio
 import re
 import shlex
 
@@ -78,7 +77,8 @@ def commands(config=None) -> list[Command]:
                                "Command metadata does not grant additional permissions. "
                                "Shell snippets in this document require the normal tool approval policy.")
                 await app.push(UserBlock(request))
-                app.turn = asyncio.create_task(app._run_turn(instruction, record_text=request))
+                app.turn = app.spawn(app._run_turn(instruction, record_text=request),
+                                     name=f"plugin command /{name}", background=False)
             candidates.append(Command(name, summary, f"/{name} {fields.get('argument-hint', '[arguments]')}", invoke, True))
             if path is None and plugin.catalog_shortcut and plugin.catalog_shortcut != plugin.name:
                 candidates.append(Command(f"{plugin.name}:{plugin.catalog_shortcut}", summary,
