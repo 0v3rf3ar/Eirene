@@ -43,7 +43,8 @@ from .tools.sandbox import Sandbox
 from .ui import art, guard, input_guard, links, markup
 from .ui import theme as theme_mod
 from .ui.shortcuts import COPY_KEYS, INERT_COPY_KEYS, SHORTCUTS
-from .ui.terminal import copy_to_system, osc52, remote_session, write_terminal_title
+from .ui.terminal import (cell_mouse_driver, copy_to_system, osc52, remote_session,
+                          write_terminal_title)
 from .ui.theme import THEMES
 from .ui.format import display_path
 from .ui.aside import AsidePanel
@@ -95,6 +96,9 @@ class Eirene(App):
         layers: base overlay notification diff splash;
     }
     """
+
+    def get_driver_class(self):
+        return cell_mouse_driver(super().get_driver_class())
 
     BINDINGS = [
         Binding("ctrl+d", "leave", "exit", priority=True, show=False),

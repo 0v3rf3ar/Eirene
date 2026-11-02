@@ -23,6 +23,30 @@ WRITERS: list[tuple[str, list[str]]] = [
 ]
 
 
+def cell_mouse_driver(driver_class):
+    """The platform driver, with mouse clicks always reported in whole cells.
+
+    Terminals with in-band resize reports (kitty, Ghostty, foot...) make Textual
+    switch to pixel mouse reporting and divide by the window's pixel size. Window
+    padding and display scaling make those pixel units disagree, so clicks land
+    on the wrong row and the banner and companion never see them. Eirene only
+    needs cells, which every terminal reports the same way.
+    """
+    if not hasattr(driver_class, "_query_in_band_window_resize"):
+        return driver_class
+
+    class CellMouseDriver(driver_class):
+        def _query_in_band_window_resize(self) -> None:
+            """Keep mode 2048 off (even if a crashed app left it on); SIGWINCH reports resizes."""
+            self.write("\x1b[?2048l")
+
+        def _enable_mouse_pixels(self) -> None:
+            """Keep SGR cell coordinates (no mode 1016)."""
+
+    CellMouseDriver.__name__ = CellMouseDriver.__qualname__ = driver_class.__name__
+    return CellMouseDriver
+
+
 def clean_title(text: str) -> str:
     """Strip anything the terminal would choke on."""
     safe = "".join(char for char in str(text) if char.isprintable())

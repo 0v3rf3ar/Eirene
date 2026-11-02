@@ -85,13 +85,15 @@ class SlashMenu(Static):
         body = Text()
         start = max(0, min(self.index - WINDOW // 2, len(self.matches) - WINDOW))
         width = max(len(name) for name, _ in self.matches)
-        room = max(self.size.width - 4, 40)
+        room = max(self.content_size.width, 1)
         for position, (name, summary) in enumerate(
                 self.matches[start:start + WINDOW], start):
             selected = position == self.index
             marker = art.icon("arrow") if selected else " "
             row = Text()
-            row.append(f" {marker} /{name:<{width}}", style="bold" if selected else "")
+            # Bold under reverse video is drawn brighter by many terminals, which
+            # would split the highlight into two shades.
+            row.append(f" {marker} /{name:<{width}}")
             row.append(f"  {summary}", style="" if selected else "dim")
             if selected:
                 pad = room - row.cell_len

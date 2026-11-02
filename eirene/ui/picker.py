@@ -148,7 +148,9 @@ class Picker(Static):
             selected = position == self.index
             marker = art.icon("arrow") if selected else " "
             option = Text()
-            option.append(f" {marker} {label}", style="bold" if selected else "")
+            # No bold on the highlighted row: under reverse video many terminals
+            # draw it brighter and the highlight splits into two shades.
+            option.append(f" {marker} {label}")
             if hint:
                 if self.right_hint:
                     tail = Text(str(hint))

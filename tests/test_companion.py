@@ -566,3 +566,20 @@ async def test_unsupported_terminal_hides_command_and_cannot_enable_companion(wo
         assert not app.query_one(Companion).display
     finally:
         await context.__aexit__(None, None, None)
+
+
+def test_driver_reports_mouse_in_cells_on_every_terminal():
+    """Pixel mouse mode mis-scales clicks in kitty, so it must stay off."""
+    from textual.drivers.linux_driver import LinuxDriver
+    from eirene.ui.terminal import cell_mouse_driver
+
+    driver = cell_mouse_driver(LinuxDriver)
+    assert issubclass(driver, LinuxDriver)
+    written = []
+    instance = driver.__new__(driver)
+    instance.write = written.append
+    instance._mouse_pixels = False
+    instance._query_in_band_window_resize()
+    instance._enable_mouse_pixels()
+    assert written == ["\x1b[?2048l"]
+    assert instance._mouse_pixels is False

@@ -96,7 +96,7 @@ class PermissionBar(Static):
         body.append(f"{art.permission_icon(self.tool)} {self.title}\n", style="bold")
         if self.reason:
             body.append(f"  {self.reason}\n", style="dim")
-        room = max(self.size.width - 4, 1)
+        room = max(self.content_size.width, 1)
         for position, (_, label) in enumerate(self.choices):
             selected = position == self.index
             marker = art.icon("arrow") if selected else " "

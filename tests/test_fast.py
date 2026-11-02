@@ -198,6 +198,8 @@ async def test_claude_code_passes_its_own_fast_mode_setting(workdir, monkeypatch
         launched.append(argv)
         raise OSError("not started in tests")
     monkeypatch.setattr(claude_code.asyncio, "create_subprocess_exec", refuse)
+    # CI has no `claude` on PATH; the test is about the arguments, not the lookup.
+    monkeypatch.setattr(ClaudeCode, "_executable", lambda self: "claude")
     provider = ClaudeCode()
     provider.set_context(workdir, "auto")
     provider.fast = True
