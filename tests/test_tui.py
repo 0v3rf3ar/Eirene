@@ -237,7 +237,7 @@ async def test_scrolling_up_shows_centered_navigation(workdir):
             await app.push(NoticeBlock("answer\n" * 5))
         await pilot.pause()
 
-        app.transcript.scroll_to(y=app.transcript.max_scroll_y - 5,
+        app.transcript.scroll_to(y=app.transcript.max_scroll_y - 4,
                                  animate=False)
         await pilot.pause()
         bottom = app.query_one(BackToBottom)
@@ -269,19 +269,21 @@ async def test_prompt_navigation_tracks_earlier_prompts(workdir):
             await app.push(NoticeBlock("response line\n" * 6))
         await pilot.pause()
 
-        app.transcript.scroll_to_widget(prompts[4], top=True, animate=False)
-        await pilot.pause()
         navigator = app.query_one(PromptNavigator)
+        app.transcript.scroll_to(y=prompts[3].virtual_region.y + 2, animate=False)
+        await pilot.pause()
         later_target = navigator.target
-        app.transcript.scroll_to_widget(prompts[2], top=True, animate=False)
+        app.transcript.scroll_to(y=prompts[2].virtual_region.y + 2, animate=False)
         await pilot.pause()
         assert navigator.target is prompts[2]
-        assert later_target is not None
-        assert navigator.target.virtual_region.y < later_target.virtual_region.y
+        assert later_target is prompts[3]
 
         navigator.on_click(type("Click", (), {"stop": lambda self: None})())
         await pilot.pause()
         assert abs(app.transcript.scroll_y - prompts[2].virtual_region.y) <= 1
+        # The real prompt is now visible at the top, so the sticky copy hides.
+        assert not navigator.display
+        assert navigator.target is None
     finally:
         await context.__aexit__(None, None, None)
 
@@ -4430,9 +4432,9 @@ async def test_prompt_navigation_updates_before_deferred_refresh(workdir, monkey
         pending = []
         monkeypatch.setattr(app.transcript, 'call_after_refresh',
                             lambda callback, *args, **kwargs: pending.append(lambda: callback(*args, **kwargs)))
-        app.transcript.scroll_to(y=prompts[2].virtual_region.y, animate=False, immediate=True)
+        app.transcript.scroll_to(y=prompts[2].virtual_region.y + 1, animate=False, immediate=True)
         assert app.query_one(PromptNavigator).target is prompts[2]
-        app.transcript.scroll_to(y=prompts[4].virtual_region.y, animate=False, immediate=True)
+        app.transcript.scroll_to(y=prompts[4].virtual_region.y + 1, animate=False, immediate=True)
         assert app.query_one(PromptNavigator).target is prompts[4]
     finally:
         await context.__aexit__(None, None, None)

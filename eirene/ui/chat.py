@@ -958,10 +958,15 @@ class Transcript(VerticalScroll):
             return
 
         # Child virtual regions use the same coordinate system as scroll_y.
+        # Only pin a prompt once its first line has scrolled out of view;
+        # while the real prompt is visible at the top, a copy would duplicate it.
         prompts = [child for child in self.children
                    if isinstance(child, UserBlock)
                    and child.virtual_region.y <= self.scroll_y]
-        prompt_link.show_prompt(prompts[-1] if prompts else None)
+        owner = prompts[-1] if prompts else None
+        if owner is not None and owner.virtual_region.y >= self.scroll_y:
+            owner = None
+        prompt_link.show_prompt(owner)
 
         width = bottom_link.outer_size.width or len("↓ Jump to bottom (Ctrl + E)") + 2
         x = max((self.screen.size.width - width) // 2, 0)
