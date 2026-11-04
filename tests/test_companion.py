@@ -548,7 +548,8 @@ async def test_idle_moments_play_only_while_left_alone(workdir, monkeypatch):
         companion._tick = 0
         companion.refresh_companion()
         assert companion._drawn == "glint-1.png"
-        clock.now += 0.4
+        # Sample mid-frame: landing exactly on a boundary depends on float rounding.
+        clock.now += 0.5
         companion.refresh_companion()
         assert companion._drawn == "glint-2.png"
         clock.now += 0.4
