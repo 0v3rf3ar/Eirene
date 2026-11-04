@@ -417,6 +417,7 @@ async def run(command: str, cwd: Path, *, timeout: float | None = None,
               pty: bool = False, isolation: str = "none", isolate_network: bool = False,
               read_paths=(), write_paths=(), read_only: bool = False,
               input_text: str | None = None, yield_after: float | None = None,
+              wait_when_new: bool = False,
               shell_name: str = "auto", execution: str = "auto", argv=None, owner="", call_id="", sandbox_root=None, default_timeout=None) -> ShellResult:
     """Run once; presentation handoff never changes process or output ownership."""
     from . import processes
@@ -429,7 +430,7 @@ async def run(command: str, cwd: Path, *, timeout: float | None = None,
     if timeout is None and sample is not None:
         limit = min(MAX_TIMEOUT, max(limit, sample * 3))
     immediate = execution == "background" or (yield_after is not None and
-                (sample > yield_after if sample is not None else not is_safe(command)))
+                (sample > yield_after if sample is not None else not (wait_when_new or is_safe(command))))
     command_id = uuid.uuid4().hex[:10]
     active_item = ActiveCommand(command_id, command, cwd, asyncio.current_task())
     _active[command_id] = active_item

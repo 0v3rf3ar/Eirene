@@ -23,15 +23,20 @@ class Sandbox:
     def __str__(self) -> str:
         return str(self.root)
 
-    def contains(self, path: Path | str) -> bool:
+    def contains(self, path: Path | str, *, write: bool = True) -> bool:
+        """Whether a path is usable; by default for writing (the project only)."""
         try:
-            self.resolve(path)
+            self.resolve(path, write=write)
         except SandboxError:
             return False
         return True
 
-    def resolve(self, path: Path | str) -> Path:
-        """Resolve inside the root or raise."""
+    def readable(self, resolved: Path) -> bool:
+        """True inside a read-only root such as the installed skills folder."""
+        return any(resolved == root or root in resolved.parents for root in paths.readable_roots())
+
+    def resolve(self, path: Path | str, *, write: bool = False) -> Path:
+        """Resolve inside the root or raise. Reads may also use the read-only roots."""
         raw = str(path).strip()
         if not raw:
             raise SandboxError("empty path")
@@ -40,7 +45,7 @@ class Sandbox:
             candidate = self.root / candidate
         resolved = self._resolve_strict(candidate)
         if (resolved != self.root and self.root not in resolved.parents
-                and not self.permitted(resolved)):
+                and not self.permitted(resolved) and (write or not self.readable(resolved))):
             raise SandboxError(f"'{raw}' is outside {self.root}")
         return resolved
 
@@ -86,7 +91,7 @@ class Sandbox:
 
     def check_write_target(self, path: Path | str) -> Path:
         """Resolve and reject links escaping root."""
-        resolved = self.resolve(path)
+        resolved = self.resolve(path, write=True)
         parent = resolved.parent
         if parent.exists() and not parent.is_dir():
             raise SandboxError(f"'{self.relative(parent)}' is not a directory")

@@ -821,8 +821,10 @@ async def test_copy_prompt_selection(workdir, monkeypatch, shortcut):
         await context.__aexit__(None, None, None)
 
 
-async def test_over_ssh_copy_and_links_use_the_users_own_terminal(workdir, monkeypatch):
+@pytest.mark.parametrize("shortcut", ["ctrl+c", "ctrl+shift+c"])
+async def test_over_ssh_copy_and_links_use_the_users_own_terminal(workdir, monkeypatch, shortcut):
     from textual.document._document import Selection
+    from eirene.ui.copy_notice import CopyNotice
 
     monkeypatch.setenv("SSH_CONNECTION", "10.0.0.2 51000 10.0.0.1 22")
     monkeypatch.setattr("eirene.ui.terminal.shutil.which", lambda name: "/usr/bin/" + name)
@@ -835,21 +837,27 @@ async def test_over_ssh_copy_and_links_use_the_users_own_terminal(workdir, monke
         monkeypatch.setattr(app._driver, "write", written.append)
         app.prompt.value = "copy this"
         app.prompt.selection = Selection((0, 0), (0, 4))
-        await pilot.press("ctrl+shift+c")
+        await pilot.press(shortcut)
         await pilot.pause()
         import base64
         assert "\x1b]52;c;" + base64.b64encode(b"copy").decode() in "".join(written)
         notices = " ".join(str(block.content) for block in app.query("NoticeBlock"))
-        assert "xclip" not in notices and "OSC 52" in notices
+        assert "xclip" not in notices
+        notice = app.query_one(CopyNotice)
+        assert notice.display and "copied 4 characters" in notice.message
+        assert "hold Shift" in notice.message
+        monkeypatch.setattr(app, "suspend", lambda: pytest.fail("left the full-screen view"))
         app.open_url("https://example.com/x")
         assert app.clipboard == "https://example.com/x"
+        assert "link copied" in notice.message
     finally:
         await context.__aexit__(None, None, None)
 
 
 @pytest.mark.parametrize("ssh,setting,captured", [
-    (True, "auto", False), (False, "auto", True), (True, "eirene", True), (False, "terminal", False)])
-async def test_mouse_mode_defaults_to_terminal_selection_over_ssh(workdir, monkeypatch, ssh, setting, captured):
+    (True, "auto", True), (False, "auto", True), (True, "eirene", True),
+    (True, "terminal", False), (False, "terminal", False)])
+async def test_mouse_mode_is_eirenes_over_ssh_too(workdir, monkeypatch, ssh, setting, captured):
     if ssh:
         monkeypatch.setenv("SSH_TTY", "/dev/pts/4")
     from eirene.core.config import Config

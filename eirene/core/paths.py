@@ -34,6 +34,23 @@ def skills_dir() -> Path:
     return home() / "skills"
 
 
+def readable_roots() -> list[Path]:
+    """Folders the sandbox may read (never write): installed skills, plugins and their scripts.
+
+    These are files the person installed; the model can already read them through
+    load_skill and load_plugin_resource. Config, credentials, sessions and plugin
+    data stay hidden.
+    """
+    roots = []
+    for folder in (skills_dir(), plugins_dir()):
+        try:
+            if folder.is_dir():
+                roots.append(folder.resolve())
+        except OSError:
+            continue
+    return roots
+
+
 def tasks_file() -> Path:
     return home() / "tasks.json"
 
@@ -66,6 +83,14 @@ def task_locks_dir() -> Path:
     return home() / "task-locks"
 
 
+def task_outputs_dir() -> Path:
+    return home() / "task-outputs"
+
+
+def task_worktrees_dir() -> Path:
+    return home() / "task-worktrees"
+
+
 def ensure_tree() -> None:
     """Create data dirs if missing."""
     root = home()
@@ -83,7 +108,7 @@ def ensure_tree() -> None:
 def temp_root() -> Path:
     """Eirene's private folder in the OS temp directory, e.g. /tmp/eirene-1000."""
     name = f"eirene-{os.getuid()}" if hasattr(os, "getuid") else "eirene"
-    return _private(Path(_SYSTEM_TEMP) / name)
+    return _private_or_sibling(Path(_SYSTEM_TEMP) / name)
 
 
 def temp_dir() -> Path:
@@ -98,7 +123,7 @@ def use_session_temp(workspace: Path, session_id: str) -> Path:
     if len(name) > 64:
         # Deep workspaces would push Windows paths past MAX_PATH; keep the tail readable.
         name = name[-48:].lstrip("-") + "-" + hashlib.sha256(str(workspace).encode()).hexdigest()[:12]
-    folder = _private(temp_root() / name)
+    folder = _private_or_sibling(temp_root() / name)
     _session_temp = _private(folder / session_id)
     os.environ["EIRENE_SYSTEM_TEMP"] = _SYSTEM_TEMP
     for key in ("TMPDIR", "TEMP", "TMP"):
@@ -107,8 +132,24 @@ def use_session_temp(workspace: Path, session_id: str) -> Path:
     return _session_temp
 
 
+def _private_or_sibling(path: Path) -> Path:
+    """A private folder; if an older one is unusable, a fresh sibling instead.
+
+    Before private folders named the user's SID, one made by an elevated Eirene on
+    Windows belonged to Administrators and locks out the same user running normally.
+    """
+    try:
+        return _private(path)
+    except PermissionError:
+        return _private(path.with_name(path.name + "-u"))
+
+
 def _private(path: Path) -> Path:
-    path.mkdir(mode=0o700, exist_ok=True)
+    from .private_dirs import make_private_dir
+    make_private_dir(path)
+    if os.name == "nt":
+        # A folder this token cannot open (see _private_or_sibling) fails here.
+        next(path.iterdir(), None)
     if path.is_symlink() or (hasattr(os, "getuid") and path.stat().st_uid != os.getuid()):
         raise OSError(f"unsafe temporary directory: {path}")
     _tighten(path)

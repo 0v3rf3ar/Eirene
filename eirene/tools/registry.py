@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -359,6 +360,25 @@ def specs(include_exec: bool = True) -> list[dict[str, Any]]:
             for t in TOOLS if include_exec or t.kind != EXEC]
 
 
+# Coarse capability groups used to limit scheduled runs. Anything not named
+# here only reads (files, plans, skills, process output, attachments).
+TOOL_GROUP = {
+    "write_file": "edit", "edit_file": "edit", "browser_screenshot": "web",
+    "run_command": "commands", "start_process": "commands", "stop_process": "commands",
+    "request_full_access": "commands",
+    "web_search": "web", "web_fetch": "web", "http_request": "web",
+    "browser_inspect": "web", "browser_interact": "web",
+    "delegate_tasks": "agents",
+}
+
+
+def group_of(name: str) -> str:
+    """Capability group of a built-in tool; other tools (MCP) belong to "mcp"."""
+    if name in TOOL_GROUP:
+        return TOOL_GROUP[name]
+    return "read" if name in BY_NAME else "mcp"
+
+
 def harmless(name: str, args: dict[str, Any]) -> bool:
     """True when a call cannot change anything."""
     if name == "ask_user":
@@ -482,13 +502,14 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
 
     if name in {"run_command", "start_process"}:
         command = _text(args, "command").strip()
-        cwd = box.resolve(str(args.get("cwd") or "."))
+        cwd = box.resolve(str(args.get("cwd") or "."), write=True)
         if not cwd.is_dir():
             raise ToolError("cwd must be an existing directory")
         options = dict(owner=plan_scope or "", call_id=call_id, sandbox_root=box.root, powershell=bool(args.get("powershell")),
             shell_name=str(args.get("shell") or "auto"), pty=bool(args.get("pty")),
             isolation=isolation, isolate_network=isolate_network and not args.get("network_access", False),
-            read_paths=args.get("read_paths", []), write_paths=args.get("write_paths", []))
+            read_paths=[*args.get("read_paths", []), *skill_mounts(command)],
+            write_paths=args.get("write_paths", []))
         if name == "start_process":
             return await processes.start(command, cwd,
                 auto_stop=float(_number(args.get("auto_stop"), 0) or 0), **options)
@@ -498,6 +519,9 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
         result = await shell.run(command, cwd,
             timeout=_number(args.get("timeout"), None), max_bytes=max_bytes,
             on_output=on_output, input_text=args.get("stdin"), yield_after=1,
+            # A skill's script is usually a quick step in its instructions; give it the
+            # short wait so its result comes back instead of "still running".
+            wait_when_new=bool(skill_mounts(command)),
             execution=execution, read_only=read_only, default_timeout=timeout, **options)
         if result.refused or (not result.ok and not result.process_id):
             raise ToolError(result.summary())
@@ -608,12 +632,12 @@ async def execute(name: str, args: dict[str, Any], box: Sandbox, *,
             max_chars=min(max_bytes, 24000))
     if name == "load_skill":
         wanted = _text(args, "name")
-        skill = next((item for item in skill_ops.discover() if item.name == wanted), None)
+        skill = skill_ops.find(skill_ops.discover(), wanted)
         if skill is None:
             raise ToolError(f"no skill '{wanted}'")
         body = skill_ops.load(skill)
-        return (f"# Skill: {skill.title}\nSkill directory: {skill.path.parent}\n{body}"
-                if body else "skill is empty")
+        return (f"# Skill: {skill.title}\nSkill directory: {skill.path.parent}\n"
+                f"{skill_ops.supporting_files(skill)}{body}" if body else "skill is empty")
     if name == "plan_show":
         return plan_ops.load(box.root, plan_scope).render()
     if name == "plan_update":
@@ -680,6 +704,24 @@ def _number(value: Any, fallback: float | None) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def skill_mounts(command: str) -> list[str]:
+    """Read-only roots a command refers to, so a skill's scripts can run in the sandbox."""
+    from ..core import paths
+    text = command.casefold() if os.name == "nt" else command
+    found = []
+    for root in paths.readable_roots():
+        forms = {str(root), root.as_posix()}
+        try:
+            # What people and models also write for the same folder.
+            relative = root.relative_to(Path.home()).as_posix()
+            forms |= {f"~/{relative}", f"$HOME/{relative}", f"${{HOME}}/{relative}"}
+        except ValueError:
+            pass
+        if any((form.casefold() if os.name == "nt" else form) in text for form in forms):
+            found.append(str(root))
+    return found
 
 
 def touched_path(name: str, args: dict[str, Any]) -> str | None:
@@ -755,7 +797,8 @@ def sandbox_escape(name: str, args: dict[str, Any], box: Sandbox) -> str:
             return "requesting " + "; ".join(requests)
     for key in ("path", "cwd"):
         value = args.get(key)
-        if value and not box.contains(str(value)):
+        reading = key == "path" and kind_of(name) == READ
+        if value and not box.contains(str(value), write=not reading):
             return f"{value} is outside {box.root}"
     if name in ("run_command", "start_process"):
         return _command_escape(str(args.get("command", "")), box)
@@ -765,7 +808,10 @@ def sandbox_escape(name: str, args: dict[str, Any], box: Sandbox) -> str:
 DANGEROUS = ("rm -rf /", "rm -fr /", ":(){", "mkfs", "dd if=", "> /dev/sd",
              "shutdown", "reboot", "format c:", "del /f /s /q c:\\")
 
-MUTATING = {"rm", "rmdir", "mv", "cp", "chmod", "chown", "chgrp", "ln", "dd", "tee",
+HARMLESS_DEVICES = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/stdin",
+                              "/dev/tty"})
+
+MUTATING = {"rm","rmdir", "mv", "cp", "chmod", "chown", "chgrp", "ln", "dd", "tee",
             "truncate", "install", "mkdir", "touch", "shred", "sed", "systemctl",
             "launchctl", "schtasks", "apt", "apt-get", "dnf", "yum", "pacman",
             "brew", "npm", "pip", "pip3", "cargo", "go", "make", "git"}
@@ -790,6 +836,8 @@ def _command_escape(command: str, box: Sandbox) -> str:
         redirect = index > 0 and tokens[index - 1] == ">"
         if not (mutating or redirect):
             continue
+        if stripped in HARMLESS_DEVICES or stripped.startswith("/dev/fd/"):
+            continue  # `2>/dev/null`, `>&2` targets: no file outside is touched
         if not box.contains(stripped):
             return f"touches {stripped}, outside {box.root}"
     return ""

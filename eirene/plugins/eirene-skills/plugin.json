@@ -1,0 +1,8 @@
+{
+  "name": "eirene-skills",
+  "description": "Eirene's bundled skills: documents (Word, PDF, PowerPoint, Excel), design and art, frontend work, web testing, internal writing, MCP servers and skill authoring.",
+  "version": "1.0.0",
+  "author": {"name": "Eirene"},
+  "license": "Apache-2.0",
+  "skills": "skills"
+}

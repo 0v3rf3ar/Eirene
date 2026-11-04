@@ -1,0 +1,10 @@
+{
+  "name": "superpowers",
+  "version": "7.0.2",
+  "description": "Engineering workflows for Eirene: design, plans, test-first work, debugging, review and finishing a branch. Adapted from Jesse Vincent's Superpowers.",
+  "author": {
+    "name": "Eirene"
+  },
+  "license": "MIT",
+  "skills": "skills"
+}

@@ -29,7 +29,7 @@ async def check_connection(app, name: str, definition: dict, *, interactive=True
         app.say('Switch to manual or auto mode before connecting MCP servers.', 'warn')
         return False
     if not definition.get('_plugin_enabled', True):
-        app.say('Enable the owning plugin with /plugins first.', 'warn')
+        app.say('Trust and enable the owning plugin with /plugins first.', 'warn')
         return False
     prepared = {**definition, '_isolation': isolation(app.config),
                 '_isolate_network': isolate_network(app.config) and definition.get('network') is not True}

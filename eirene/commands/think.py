@@ -11,14 +11,14 @@ THINK = {"think", "on", "yes", "true", "1"}
 NO_THINK = {"nothink", "off", "no", "false", "0"}
 
 
-@register("think", "set thinking for the local Ollama model",
+@register("think", "set thinking for the local model",
           "/think [think|nothink]")
 async def run(app, args: str) -> None:
     if not app.config.provider:
         raise CommandError("no provider yet - run /connect first")
     key = providers.resolve_alias(app.config.provider)
-    if key != "ollama-local":
-        raise CommandError("only available with the local Ollama provider")
+    if key not in {"ollama-local", "llamacpp"}:
+        raise CommandError("only available with local Ollama and llama.cpp")
 
     entry = app.config.provider_config(key)
     current = bool(entry.get("think", True))
@@ -35,4 +35,4 @@ async def run(app, args: str) -> None:
     entry["think"] = state
     app._save_config()
     app.agent.use(providers.build(key, app.config), key, app.agent.model)
-    app.say(f"{art.icon('ok')} Ollama mode: {'think' if state else 'nothink'}")
+    app.say(f"{art.icon('ok')} {providers.spec(key).label} mode: {'think' if state else 'nothink'}")

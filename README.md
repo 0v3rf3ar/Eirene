@@ -9,9 +9,9 @@ Fully autonomous AI agent for coding, automation, and deployment.
 [![Release](https://img.shields.io/github/v/release/0v3rf3ar/Eirene?include_prereleases)](https://github.com/0v3rf3ar/Eirene/releases)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
-[![Windows](https://img.shields.io/badge/Windows-0078D4?logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0wIDBoMTF2MTFIMHptMTMgMGgxMXYxMUgxM3pNMCAxM2gxMXYxMUgwem0xMyAwaDExdjExSDEzeiIvPjwvc3ZnPg%3D%3D)](docs/platforms.md#windows)
-[![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)](docs/platforms.md#linux)
-[![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white)](docs/platforms.md#macos)
+[![Windows](https://img.shields.io/badge/Windows-0078D4?logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0wIDBoMTF2MTFIMHptMTMgMGgxMXYxMUgxM3pNMCAxM2gxMXYxMUgwem0xMyAwaDExdjExSDEzeiIvPjwvc3ZnPg%3D%3D)](docs/platforms/platform-support.md#windows)
+[![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)](docs/platforms/platform-support.md#linux)
+[![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white)](docs/platforms/platform-support.md#macos)
 
 </div>
 
@@ -24,7 +24,7 @@ permissions and execution.
 Connect local models, API providers, or installed Codex and Claude Code CLIs.
 Use `/connect chatgpt-plan` for direct ChatGPT subscription sign-in with Eirene's
 own agent loop; account eligibility and plan limits apply.
-For local Ollama models, [dynamic context shifting](docs/context-shifting.md)
+For local Ollama and llama.cpp models, [dynamic context shifting](docs/guides/context-shifting.md)
 adapts context budgets and tool instructions to the model and available hardware,
 summarizing earlier work
 while preserving task decisions and execution evidence. This keeps longer tasks
@@ -71,8 +71,8 @@ The releases are standalone binaries and do not require Python. Open a new
 terminal after installation, run `eirene` from your project directory, and use
 `/connect` to set up your provider.
 
-[Documentation](docs/README.md) · [Installation options](docs/installation.md) ·
+[Documentation](docs/README.md) · [Installation options](docs/getting-started/installation.md) ·
+[First session](docs/getting-started/first-session.md) ·
 [Release downloads](https://github.com/0v3rf3ar/Eirene/releases)
 
-[Configuration reference](docs/config-file.md) · [Data and source layout](docs/data-layout.md) ·
-[Standalone MCP setup](docs/mcp.md#declare-a-standalone-server)
+Found a bug or a crash? See [how to report it](docs/help/reporting-issues.md).

@@ -71,7 +71,12 @@ def freeze(python: Path, dist: Path | None = None, work: Path | None = None,
         if check_binary:
             smoke(built)
         binary = dist / name
-        os.replace(built, binary)
+        # Copy rather than move: the staging folder is owner-only (mkdtemp), and a
+        # moved file keeps that ACL on Windows. From an elevated build the owner is
+        # Administrators, so the same user could not start the exe unelevated.
+        fresh = dist / f".{name}.new"
+        shutil.copy2(built, fresh)
+        os.replace(fresh, binary)
     return binary
 
 

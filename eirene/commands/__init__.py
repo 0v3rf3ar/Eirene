@@ -39,13 +39,13 @@ def lookup(name: str, app=None) -> Command | None:
     _load()
     if name == "plugin":
         name = "plugins"
-    return REGISTRY.get(name) or next((command for command in commands(app) if command.name == name), None)
+    return REGISTRY.get(name) or next((command for command in _plugin_commands(app) if command.name == name), None)
 
 
 def _load() -> None:
     from . import (agents, btw, clear, compact, companion, config, connect, diff, exit as exit_cmd, plan, plugins,
                    help as help_cmd, keybindings, mcp, model, notification, pwd, restart, schedule, sessions, skills,
-                   fast, permissions, recap, review, sandbox, search_api, snow, subagents, prompt_suggest, tasks, theme, think, update, usage)  # noqa: F401
+                   fast, permissions, recap, review, sandbox, search_api, snow, subagents, prompt_suggest, routines, theme, think, update, usage)  # noqa: F401
 
 
 async def dispatch(app, text: str) -> None:
@@ -62,9 +62,14 @@ async def dispatch(app, text: str) -> None:
         name = "plugins"
     if name == "udpate":
         name = "update"
-    available = {**{command.name: command for command in commands(app)}, **REGISTRY}
+    available = {**{command.name: command for command in _plugin_commands(app)}, **REGISTRY}
     command = available.get(name)
     if command is None:
+        from .plugin_commands import inactive_hint
+        hint = inactive_hint(name, app.config) if hasattr(app, "config") else ""
+        if hint:
+            app.say(hint, "warn")
+            return
         close = difflib.get_close_matches(name, [c.name for c in commands(app)], n=1, cutoff=0.5)
         hint = f" - did you mean /{close[0]}?" if close else " - try /help"
         app.say(f"unknown command /{name}{hint}", "warn")
@@ -82,10 +87,16 @@ async def dispatch(app, text: str) -> None:
         app.say(f"/{name} failed: {crash.summary(exc)}{detail}", "fail")
 
 
+def _plugin_commands(app=None) -> list[Command]:
+    """Every runnable plugin command, including namespaced forms hidden from menus."""
+    from .plugin_commands import commands as plugin_commands
+    return plugin_commands(getattr(app, "config", None))
+
+
 def commands(app=None) -> list[Command]:
     _load()
     visible = sorted(name for name, command in REGISTRY.items() if not command.hidden)
-    if app is None or getattr(app.config, "provider", None) != "ollama-local":
+    if app is None or getattr(app.config, "provider", None) not in {"ollama-local", "llamacpp"}:
         visible = [name for name in visible if name != "think"]
     fast = getattr(getattr(app, "agent", None), "fast_supported", None)
     if fast is None or not fast():
@@ -93,5 +104,4 @@ def commands(app=None) -> list[Command]:
         visible = [name for name in visible if name != "fast"]
     if getattr(app, "_companion_renderer", None) is None:
         visible = [name for name in visible if name != "companion"]
-    from .plugin_commands import commands as plugin_commands
-    return [REGISTRY[name] for name in visible] + plugin_commands(getattr(app, "config", None))
+    return [REGISTRY[name] for name in visible] + [c for c in _plugin_commands(app) if not c.hidden]

@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skill review</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --text: #1c1e22; --muted: #6a707a; --line: #e1e4e8;
+    --accent: #2f6fdb; --accent-text: #fff; --good: #1a7f37; --bad: #c62828; --code: #f2f4f7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121417; --panel: #1b1e23; --text: #e6e8eb; --muted: #9aa1ab; --line: #2d3138;
+      --accent: #7aa7ff; --accent-text: #0c1222; --good: #5fd07d; --bad: #ff7b72; --code: #22262c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line);
+           padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  header h1 { font-size: 16px; margin: 0 auto 0 0; }
+  .tabs button, .nav button, .primary {
+    font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--text); cursor: pointer;
+  }
+  .tabs button[aria-selected=true] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  .muted { color: var(--muted); }
+  .nav { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  .nav .count { margin-right: auto; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  pre { background: var(--code); padding: 10px 12px; border-radius: 6px; overflow: auto; max-height: 480px;
+        white-space: pre-wrap; word-break: break-word; margin: 8px 0; font-size: 12.5px; }
+  .file { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
+  .file:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
+  .file-name { font-weight: 600; }
+  .file img { max-width: 100%; border: 1px solid var(--line); border-radius: 4px; margin-top: 6px; }
+  .file iframe, .file object { width: 100%; height: 520px; border: 1px solid var(--line); border-radius: 4px; margin-top: 6px; background: #fff; }
+  details { margin-top: 10px; }
+  summary { cursor: pointer; font-weight: 600; }
+  textarea { width: 100%; min-height: 110px; font: inherit; padding: 10px; border-radius: 6px;
+             border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  .pass { color: var(--good); } .fail { color: var(--bad); }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .status { font-size: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .stat { font-size: 22px; font-weight: 650; }
+  @media (max-width: 640px) { header h1 { width: 100%; } .file iframe, .file object { height: 380px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Skill review</h1>
+  <div class="tabs" role="tablist">
+    <button role="tab" id="tab-outputs" aria-selected="true">Outputs</button>
+    <button role="tab" id="tab-benchmark" aria-selected="false">Benchmark</button>
+  </div>
+  <button class="primary" id="submit">Submit all reviews</button>
+</header>
+<main>
+  <section id="outputs"></section>
+  <section id="benchmark" hidden></section>
+</main>
+<script>
+const DATA = /*__REVIEW_DATA__*/null;
+const STORE = `skill-review:${DATA.skill_name}:${DATA.iteration}`;
+let index = 0;
+let feedback = {};
+for (const review of (DATA.feedback.reviews || [])) feedback[review.run_id] = review.feedback || "";
+try { Object.assign(feedback, JSON.parse(localStorage.getItem(STORE) || "{}")); } catch {}
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+$("title").textContent = `${DATA.skill_name} — ${DATA.iteration}`;
+
+function files(view) {
+  if (!view || !view.files.length) return `<p class="muted">No output files.</p>`;
+  return view.files.map((f) => {
+    let body = "";
+    if (f.kind === "text") body = `<pre>${esc(f.text)}</pre>`;
+    else if (f.kind === "html") body = `<iframe sandbox="" srcdoc="${esc(f.text)}" title="${esc(f.name)}"></iframe>
+      <details><summary>Source</summary><pre>${esc(f.text)}</pre></details>`;
+    else if (f.kind === "image") body = `<img alt="${esc(f.name)}" src="${f.data}">`;
+    else if (f.kind === "pdf") body = `<object data="${f.data}" type="application/pdf" aria-label="${esc(f.name)}"></object>`;
+    else if (f.kind === "binary") body = `<p><a download="${esc(f.name.split("/").pop())}" href="${f.data}">Download</a>
+      <span class="muted">(${esc(f.mime)} — open it in its app to review)</span></p>`;
+    else body = `<p class="muted">Too large to embed: ${esc(f.path)}</p>`;
+    return `<div class="file"><div class="file-name">${esc(f.name)} <span class="muted">${(f.size / 1024).toFixed(1)} KB</span></div>${body}</div>`;
+  }).join("");
+}
+
+function grades(view) {
+  const list = view?.grading?.expectations || [];
+  if (!list.length) return "";
+  const rows = list.map((e) => `<tr><td class="${e.passed ? "pass" : "fail"}">${e.passed ? "pass" : "fail"}</td>
+    <td>${esc(e.text)}</td><td class="muted">${esc(e.evidence)}</td></tr>`).join("");
+  const s = view.grading.summary || {};
+  return `<details><summary>Grades (${s.passed ?? list.filter((e) => e.passed).length}/${s.total ?? list.length})</summary>
+    <table><tr><th>Result</th><th>Assertion</th><th>Evidence</th></tr>${rows}</table></details>`;
+}
+
+function renderCase() {
+  const cases = DATA.cases;
+  if (!cases.length) { $("outputs").innerHTML = `<div class="card">No test cases found in this iteration.</div>`; return; }
+  const c = cases[index];
+  const main = c.configs.with_skill;
+  const baselines = Object.entries(c.configs).filter(([k]) => k !== "with_skill");
+  const timing = main?.timing?.total_duration_seconds !== undefined
+    ? `<span class="muted">${main.timing.total_duration_seconds}s · ${main.timing.total_tokens} tokens</span>` : "";
+  $("outputs").innerHTML = `
+    <div class="nav">
+      <span class="count muted">Test case ${index + 1} of ${cases.length}</span>
+      <button id="prev" ${index === 0 ? "disabled" : ""}>← Previous</button>
+      <button id="next" ${index === cases.length - 1 ? "disabled" : ""}>Next →</button>
+    </div>
+    <div class="card"><h2>${esc(c.eval_name)}</h2><h2 class="muted">Prompt</h2><pre>${esc(c.prompt)}</pre>
+      ${c.expected_output ? `<p class="muted">Expected: ${esc(c.expected_output)}</p>` : ""}</div>
+    <div class="card"><h2>Output with the skill ${timing}</h2>${main ? files(main) : `<p class="muted">No with-skill run.</p>`}
+      ${grades(main)}
+      ${main?.transcript ? `<details><summary>Transcript</summary><pre>${esc(main.transcript)}</pre></details>` : ""}
+      ${baselines.map(([name, view]) => `<details><summary>Baseline output (${esc(name)})</summary>${files(view)}${grades(view)}</details>`).join("")}
+      ${c.previous ? `<details><summary>Previous iteration's output</summary>${files(c.previous)}${grades(c.previous)}</details>` : ""}
+    </div>
+    <div class="card"><h2>Your feedback</h2>
+      <p class="muted">What should change? Leave it empty if this output is fine.</p>
+      <textarea id="feedback" aria-label="Feedback for this test case">${esc(feedback[c.run_id] || "")}</textarea>
+      <div class="status muted" id="saved"></div>
+      ${c.previous_feedback ? `<details open><summary>Your feedback last time</summary><pre>${esc(c.previous_feedback)}</pre></details>` : ""}
+    </div>`;
+  $("prev").onclick = () => go(-1);
+  $("next").onclick = () => go(1);
+  $("feedback").addEventListener("input", (e) => {
+    feedback[c.run_id] = e.target.value;
+    try { localStorage.setItem(STORE, JSON.stringify(feedback)); } catch {}
+    $("saved").textContent = "Saved in this browser";
+  });
+}
+
+function go(step) {
+  index = Math.max(0, Math.min(DATA.cases.length - 1, index + step));
+  renderCase();
+  window.scrollTo(0, 0);
+}
+
+function renderBenchmark() {
+  const b = DATA.benchmark || {};
+  if (!b.run_summary) { $("benchmark").innerHTML = `<div class="card muted">No benchmark.json for this iteration yet. Run aggregate_benchmark.py after grading.</div>`; return; }
+  const configs = Object.keys(b.run_summary).filter((k) => k !== "delta");
+  const pct = (v) => `${Math.round(v * 100)}%`;
+  const cards = configs.map((k) => {
+    const s = b.run_summary[k];
+    return `<div class="card"><h2>${esc(k)}</h2><div class="stat">${pct(s.pass_rate.mean)}</div>
+      <div class="muted">pass rate ± ${pct(s.pass_rate.stddev)}</div>
+      <p>${s.time_seconds.mean.toFixed(1)}s ± ${s.time_seconds.stddev.toFixed(1)} · ${Math.round(s.tokens.mean)} tokens</p></div>`;
+  }).join("");
+  const delta = b.run_summary.delta ? `<div class="card"><h2>Difference</h2><p>Pass rate ${esc(b.run_summary.delta.pass_rate)} ·
+    time ${esc(b.run_summary.delta.time_seconds)}s · tokens ${esc(b.run_summary.delta.tokens)}</p></div>` : "";
+  const rows = (b.runs || []).map((r) => `<tr><td>${esc(r.eval_name)}</td><td>${esc(r.configuration)}</td><td>${r.run_number}</td>
+    <td>${r.result.passed}/${r.result.total}</td><td>${r.result.time_seconds}</td><td>${r.result.tokens}</td></tr>`).join("");
+  const notes = (b.notes || []).length ? `<div class="card"><h2>Observations</h2><ul>${b.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul></div>` : "";
+  $("benchmark").innerHTML = `<div class="grid">${cards}${delta}</div>${notes}
+    <div class="card"><h2>Runs</h2><table><tr><th>Eval</th><th>Configuration</th><th>Run</th><th>Passed</th><th>Seconds</th><th>Tokens</th></tr>${rows}</table></div>`;
+}
+
+function tab(name) {
+  for (const t of ["outputs", "benchmark"]) {
+    $(t).hidden = t !== name;
+    $(`tab-${t}`).setAttribute("aria-selected", String(t === name));
+  }
+}
+$("tab-outputs").onclick = () => tab("outputs");
+$("tab-benchmark").onclick = () => tab("benchmark");
+
+$("submit").onclick = async () => {
+  const payload = { reviews: DATA.cases.map((c) => ({ run_id: c.run_id, feedback: feedback[c.run_id] || "",
+    timestamp: new Date().toISOString() })), status: "complete" };
+  if (DATA.mode === "server") {
+    const response = await fetch("/feedback", { method: "POST", headers: { "Content-Type": "application/json" },
+                                               body: JSON.stringify(payload) });
+    $("submit").textContent = response.ok ? "Saved ✓ — tell the agent you are done" : "Could not save";
+  } else {
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+    link.download = "feedback.json";
+    link.click();
+    $("submit").textContent = "Downloaded feedback.json";
+  }
+};
+
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "TEXTAREA") return;
+  if (e.key === "ArrowLeft") go(-1);
+  if (e.key === "ArrowRight") go(1);
+});
+renderCase();
+renderBenchmark();
+</script>
+</body>
+</html>

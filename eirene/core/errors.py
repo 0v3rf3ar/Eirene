@@ -80,3 +80,21 @@ class Cancelled(EireneError):
 
     def __init__(self, message: str = "cancelled"):
         super().__init__(message)
+
+
+def error_kind(exc: BaseException) -> str:
+    """Coarse failure class for scripts: config, auth, network, provider, tool or failed."""
+    # Retries rewrap the last provider failure with advice; classify the original.
+    while type(exc) is ProviderError and isinstance(exc.__cause__, ProviderError):
+        exc = exc.__cause__
+    if isinstance(exc, AuthError):
+        return "auth"
+    if isinstance(exc, (ModelNotFound, ConfigError)):
+        return "config"
+    if isinstance(exc, ProviderError):
+        if exc.retryable or isinstance(exc, ConnectionFailed) or (exc.status or 0) >= 500:
+            return "network"
+        return "provider"
+    if isinstance(exc, (SandboxError, ToolError)):
+        return "tool"
+    return "failed"

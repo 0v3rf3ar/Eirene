@@ -27,6 +27,7 @@ def bundle(tmp_path, name="feature-dev"):
     return root
 
 
+@pytest.mark.usefixtures("trusted_plugins")
 async def test_resources_are_bounded_and_cannot_escape_or_load_disabled_plugins(tmp_path, config):
     install(str(bundle(tmp_path)))
     assert "Rule two" in await read_resource("feature-dev", "references/rules.md", config, offset=1, limit=1)
@@ -47,6 +48,7 @@ async def test_resources_are_bounded_and_cannot_escape_or_load_disabled_plugins(
         await read_resource("feature-dev", "references/rules.md", config)
 
 
+@pytest.mark.usefixtures("trusted_plugins")
 async def test_resource_tool_can_read_installed_absolute_path_without_host_access(tmp_path, config, box):
     from eirene.tools import registry
     install(str(bundle(tmp_path)))
@@ -73,6 +75,7 @@ def test_local_profiles_retain_plugin_instructions_and_tools(tier):
     assert profile.tools(specs) == specs
 
 
+@pytest.mark.usefixtures("trusted_plugins")
 async def test_mcp_entry_command_checks_enablement_and_provider_locally(tmp_path, config):
     root = tmp_path / "playwright"
     root.mkdir()
@@ -88,10 +91,11 @@ async def test_mcp_entry_command_checks_enablement_and_provider_locally(tmp_path
         say=lambda *a: messages.append(a), push=push, _run_turn=turn,
         spawn=lambda coroutine, **kwargs: asyncio.ensure_future(coroutine))
     assert lookup("playwright", app)
+    config.set("mcp_enabled", {"playwright__playwright": False})
     await dispatch(app, "/playwright https://example.com")
     assert "/mcp" in messages[-1][0]
     assert not requests
-    config.set("mcp_enabled", {"playwright__playwright": True})
+    config.set("mcp_enabled", {})
     app.agent.provider = SimpleNamespace(supports_tools=False, owns_context=False)
     await dispatch(app, "/playwright https://example.com")
     assert "tool-capable" in messages[-1][0]
@@ -110,6 +114,7 @@ async def test_doctor_reports_missing_dependencies_without_starting_processes(tm
     assert "bash: missing" in messages[0] and "git: missing" in messages[0]
 
 
+@pytest.mark.usefixtures("trusted_plugins")
 async def test_specialists_use_fresh_contexts_same_provider_and_model(tmp_path, config, box, monkeypatch):
     install(str(bundle(tmp_path)))
     config.set("mode", "auto")
@@ -241,6 +246,7 @@ def test_subagent_line_shows_only_the_count():
     assert "dim" in str(describe_subagents({"a": done}).style)
 
 
+@pytest.mark.usefixtures("trusted_plugins")
 async def test_agent_list_respects_activation_without_changing_mode(tmp_path, config):
     from eirene.core.modes import Mode
     install(str(bundle(tmp_path)))

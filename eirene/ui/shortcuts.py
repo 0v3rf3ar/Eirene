@@ -2,16 +2,15 @@
 
 import sys
 
-# Copy follows the platform's own terminal shortcut; the others stay inert so
-# Textual's built-in ctrl+c / super+c copy cannot fire behind it. Terminals
-# without the kitty keyboard protocol (VTE, xterm) send ctrl+shift+c as a plain
-# ctrl+c, so on Linux both spellings mean copy.
-if sys.platform == "win32":
-    COPY_KEYS, COPY_LABEL = ("ctrl+c",), "ctrl + c"
-elif sys.platform == "darwin":
-    COPY_KEYS, COPY_LABEL = ("super+c",), "cmd + c"
+# Ctrl+C and Ctrl+Shift+C both copy everywhere (plus Cmd+C on macOS), so the
+# same keys work locally and over SSH whatever the user's own computer is.
+# Terminals without the kitty keyboard protocol (VTE, xterm) send ctrl+shift+c
+# as a plain ctrl+c anyway. The rest stay inert so Textual's built-in copy
+# cannot fire behind them.
+if sys.platform == "darwin":
+    COPY_KEYS, COPY_LABEL = ("super+c", "ctrl+c", "ctrl+shift+c"), "cmd + c / ctrl + c"
 else:
-    COPY_KEYS, COPY_LABEL = ("ctrl+shift+c", "ctrl+c"), "ctrl + shift + c"
+    COPY_KEYS, COPY_LABEL = ("ctrl+c", "ctrl+shift+c"), "ctrl + c / ctrl + shift + c"
 INERT_COPY_KEYS = tuple(key for key in ("ctrl+c", "super+c") if key not in COPY_KEYS)
 
 SHORTCUTS = (

@@ -197,7 +197,8 @@ async def download(release: Release, *, client: httpx.AsyncClient | None = None,
             async with asyncio.timeout(600):
                 return await download(release, client=owned, progress=progress)
     directory = paths.home() / "updates"
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    from .private_dirs import make_private_dir
+    make_private_dir(directory, parents=True)
     try:
         with tempfile.TemporaryDirectory(prefix="download-", dir=directory) as temporary:
             root = Path(temporary)

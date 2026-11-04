@@ -10,8 +10,8 @@ from ..tools.sandbox import Sandbox
 
 async def read_resource(name, relative, config, *, offset=0, limit=100, max_chars=12000):
     plugin = next((p for p in plugins.discover() if p.name == name), None)
-    if plugin is None or not config.plugin_enabled(name):
-        raise ToolError(f"plugin '{name}' is disabled or unavailable")
+    if plugin is None or not config.plugin_active(name):
+        raise ToolError(f"plugin '{name}' is untrusted, disabled or unavailable")
     try:
         path = inside(plugin.path, relative)
     except ValueError as exc:
@@ -26,7 +26,7 @@ def agent_definitions(config):
     from .skills import split_front_matter
     result = {}
     for plugin in plugins.discover():
-        if not config.plugin_enabled(plugin.name):
+        if not config.plugin_active(plugin.name):
             continue
         for path in plugin.agents:
             fields, body = split_front_matter(path.read_text(encoding="utf-8"))
@@ -36,7 +36,7 @@ def agent_definitions(config):
 
 
 def guidance(config, *, native=False, delegation=True):
-    if not any(config.plugin_enabled(p.name) for p in plugins.discover()):
+    if not any(config.plugin_active(p.name) for p in plugins.discover()):
         return ""
     mapping = (
         "Use this CLI's own tools for reads, edits, shell commands, web fetches, plans, "

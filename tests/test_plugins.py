@@ -55,6 +55,7 @@ def test_disabled_plugin_does_not_contribute_hooks_or_mcp():
     assert plugins.merged_mcp_servers(config) == {}
 
 
+@pytest.mark.usefixtures("trusted_plugins")
 async def test_hooks_run_with_tool_context(workdir, box):
     make_plugin()
     config = Config.load()

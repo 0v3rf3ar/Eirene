@@ -7,6 +7,18 @@ from eirene.core.config import Config
 from eirene.core.plugin_install import github_source, install
 
 
+def fake_git(clone, stderr=()):
+    """Stands in for subprocess.Popen: ``clone`` receives the argv, as the real git would."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    def popen(argv, **kwargs):
+        result = clone(argv, **kwargs)
+        return SimpleNamespace(stderr=MagicMock(__iter__=lambda self: iter(stderr)),
+                               wait=lambda: result.returncode, kill=lambda: None)
+    return popen
+
+
 def repository(tmp_path):
     root = tmp_path / "ponytail"
     skill = root / "skills" / "ponytail"
@@ -98,6 +110,7 @@ def test_existing_installs_move_their_skills_into_a_folder(tmp_path):
 def test_plugin_toggle_disables_its_skills(tmp_path):
     install(str(repository(tmp_path)))
     config = Config.load()
+    config.set("plugin_trust", {"ponytail": True})
     config.set_plugin("ponytail", False)
     assert not skills.apply_config(skills.discover(), config)[0].enabled
     config.set_plugin("ponytail", True)
@@ -134,7 +147,7 @@ def test_github_download_uses_fixed_https_url(tmp_path, monkeypatch):
         shutil.copytree(root, argv[-1])
         return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr("eirene.core.plugin_install.subprocess.run", clone)
+    monkeypatch.setattr("eirene.core.plugin_install.subprocess.Popen", fake_git(clone))
     assert install("https://github.com/DietrichGebert/ponytail.git") == ("ponytail", 1)
 
 
@@ -178,9 +191,9 @@ def test_rejects_unsafe_subdirectory_sources(source):
 
 
 @pytest.mark.parametrize("source", [
-    "anthropics/claude-plugins-official/plugins/frontend-design",
-    "https://github.com/anthropics/claude-plugins-official/tree/main/plugins/frontend-design",
-    "frontend-design",
+    "anthropics/claude-plugins-official/plugins/feature-dev",
+    "https://github.com/anthropics/claude-plugins-official/tree/main/plugins/feature-dev",
+    "feature-dev",
 ])
 def test_install_selected_bundle_preserves_only_its_resources(tmp_path, monkeypatch, source):
     import json
@@ -188,13 +201,13 @@ def test_install_selected_bundle_preserves_only_its_resources(tmp_path, monkeypa
     from types import SimpleNamespace
 
     root = tmp_path / "marketplace"
-    selected = root / "plugins/frontend-design"
-    skill = selected / "skills/frontend-design"
+    selected = root / "plugins/feature-dev"
+    skill = selected / "skills/feature-dev"
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text("# Design\nDesign carefully.")
     (skill / "rules.txt").write_text("supporting rules")
     (selected / ".claude-plugin").mkdir()
-    (selected / ".claude-plugin/plugin.json").write_text(json.dumps({"name": "frontend-design"}))
+    (selected / ".claude-plugin/plugin.json").write_text(json.dumps({"name": "feature-dev"}))
     (selected / "LICENSE").write_text("license")
     (root / "unrelated.txt").write_text("other plugins")
 
@@ -205,14 +218,14 @@ def test_install_selected_bundle_preserves_only_its_resources(tmp_path, monkeypa
         shutil.copytree(root, argv[-1])
         return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr("eirene.core.plugin_install.subprocess.run", clone)
-    assert install(source) == ("frontend-design", 1)
+    monkeypatch.setattr("eirene.core.plugin_install.subprocess.Popen", fake_git(clone))
+    assert install(source) == ("feature-dev", 1)
     plugin = plugins.discover()[0]
-    assert plugin.name == "frontend-design"
-    assert (plugin.path / "skills/frontend-design/rules.txt").read_text() == "supporting rules"
+    assert plugin.name == "feature-dev"
+    assert (plugin.path / "skills/feature-dev/rules.txt").read_text() == "supporting rules"
     assert (plugin.path / "LICENSE").exists()
     assert not (plugin.path / "unrelated.txt").exists()
-    assert skills.discover()[0].name == "frontend-design:frontend-design"
+    assert skills.discover()[0].name == "feature-dev:feature-dev"
 
 
 @pytest.mark.parametrize("symlink", [False, True])
@@ -231,7 +244,7 @@ def test_missing_or_symlink_bundle_does_not_install(tmp_path, monkeypatch, symli
     def clone(argv, **kwargs):
         shutil.copytree(root, argv[-1], symlinks=True)
         return SimpleNamespace(returncode=0)
-    monkeypatch.setattr("eirene.core.plugin_install.subprocess.run", clone)
+    monkeypatch.setattr("eirene.core.plugin_install.subprocess.Popen", fake_git(clone))
     with pytest.raises(ValueError, match="symlinks|not found"):
         install("owner/repo/plugins")
     assert plugins.discover() == []
@@ -246,3 +259,58 @@ async def test_browse_lists_catalog_shortcuts():
     for name, source, _ in BUNDLES:
         assert f"/plugins install {name}" in messages[0]
         assert source_for(name) == source
+
+
+def test_clone_reports_progress_forward_and_keeps_only_real_errors(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from eirene.core.plugin_install import clone
+    lines = ["Cloning into 'x'...\n", "remote: Counting objects: 100% (5/5), done.\n",
+             "Receiving objects:  50% (3/5)\n", "Receiving objects: 100% (5/5), 1 MiB | 2 MiB/s\n",
+             "Resolving deltas: 100% (1/1)\n"]
+    seen = []
+    monkeypatch.setattr("eirene.core.plugin_install.subprocess.Popen",
+                        fake_git(lambda argv, **kw: SimpleNamespace(returncode=0), lines))
+    clone("https://github.com/a/b.git", tmp_path / "x", progress=lambda stage, value: seen.append((stage, value)))
+    assert [stage for stage, _ in seen] == ["Counting objects", "Receiving objects", "Receiving objects", "Resolving deltas"]
+    values = [value for _, value in seen]
+    assert values == sorted(values) and 0 < values[0] and values[-1] <= 1
+
+    failure = ["Cloning into 'x'...\n", "Receiving objects:  1%\n", "fatal: early EOF\n"]
+    monkeypatch.setattr("eirene.core.plugin_install.subprocess.Popen",
+                        fake_git(lambda argv, **kw: SimpleNamespace(returncode=128), failure))
+    with pytest.raises(ValueError) as error:
+        clone("https://github.com/a/b.git", tmp_path / "y")
+    assert str(error.value) == "could not download repository: fatal: early EOF"
+
+
+def test_clone_stops_a_stalled_download(tmp_path, monkeypatch):
+    # A real process, so the watchdog has to end a stream that never closes by itself.
+    import sys
+    real = __import__("subprocess").Popen
+    monkeypatch.setattr("eirene.core.plugin_install.GIT_TIMEOUT", 0.1)
+    monkeypatch.setattr("eirene.core.plugin_install.subprocess.Popen", lambda argv, **kw: real(
+        [sys.executable, "-c", "import time; time.sleep(30)"], **{**kw, "env": None}))
+    from eirene.core.plugin_install import clone
+    with pytest.raises(ValueError, match="timed out"):
+        clone("https://github.com/a/b.git", tmp_path / "x")
+
+
+@pytest.mark.parametrize("message", [
+    "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+    "remote: Repository not found.\nfatal: repository 'https://github.com/a/b.git/' not found"])
+def test_missing_or_private_repository_gets_a_plain_error(tmp_path, monkeypatch, message):
+    from types import SimpleNamespace
+    from eirene.core.plugin_install import clone
+    monkeypatch.setattr("eirene.core.plugin_install.subprocess.Popen", fake_git(
+        lambda argv, **kw: SimpleNamespace(returncode=128), [line + "\n" for line in message.split("\n")]))
+    with pytest.raises(ValueError, match="repository not found, or it is private: https://github.com/a/b.git"):
+        clone("https://github.com/a/b.git", tmp_path / "x")
+
+
+def test_other_download_errors_keep_their_own_message(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from eirene.core.plugin_install import clone
+    monkeypatch.setattr("eirene.core.plugin_install.subprocess.Popen", fake_git(
+        lambda argv, **kw: SimpleNamespace(returncode=128), ["fatal: unable to access: Could not resolve host\n"]))
+    with pytest.raises(ValueError, match="could not download repository: fatal: unable to access"):
+        clone("https://github.com/a/b.git", tmp_path / "x")

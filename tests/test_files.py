@@ -487,3 +487,14 @@ async def test_creation_preview_rejects_new_file(box, workdir):
     with pytest.raises(ToolError, match="changed since the preview"):
         await registry.execute("write_file", args, box, expected_file=version)
     assert (workdir / "a.txt").read_text() == "concurrent"
+
+
+def test_null_and_stream_redirects_are_not_an_escape(box):
+    from eirene.tools.registry import sandbox_escape
+    for command in ("git log --oneline 2>/dev/null", "cat notes.txt > /dev/null",
+                    "git status 2> /dev/stderr", "echo hi >/dev/fd/2"):
+        assert sandbox_escape("run_command", {"command": command}, box) == "", command
+    assert "touches /etc/passwd" in sandbox_escape(
+        "run_command", {"command": "git show > /etc/passwd"}, box)
+    assert "touches /dev/sda1" in sandbox_escape(
+        "run_command", {"command": "cp x /dev/sda1"}, box)

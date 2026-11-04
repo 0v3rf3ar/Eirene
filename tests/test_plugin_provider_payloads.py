@@ -26,6 +26,7 @@ def request_json(request):
 
 @pytest.mark.parametrize("key", [key for key, spec in registry.SPECS.items()
     if spec.protocol not in {"codex-app-server", "claude-code-cli"}])
+@pytest.mark.usefixtures("trusted_plugins")
 async def test_plugin_command_reaches_each_api_provider(key, config, box, tmp_path, monkeypatch):
     root = tmp_path / "workflow"
     (root / "commands").mkdir(parents=True)

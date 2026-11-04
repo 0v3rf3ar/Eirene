@@ -5,13 +5,22 @@ from __future__ import annotations
 from rich.text import Text
 
 from ..core import paths
+from ..core.errors import CommandError
 from ..ui import art
 from ..ui.chat import Block
 from . import register
 
 
-@register("skills", "enable or disable the markdown skills, alone or by folder")
+@register("skills", "enable or disable skills; add <name@marketplace, owner/repo[/path], or local directory>")
 async def run(app, args: str) -> None:
+    if args.strip():
+        action, _, source = args.strip().partition(" ")
+        if action != "add" or not source.strip():
+            raise CommandError("usage: /skills add <name@marketplace, owner/repo[/path], or local directory>")
+        # A skill source is a small bundle: same safety checks, same skills/<name>/ folder.
+        from .plugins import run as plugins_run
+        await plugins_run(app, "install " + source.strip())
+        return
     found = app.agent.reload_skills()
     if not found:
         body = Text()
@@ -81,7 +90,9 @@ def _skill_row(skill) -> tuple:
 def _group_detail(app, group: str) -> str:
     from ..core import plugins
     folder = paths.skills_dir() / group
-    if any(p.name == group for p in plugins.discover()) and not app.config.plugin_enabled(group):
+    if any(p.name == group for p in plugins.discover()) and not app.config.plugin_active(group):
+        if not app.config.plugin_trusted(group):
+            return f"{folder} · plugin not trusted; run /plugins trust {group}"
         return f"{folder} · plugin disabled; enable it with /plugins first"
     return str(folder)
 

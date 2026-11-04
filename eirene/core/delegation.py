@@ -88,6 +88,8 @@ async def run_tasks(parent, raw, on_output=None):
                 tools=0, started=time.time(), seconds=0.0)
             child = Agent(session, config, Sandbox(parent.sandbox.root))
             child._delegation_depth = parent._delegation_depth + 1
+            child.tool_groups = parent.tool_groups
+            child.mcp_servers, child.skill_names = parent.mcp_servers, parent.skill_names
             # "Don't ask again" answers hold for the whole session, subagents included.
             child.always = parent.always
             child.approve = approve if parent.approve else None

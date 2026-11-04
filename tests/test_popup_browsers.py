@@ -106,7 +106,7 @@ async def test_plugin_catalog_inline_install_and_toggle(workdir, tmp_path, monke
     (bundle/'plugin.json').write_text('{"name":"ponytail","description":"Focused work"}')
     (bundle/'skills'/'focused'/'SKILL.md').write_text('---\nname: focused\ndescription: Focused work\n---\nStay focused.')
     sources=[]
-    def install(source):
+    def install(source, **kwargs):
         sources.append(source)
         return local_install(str(bundle))
     monkeypatch.setattr(command,'install',install)
@@ -115,6 +115,11 @@ async def test_plugin_catalog_inline_install_and_toggle(workdir, tmp_path, monke
         await pilot.pause()
         screen=app.screen
         task=asyncio.create_task(dispatch(app,'/plugins'))
+        async with asyncio.timeout(5):
+            while not app.picker.waiting:
+                await asyncio.sleep(0.01)
+        await pilot.pause()
+        await pilot.press('tab')  # Installed -> Marketplace.
         await wait_for_choice(app, pilot, 'install:ponytail')
         assert app.screen is screen  # Inline like /connect, not a floating popup.
         app.picker.index=next(i for i,row in enumerate(app.picker.options) if row[0]=='install:ponytail')
@@ -122,12 +127,13 @@ async def test_plugin_catalog_inline_install_and_toggle(workdir, tmp_path, monke
         await wait_for_choice(app, pilot, 'installed:ponytail')
         assert sources == ['ponytail']
         row=next(row for row in app.picker.options if row[0]=='installed:ponytail')
-        assert row[2]=='enabled' and row[3]=='Focused work'
+        assert row[2]=='eirene · installed' and row[3]=='Focused work'
+        assert app.picker.tab==1  # Installing stays on the Marketplace tab.
         assert not app.config.get('plugin_trust',{}).get('ponytail')
         app.picker.index=next(i for i,row in enumerate(app.picker.options) if row[0]=='installed:ponytail')
         await pilot.press('enter')
         await wait_for_choice(app, pilot, 'toggle')
-        await pilot.press('enter')  # Disable the installed plugin.
+        await pilot.press('down', 'enter')  # Disable the installed plugin; trust comes first.
         await wait_for_choice(app, pilot, 'installed:ponytail')
         assert not app.config.plugin_enabled('ponytail')
         await pilot.press('escape')

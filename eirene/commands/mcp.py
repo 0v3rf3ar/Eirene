@@ -31,7 +31,7 @@ async def run(app, args: str) -> None:
         enabled = dict(app.config.get('mcp_enabled', {}))
         options = []
         for name, definition in available.items():
-            active = enabled.get(name) is True and definition['_plugin_enabled']
+            active = plugins.mcp_on(name, definition, enabled)
             owner = definition['_plugin']
             label = name.replace(owner + '__', owner + ' / ', 1) if owner else name
             details = []
@@ -48,7 +48,7 @@ async def run(app, args: str) -> None:
             if definition.get('eirene_provider') == 'omniroute':
                 details.append('uses your saved OmniRoute URL/key')
             if not definition['_plugin_enabled']:
-                details.append('plugin disabled')
+                details.append('plugin untrusted or disabled')
             state = 'on' if active else 'off'
             options.append((name, f'{label} ({state})', '', ' · '.join(details)))
         options.append((':add', 'Add MCP server…', '', 'paste MCP JSON or import a JSON file'))
@@ -79,9 +79,9 @@ async def run(app, args: str) -> None:
         selected = chosen
         definition = available[chosen]
         if not definition['_plugin_enabled']:
-            app.say('enable this plugin with /plugins before enabling its MCP server', 'warn')
+            app.say('trust and enable this plugin with /plugins before using its MCP server', 'warn')
             continue
-        active = enabled.get(chosen) is not True
+        active = not plugins.mcp_on(chosen, definition, enabled)
         enabled[chosen] = active
         app.config.set('mcp_enabled', enabled)
         app._save_config()

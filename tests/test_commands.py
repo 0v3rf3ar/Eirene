@@ -16,9 +16,9 @@ from eirene.providers import base, registry
 from eirene.providers.base import Done, TextDelta
 from eirene.ui.chat import Block, NoticeBlock
 
-EXPECTED = {"mcp", "help", "connect", "model", "schedule", "tasks", "exit", "usage", "plan", "plugins", "sessions",
+EXPECTED = {"mcp", "help", "connect", "model", "schedule", "routines", "exit", "usage", "plan", "plugins", "sessions",
             "skills", "compact", "agents", "btw", "clear", "notification", "theme",
-            "review", "sandbox", "permissions", "prompt-suggest", "keybindings", "search-api", "update", "subagents",
+            "review", "security-review", "sandbox", "permissions", "prompt-suggest", "keybindings", "search-api", "update", "subagents",
             "config", "diff", "pwd", "restart", "recap"}
 
 
@@ -134,7 +134,8 @@ async def test_help_lists_every_command(workdir):
         assert "esc" in body
         assert "ctrl + d" in body
         assert "ctrl + ." not in body
-        assert "ctrl + c" not in body
+        from eirene.ui.shortcuts import COPY_LABEL
+        assert COPY_LABEL in body and "ctrl + c" in COPY_LABEL
     finally:
         await context.__aexit__(None, None, None)
 
@@ -669,17 +670,17 @@ async def test_connect_validates_a_custom_base_url(workdir):
         await context.__aexit__(None, None, None)
 
 
-async def test_tasks_when_there_are_none(workdir):
+async def test_routines_when_there_are_none(workdir):
     app, pilot, context = await start(workdir)
     try:
-        await dispatch(app, "/tasks")
+        await dispatch(app, "/routines")
         await settle(pilot)
-        assert any("no scheduled tasks" in text for text in texts(app))
+        assert any("no routines yet" in text for text in texts(app))
     finally:
         await context.__aexit__(None, None, None)
 
 
-async def test_tasks_lists_what_is_saved(workdir):
+async def test_routines_lists_what_is_saved(workdir):
     from eirene.scheduling.base import Schedule, Task, save_tasks
     save_tasks([Task(id="t1", name="nightly", prompt="build it",
                      cwd=str(workdir), schedule=Schedule("hourly"))])
@@ -690,10 +691,185 @@ async def test_tasks_lists_what_is_saved(workdir):
 
     app.ask_choice = ask_choice
     try:
-        await dispatch(app, "/tasks")
+        await dispatch(app, "/routines")
         await settle(pilot)
         body = "\n".join(texts(app))
         assert "nightly" in body and "hourly" in body
+        assert "sandboxed · all tools" in body and "last run: never" in body
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_routines_shows_the_latest_output(workdir):
+    from eirene.scheduling.base import Schedule, Task, save_tasks
+    from eirene.scheduling.history import record, save_output
+    save_tasks([Task(id="t1", name="nightly", prompt="summarise",
+                     cwd=str(workdir), schedule=Schedule("hourly"))])
+    record("t1", "finished", run="r1", exit_code=0, ok=True, seconds=4.0,
+           attempts=1, status="completed", summary="All quiet", session="s9")
+    save_output("t1", "r1", {"output": "All quiet on the main branch.", "errors": [],
+                             "input_tokens": 10, "output_tokens": 5})
+    app, pilot, context = await start(workdir)
+    picks = iter(["t1", "latest"])
+
+    async def ask_choice(title, options, **_):
+        return next(picks, None)
+
+    app.ask_choice = ask_choice
+    try:
+        await dispatch(app, "/routines")
+        await settle(pilot)
+        body = "\n".join(texts(app))
+        assert "All quiet on the main branch." in body
+        assert "ok in 4s" in body and "s9" in body
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+class _RoutineEngine:
+    name, available = "fake", True
+
+    def __init__(self, fail_remove=False):
+        self.calls, self.fail_remove = [], fail_remove
+
+    def status(self, task):
+        return "active"
+
+    def set_enabled(self, task, enabled):
+        self.calls.append(("enabled", enabled))
+        return "ok"
+
+    def run_now(self, task):
+        self.calls.append(("run",))
+        return "started"
+
+    def remove(self, task):
+        from eirene.core.errors import SchedulerError
+        if self.fail_remove:
+            raise SchedulerError("scheduler said no")
+        self.calls.append(("remove",))
+        return "removed"
+
+    def install(self, task, password=None):
+        raise AssertionError("remove must never reinstall")
+
+
+async def _open_routine(workdir, monkeypatch, engine, picks, enabled=True):
+    from eirene.commands import routines as routines_cmd
+    from eirene.scheduling.base import Schedule, Task, save_tasks
+    save_tasks([Task(id="t1", name="nightly", prompt="build it", cwd=str(workdir),
+                     schedule=Schedule("hourly"), enabled=enabled)])
+    monkeypatch.setattr(routines_cmd, "backend", lambda: engine)
+    app, pilot, context = await start(workdir)
+    picks = iter(picks)
+
+    async def ask_choice(title, options, **_):
+        return next(picks, None)
+
+    app.ask_choice = ask_choice
+    await dispatch(app, "/routines")
+    await settle(pilot)
+    return app, context
+
+
+async def test_routine_disable_pauses_the_scheduler_entry(workdir, monkeypatch):
+    from eirene.scheduling.base import load_tasks
+    engine = _RoutineEngine()
+    app, context = await _open_routine(workdir, monkeypatch, engine, ["t1", "toggle"])
+    try:
+        assert engine.calls == [("enabled", False)]
+        assert load_tasks()[0].enabled is False
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_routine_run_now_goes_through_the_scheduler(workdir, monkeypatch):
+    engine = _RoutineEngine()
+    app, context = await _open_routine(workdir, monkeypatch, engine, ["t1", "run"])
+    try:
+        assert engine.calls == [("run",)]
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_disabled_routine_is_not_run_now(workdir, monkeypatch):
+    engine = _RoutineEngine()
+    app, context = await _open_routine(workdir, monkeypatch, engine, ["t1", "run"],
+                                       enabled=False)
+    try:
+        assert engine.calls == []
+        assert any("enable it to run it" in text for text in texts(app))
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_failed_uninstall_keeps_the_routine(workdir, monkeypatch):
+    from eirene.scheduling.base import load_tasks
+    engine = _RoutineEngine(fail_remove=True)
+    app, context = await _open_routine(workdir, monkeypatch, engine, ["t1", "remove"])
+    try:
+        assert [task.id for task in load_tasks()] == ["t1"]
+        assert any("scheduler said no" in text for text in texts(app))
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_kept_copies_can_be_discarded(workdir, monkeypatch):
+    from eirene.core import paths
+    copy = paths.task_worktrees_dir() / "t1" / "20261103-090000-1"
+    copy.mkdir(parents=True)
+    (copy / "notes.txt").write_text("changed")
+    engine = _RoutineEngine()
+    app, context = await _open_routine(workdir, monkeypatch, engine,
+                                       ["t1", "copies", "discard"])
+    try:
+        body = "\n".join(texts(app))
+        assert "1 kept git copy" in body and "discarded 1 copy" in body
+        assert not copy.exists()
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_schedule_walks_through_access_steps(workdir, monkeypatch):
+    from eirene.commands import schedule as schedule_cmd
+    from eirene.scheduling.base import load_tasks
+
+    class Engine:
+        name, available, supports_signed_out = "fake", True, False
+        def validate(self, schedule): pass
+        def install(self, task, password=None): return "installed"
+        def warnings(self, task=None): return []
+        def signed_out_mode(self): return "", "not supported"
+
+    monkeypatch.setattr(schedule_cmd, "backend", lambda: Engine())
+    app, pilot, context = await start(workdir)
+    texts_in = iter(["check the build", "build-check"])
+    answers = {"work directory": "here", "which model": "active", "access level": "sandboxed",
+               "allowed tools": "custom", "how often": "daily at 09:00", "create": "yes"}
+    titles = []
+
+    async def ask_text(label, secret=False):
+        titles.append(label)
+        return "edit, commands" if "comma separated" in label else next(texts_in)
+
+    async def ask_choice(title, options, **_):
+        titles.append(title)
+        return next(value for key, value in answers.items() if key in title)
+
+    app.ask_text = ask_text
+    app.ask_choice = ask_choice
+    try:
+        await dispatch(app, "/schedule")
+        await settle(pilot)
+        saved = load_tasks()
+        assert len(saved) == 1
+        task = saved[0]
+        assert task.access == "sandboxed" and task.workspace == "project"
+        assert task.tools == ["read", "edit", "commands"]
+        assert task.provider == task.model == "" and task.mcp_servers == [] and task.skills is None
+        assert task.cwd == str(workdir.resolve())
+        assert any("access level" in title for title in titles)
+        assert any("allowed tools" in title for title in titles)
     finally:
         await context.__aexit__(None, None, None)
 
@@ -706,7 +882,7 @@ async def test_schedule_rejects_an_unreadable_schedule(workdir):
         return next(answers)
 
     async def ask_choice(title, options, **_):
-        return "custom"
+        return "custom" if "how often" in title else options[0][0]
 
     app.ask_text = ask_text
     app.ask_choice = ask_choice
@@ -721,13 +897,14 @@ async def test_schedule_rejects_an_unreadable_schedule(workdir):
 async def test_schedule_can_be_declined(workdir):
     app, pilot, context = await start(workdir)
     answers = iter(["do the thing", "my-task"])
-    choices = iter(["hourly", "no"])
 
     async def ask_text(label, secret=False):
         return next(answers)
 
     async def ask_choice(title, options, **_):
-        return next(choices)
+        if "how often" in title:
+            return "hourly"
+        return "no" if title.startswith("create") else options[0][0]
 
     app.ask_text = ask_text
     app.ask_choice = ask_choice
@@ -1069,3 +1246,162 @@ async def test_arrow_keys_scroll_the_help_window(workdir):
         await pilot.press("up")
         await pilot.pause()
         assert app.prompt.text == "an earlier prompt", "history works once it closes"
+
+
+async def test_schedule_offers_running_signed_out_where_supported(workdir, monkeypatch):
+    from eirene.commands import schedule as schedule_cmd
+    from eirene.scheduling.base import load_tasks
+    installed = []
+
+    class Engine:
+        name, available, supports_signed_out = "fake", True, True
+        def validate(self, schedule): pass
+        def install(self, task, password=None):
+            installed.append(task)
+            return "installed"
+        def warnings(self, task=None): return []
+        def signed_out_mode(self): return "s4u", ""
+
+    monkeypatch.setattr(schedule_cmd, "backend", lambda: Engine())
+    app, pilot, context = await start(workdir)
+    texts_in = iter(["nightly report", "report"])
+    titles = []
+
+    async def ask_text(label, secret=False):
+        return next(texts_in)
+
+    async def ask_choice(title, options, **_):
+        titles.append(title)
+        if "signed out" in title:
+            return "yes"
+        if "how often" in title:
+            return "hourly"
+        return "yes" if title.startswith("create") else options[0][0]
+
+    app.ask_text = ask_text
+    app.ask_choice = ask_choice
+    try:
+        await dispatch(app, "/schedule")
+        await settle(pilot)
+        assert any("signed out" in title for title in titles)
+        assert installed and installed[0].run_signed_out is True
+        assert load_tasks()[0].run_signed_out is True
+        assert installed[0].signed_out_logon == "s4u"
+        assert "keeps running (no password)" in "\n".join(texts(app))
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_schedule_skips_signed_out_when_the_account_cannot(workdir, monkeypatch):
+    from eirene.commands import schedule as schedule_cmd
+    from eirene.scheduling.base import load_tasks
+
+    class Engine:
+        name, available, supports_signed_out = "fake", True, True
+        def validate(self, schedule): pass
+        def install(self, task, password=None): return "installed"
+        def warnings(self, task=None): return []
+        def signed_out_mode(self): return "", "this account lacks the batch right"
+
+    monkeypatch.setattr(schedule_cmd, "backend", lambda: Engine())
+    app, pilot, context = await start(workdir)
+    texts_in = iter(["nightly report", "report"])
+    titles = []
+
+    async def ask_text(label, secret=False):
+        return next(texts_in)
+
+    async def ask_choice(title, options, **_):
+        titles.append(title)
+        if "how often" in title:
+            return "hourly"
+        return "yes" if title.startswith("create") else options[0][0]
+
+    app.ask_text = ask_text
+    app.ask_choice = ask_choice
+    try:
+        await dispatch(app, "/schedule")
+        await settle(pilot)
+        assert not any("signed out" in title for title in titles)
+        assert any("lacks the batch right" in text for text in texts(app))
+        assert load_tasks()[0].run_signed_out is False
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+def _password_engine(verify_problem, installed):
+    class Engine:
+        name, available, supports_signed_out = "fake", True, True
+        def validate(self, schedule): pass
+        def install(self, task, password=None):
+            installed.append((task, password))
+            return "installed"
+        def warnings(self, task=None): return []
+        def signed_out_mode(self): return "password", ""
+        def verify_password(self, password):
+            self.checked = password
+            return verify_problem
+    return Engine()
+
+
+async def _schedule_with_password(workdir, monkeypatch, engine, password):
+    from eirene.commands import schedule as schedule_cmd
+    monkeypatch.setattr(schedule_cmd, "backend", lambda: engine)
+    app, pilot, context = await start(workdir)
+    texts_in = iter(["nightly report", "report"])
+    secrets = []
+
+    async def ask_text(label, secret=False):
+        if secret:
+            secrets.append(label)
+            return password
+        return next(texts_in)
+
+    async def ask_choice(title, options, **_):
+        if "signed out" in title:
+            return "yes"
+        if "how often" in title:
+            return "hourly"
+        return "yes" if title.startswith("create") else options[0][0]
+
+    app.ask_text = ask_text
+    app.ask_choice = ask_choice
+    try:
+        await dispatch(app, "/schedule")
+        await settle(pilot)
+        return secrets, "\n".join(texts(app))
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_schedule_asks_for_the_windows_password_when_needed(workdir, monkeypatch):
+    from eirene.scheduling.base import load_tasks
+    installed = []
+    engine = _password_engine("", installed)
+    secrets, body = await _schedule_with_password(workdir, monkeypatch, engine, "hunter2")
+    assert secrets and "never saved by Eirene" in secrets[0]
+    assert engine.checked == "hunter2"
+    task, password = installed[0]
+    assert password == "hunter2" and task.signed_out_logon == "password"
+    assert "keeps running (Windows password)" in body
+    saved = load_tasks()[0]
+    assert saved.run_signed_out and "hunter2" not in str(saved.to_dict())
+
+
+async def test_schedule_falls_back_when_windows_rejects_the_password(workdir, monkeypatch):
+    installed = []
+    engine = _password_engine("Windows did not accept that password", installed)
+    secrets, body = await _schedule_with_password(workdir, monkeypatch, engine, "wrong")
+    task, password = installed[0]
+    assert not task.run_signed_out and password is None
+    assert "did not accept that password" in body
+
+
+async def test_schedule_without_a_password_runs_only_signed_in(workdir, monkeypatch):
+    installed = []
+    engine = _password_engine("", installed)
+    secrets, body = await _schedule_with_password(workdir, monkeypatch, engine, "")
+    task, password = installed[0]
+    assert not task.run_signed_out and password is None
+    assert not hasattr(engine, "checked")  # nothing sent to Windows
+    assert "no password given" in body

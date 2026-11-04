@@ -15,3 +15,11 @@ The following shared prompt was followed by the corresponding frame request:
 ## furious.png
 
 > Primary request: VERY angry after repeated clicks. Furrow eyebrows sharply above the glasses, strongly flushed cheeks, a tiny furious open mouth, and two dark red pixel anger marks beside her temples. Clearly more furious than a mild annoyed pout, but still the same cute character. Keep arms and hands in their original positions. Only one character in this image.
+
+## Idle moments and the blink
+
+`glint-*.png` and `hum-*.png` are drawn by `scripts/companion_frames.py` from
+`idle.png`, not generated. `idle-blink.png` is the lens area of the original
+generated blink frame. All of them are stored as deltas: only the changed
+pixels, cropped, with `base` and `offset` PNG text chunks that the companion
+uses to paste them over `idle.png`.

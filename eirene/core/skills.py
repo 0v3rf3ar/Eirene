@@ -2,7 +2,7 @@
 
 A subfolder without its own SKILL.md is a group: its skills are named
 "<folder>:<skill>". Installed plugins put their skills in a group named after
-the plugin.
+the plugin. A skill or group can add slash commands from a commands/ folder.
 """
 
 from __future__ import annotations
@@ -135,16 +135,118 @@ def _summary(text: str) -> str:
     return ""
 
 
+def expand_paths(text: str, directory: Path, plugin_root: Path | None = None) -> str:
+    """Put real paths in place of the placeholders skills use for their own files.
+
+    A model that has to compose the path itself gets it wrong: skills/<plugin>/<skill>
+    repeats a name when the two match, and it drops one.
+    """
+    for key in ("${SKILL_DIR}", "${CLAUDE_SKILL_DIR}"):
+        text = text.replace(key, str(directory))
+    for key in ("${CLAUDE_PLUGIN_ROOT}", "${CODEX_PLUGIN_ROOT}", "${PLUGIN_ROOT}"):
+        text = text.replace(key, str(plugin_root or directory))
+    return text
+
+
+def _plugin_root(skill: Skill) -> Path | None:
+    if not skill.group:
+        return None
+    from . import plugins
+    return next((plugin.path for plugin in plugins.discover() if plugin.name == skill.group), None)
+
+
 def load(skill: Skill) -> str:
-    """Read a skill body, without its header."""
+    """Read a skill body, without its header, with its own paths filled in."""
     try:
         text = skill.path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
     _, body = split_front_matter(text)
+    if "${" in body:
+        body = expand_paths(body, skill.path.parent, _plugin_root(skill))
     if len(body) > MAX_SKILL_BYTES:
         body = body[:MAX_SKILL_BYTES] + "\n… skill truncated"
     return body.strip()
+
+
+UNGROUPED_BUNDLE = "skill"
+
+
+def standalone_bundles(config) -> list:
+    """Enabled skills from the skills folder, packaged so they can add commands like a plugin.
+
+    A skill folder may hold commands/*.md beside its SKILL.md, and a group folder
+    may hold commands/ for the whole group. Plugin skills are not included here:
+    their plugin already offers them.
+    """
+    from .plugins import Plugin, discover as discover_plugins
+    owned = {plugin.name for plugin in discover_plugins()}
+    bundles: dict[str, Plugin] = {}
+    for skill in apply_config(discover(), config):
+        if skill.group in owned or not skill.enabled:
+            continue
+        key = skill.group or UNGROUPED_BUNDLE
+        root = paths.skills_dir() / skill.group if skill.group else paths.skills_dir()
+        bundle = bundles.setdefault(key, Plugin(key, root, standalone=True))
+        bundle.skills.append(skill.path)
+        if skill.path.name == "SKILL.md":
+            bundle.commands.extend(sorted(skill.path.parent.glob("commands/*.md")))
+    for name, bundle in bundles.items():
+        if name != UNGROUPED_BUNDLE:
+            bundle.commands.extend(sorted(bundle.path.glob("commands/*.md")))
+    return list(bundles.values())
+
+
+SUPPORT_LISTED = 60
+SCRIPT_SUFFIXES = {".py", ".sh", ".js", ".cjs", ".mjs", ".ts", ".ps1", ".rb"}
+
+
+def find(items: list[Skill], wanted: str) -> Skill | None:
+    """A skill by exact id, or by its short name when exactly one plugin skill has it."""
+    exact = next((item for item in items if item.name == wanted), None)
+    if exact is not None or not wanted or ":" in wanted:
+        return exact
+    matches = [item for item in items if item.name.rsplit(":", 1)[-1] == wanted]
+    return matches[0] if len(matches) == 1 else None
+
+
+def supporting_files(skill: Skill) -> str:
+    """How to reach the files next to a skill's SKILL.md, for the load_skill result.
+
+    Plugin skills are read with load_plugin_resource, whose path is relative to the
+    plugin folder; spell that path out so the model does not have to guess it.
+    """
+    folder = skill.path.parent
+    if skill.path.name != "SKILL.md" or not folder.is_dir():
+        return ""
+    files = sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*")
+                   if p.is_file() and p.name != "SKILL.md" and "__pycache__" not in p.parts)
+    if not files:
+        return ""
+    prefix = ""
+    if ":" in skill.name:
+        from . import plugins
+        bundle, _, _ = skill.name.partition(":")
+        plugin = next((item for item in plugins.discover() if item.name == bundle), None)
+        source = next((path for path in (plugin.skills if plugin else []) if path.parent.name == folder.name), None)
+        if plugin is not None and source is not None:
+            try:
+                prefix = source.parent.relative_to(plugin.path).as_posix() + "/"
+            except ValueError:
+                prefix = ""
+    shown = files[:SUPPORT_LISTED]
+    example = next((name for name in shown if name.endswith(".md")), shown[0])
+    more = f"\n… and {len(files) - len(shown)} more" if len(files) > len(shown) else ""
+    if prefix:
+        how = (f"Read them with load_plugin_resource(plugin=\"{bundle}\", path=\"{prefix}<file>\"), "
+               f"for example path=\"{prefix}{example}\".")
+    else:
+        how = "They are in the skill directory above."
+    script = next((name for name in files if Path(name).suffix in SCRIPT_SUFFIXES), "")
+    if script:
+        how += (" Scripts are not in the workspace: run them by full path, for example "
+                f"\"{folder / script}\", and give full paths for any workspace files they take.")
+    return "Supporting files:\n" + "\n".join(f"- {name}" for name in shown) + more + f"\n{how}\n\n"
 
 
 def enabled_block(skills: list[Skill]) -> str:
@@ -231,10 +333,21 @@ def remove_seeded_examples() -> int:
     return removed
 
 
+def group_on(name: str, config, installed: set[str] | None = None) -> bool:
+    """Whether a skill's group allows it. A plugin's skills need its trust; your own do not."""
+    if ":" not in name:
+        return True
+    if installed is None:
+        from .plugins import discover as discover_plugins
+        installed = {plugin.name for plugin in discover_plugins()}
+    group = name.split(":", 1)[0]
+    return config.plugin_active(group) if group in installed else config.plugin_enabled(group)
+
+
 def apply_config(skills: list[Skill], config) -> list[Skill]:
     """Set enabled flags from saved config."""
+    from .plugins import discover as discover_plugins
+    installed = {plugin.name for plugin in discover_plugins()}
     for skill in skills:
-        skill.enabled = config.skill_enabled(skill.name, True)
-        if ":" in skill.name:
-            skill.enabled = skill.enabled and config.plugin_enabled(skill.name.split(":", 1)[0])
+        skill.enabled = config.skill_enabled(skill.name, True) and group_on(skill.name, config, installed)
     return skills

@@ -92,3 +92,9 @@ def strict_ui_errors(monkeypatch):
     Containment tests turn this back on explicitly.
     """
     monkeypatch.setattr("eirene.app.Eirene.CONTAIN_ERRORS", False)
+
+
+@pytest.fixture
+def trusted_plugins(monkeypatch):
+    """For tests about what a working plugin does; tests/test_plugin_trust.py covers trust itself."""
+    monkeypatch.setattr(Config, "plugin_trusted", lambda self, name: True)

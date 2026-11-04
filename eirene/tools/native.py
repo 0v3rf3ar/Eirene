@@ -18,6 +18,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..core import paths as data_paths
 from ..core.errors import ToolError
 from ..core.text import safe_text
 from . import shell
@@ -59,6 +60,8 @@ async def command(box, argv, *, script=None, env=None, allowed=(0,), cap=MAX_BYT
     policy = dict(POLICY.get())
     if policy.get("isolation", "none") != "none":
         policy["read_paths"] = [str(p) for p in box._grants.get()]
+        policy["read_paths"] += [str(p) for p in data_paths.readable_roots()
+                                 if any(str(p) in str(arg) for arg in argv or [])]
     # Fixed argv/templates on Windows are trusted reads, not arbitrary shell text.
     if os.name == "nt":
         policy = {}

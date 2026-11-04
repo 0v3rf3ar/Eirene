@@ -10,6 +10,35 @@ from pathlib import Path
 
 from . import __version__
 
+# Piped input larger than this is refused rather than silently cut.
+STDIN_LIMIT = 4 * 1024 * 1024
+# How long to wait for piped input to start before treating stdin as unused.
+STDIN_WAIT = 3.0
+
+
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a whole number, got {text!r}") from None
+    if value <= 0:
+        raise argparse.ArgumentTypeError("must be greater than 0")
+    return value
+
+
+def _name_list(text: str) -> list[str]:
+    from .scheduling.base import parse_names
+    return parse_names(text)
+
+
+def _tool_list(text: str) -> list[str]:
+    from .core.errors import SchedulerError
+    from .scheduling.base import parse_tools
+    try:
+        return parse_tools(text)
+    except SchedulerError as exc:
+        raise argparse.ArgumentTypeError(exc.user_message()) from None
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -41,6 +70,28 @@ def build_parser() -> argparse.ArgumentParser:
                         help="supply slash-command text input; repeat in prompt order")
     parser.add_argument("--mode", choices=("auto", "manual", "accept", "plan"), default="auto",
                         help="permission mode for -p (default: auto)")
+    run = parser.add_argument_group("headless run limits (-p)")
+    run.add_argument("--tools", type=_tool_list, metavar="LIST",
+                     help="tools the run may use, e.g. 'edit, commands' or 'all': read, edit, "
+                          "commands, web, mcp, agents (read is always allowed; default: all)")
+    run.add_argument("--mcp", type=_name_list, metavar="SERVERS",
+                     help="MCP servers the run may call without approval: names, 'all' "
+                          "(every server enabled in /mcp) or 'none' (default)")
+    run.add_argument("--skills", type=_name_list, metavar="NAMES",
+                     help="skills the run may load: names, 'all' or 'none' "
+                          "(default: the skills enabled in /skills)")
+    run.add_argument("--access", choices=("sandboxed", "full-access"),
+                     help="sandbox level for this run only (default: sandboxed)")
+    run.add_argument("--timeout", type=_positive_int, metavar="SECONDS",
+                     help="stop the run after this many seconds (default: 3600)")
+    run.add_argument("--max-steps", type=_positive_int, metavar="N",
+                     help="stop after N tool rounds in the turn")
+    run.add_argument("--max-tokens", type=_positive_int, metavar="N",
+                     help="stop once input plus output tokens reach N (checked after each model reply)")
+    run.add_argument("-q", "--quiet", action="store_true",
+                     help="print only the answer and errors; hide tool activity on stderr")
+    run.add_argument("--stream-json", action="store_true",
+                     help="write one JSON event per line to stdout, ending with the result")
     parser.add_argument("--doctor", action="store_true",
                         help="print read-only installation diagnostics and exit")
     parser.add_argument("--json", action="store_true",
@@ -111,6 +162,64 @@ def open_session(sandbox: Path, resume: str) -> int:
         return 1
 
 
+def read_stdin(prompt: str) -> str | None:
+    """The prompt with piped input added; None when the input is too large.
+
+    ``-p -`` takes the whole prompt from stdin. Otherwise piped input is added
+    after the prompt, unless nothing arrives within STDIN_WAIT seconds: a caller
+    that leaves an open, unused pipe must not hang the run.
+    """
+    stream = sys.stdin
+    if stream is None or prompt != "-" and (prompt.startswith("/") or _isatty(stream)):
+        return prompt
+    import threading
+    chunks: list[bytes] = []
+    state = {"size": 0, "over": False}
+    began, done = threading.Event(), threading.Event()
+
+    def pump() -> None:
+        source = getattr(stream, "buffer", None)
+        try:
+            while True:
+                chunk = source.read1(65536) if source else stream.read(65536).encode()
+                began.set()
+                if not chunk:
+                    break
+                state["size"] += len(chunk)
+                if state["size"] > STDIN_LIMIT:
+                    state["over"] = True
+                    break
+                chunks.append(chunk)
+        except Exception:  # noqa: BLE001 - an unreadable stdin is treated as empty
+            pass
+        finally:
+            began.set()
+            done.set()
+
+    threading.Thread(target=pump, name="eirene-stdin", daemon=True).start()
+    if prompt != "-" and not began.wait(STDIN_WAIT):
+        return prompt
+    done.wait()
+    if state["over"]:
+        return None
+    data = b"".join(chunks).decode("utf-8", errors="replace")
+    if prompt == "-":
+        return data.strip()
+    if not data.strip():
+        return prompt
+    return f"{prompt}\n\n<stdin>\n{data.rstrip()}\n</stdin>"
+
+
+def _isatty(stream) -> bool:
+    try:
+        return stream.isatty()
+    except (OSError, ValueError):
+        return False
+
+
+RUN_FLAGS = ("tools", "mcp", "skills", "access", "timeout", "max_steps", "max_tokens", "quiet", "stream_json")
+
+
 def main(argv: list[str] | None = None) -> int:
     # A legacy Windows console code page cannot encode every model character;
     # replace them rather than abort a headless run mid-answer.
@@ -144,6 +253,16 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(render(report, json_output=args.json) + "\n")
         return 0 if report["ok"] else 1
 
+    discovering = args.list_providers or args.configured_providers or args.list_models is not None
+    used = [name for name in RUN_FLAGS if getattr(args, name) not in (None, False)]
+    if used and args.prompt is None and not discovering:
+        flags = ", ".join("--" + name.replace("_", "-") for name in used)
+        sys.stderr.write(f"{flags} only apply to headless runs with -p\n")
+        return 2
+    if args.stream_json and args.json:
+        sys.stderr.write("use either --json or --stream-json, not both\n")
+        return 2
+
     if args.task:
         from .headless import run_task
         return run_task(args.task, json_output=args.json)
@@ -170,6 +289,14 @@ def main(argv: list[str] | None = None) -> int:
         args.resume = found[0]["id"]
 
     text = args.prompt
+    if text is not None and not discovering:
+        text = read_stdin(text)
+        if text is None:
+            sys.stderr.write(f"piped input is larger than {STDIN_LIMIT // (1024 * 1024)} MB\n")
+            return 2
+        if not text.strip():
+            sys.stderr.write("the prompt is empty\n")
+            return 2
     if args.list_providers:
         text = "/providers"
     elif args.configured_providers:
@@ -177,11 +304,21 @@ def main(argv: list[str] | None = None) -> int:
     elif args.list_models is not None:
         text = "/models" + (f" {args.list_models}" if args.list_models else "")
     if text is not None:
-        from .headless import run_prompt
+        from .headless import TASK_TIMEOUT, access_note, run_prompt
+        instructions = ""
+        if args.tools is not None:
+            instructions = access_note(args.access or "sandboxed", args.tools,
+                                       mcp_servers=args.mcp)
         return run_prompt(text, sandbox, provider=args.provider or "",
                           model=args.model or "", mode=args.mode,
                           json_output=args.json, choices=args.choice,
-                          inputs=args.command_input)
+                          inputs=args.command_input, quiet=args.quiet,
+                          stream_json=args.stream_json,
+                          task_timeout=args.timeout or TASK_TIMEOUT,
+                          permissions=args.access or "", tool_groups=args.tools,
+                          step_limit=args.max_steps, token_limit=args.max_tokens,
+                          instructions=instructions, mcp_servers=args.mcp,
+                          skills=args.skills, strict=True)
 
     if not sys.stdout.isatty():
         sys.stderr.write("eirene needs a terminal; use -p for one-shot runs\n")

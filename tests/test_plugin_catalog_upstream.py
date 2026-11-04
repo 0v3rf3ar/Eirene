@@ -1,6 +1,6 @@
 """Opt-in integration audit against real upstream checkouts, without network or hooks.
 
-Clone the four upstream repositories at PREFIX-{official,superpowers,skills,vercel},
+Clone the upstream repository at PREFIX-official,
 then run with EIRENE_PLUGIN_AUDIT_PREFIX=PREFIX. Normal CI uses structural fixtures.
 """
 import os
@@ -19,20 +19,17 @@ PREFIX = os.environ.get("EIRENE_PLUGIN_AUDIT_PREFIX")
 pytestmark = pytest.mark.skipif(not PREFIX, reason="requires explicit upstream fixture checkouts")
 
 
-@pytest.mark.parametrize("shortcut", [name for name, _, _ in BUNDLES if name not in {"ponytail", "omniroute"}])
+@pytest.mark.parametrize("shortcut", [name for name, source, _ in BUNDLES if name != "ponytail" and not source.startswith("builtin:")])
 def test_real_catalog_bundle_imports_and_exposes_entrypoint(shortcut, monkeypatch, config):
     sources = {
         "https://github.com/anthropics/claude-plugins-official.git": "official",
-        "https://github.com/obra/superpowers.git": "superpowers",
-        "https://github.com/anthropics/skills.git": "skills",
-        "https://github.com/vercel-labs/agent-skills.git": "vercel",
     }
     def clone(argv, **kwargs):
         root = Path(PREFIX + "-" + sources[argv[-2]])
         assert root.is_dir(), f"missing upstream fixture: {root}"
         shutil.copytree(root, argv[-1], symlinks=True, ignore=shutil.ignore_patterns(".git"))
-        return SimpleNamespace(returncode=0)
-    monkeypatch.setattr("eirene.core.plugin_install.subprocess.run", clone)
+        return SimpleNamespace(stderr=__import__("io").StringIO(""), wait=lambda: 0, kill=lambda: None)
+    monkeypatch.setattr("eirene.core.plugin_install.subprocess.Popen", clone)
     name, count = install(shortcut)
     plugin = plugins.discover()[0]
     assert plugin.name == name and plugin.catalog_shortcut == shortcut
@@ -44,20 +41,6 @@ def test_real_catalog_bundle_imports_and_exposes_entrypoint(shortcut, monkeypatc
         assert skills.load(skill).strip()
     assert plugins.merged_mcp_servers(config) == {}
     assert not config.get("plugin_trust", {}).get(name)
-
-
-async def test_real_superpowers_startup_injects_guidance(config, box):
-    from eirene.core.plugin_runtime import PluginRuntime
-    root = Path(PREFIX + "-superpowers")
-    if not shutil.which("bash"):
-        pytest.skip("upstream hook needs bash")
-    name, _ = install(str(root))
-    config.set("plugin_trust", {name: True})
-    config.set("execution_isolation", "none")
-    runtime = PluginRuntime("upstream-bootstrap")
-    await runtime.submit("Review the project", box, config)
-    assert "using-superpowers" in runtime.block(config)
-    assert "You have superpowers" in runtime.block(config)
 
 
 @pytest.mark.skipif(os.environ.get("EIRENE_LIVE_MCP_AUDIT") != "1", reason="explicitly opt in to package downloads and MCP startup")

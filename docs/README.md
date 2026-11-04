@@ -1,87 +1,93 @@
 # Eirene documentation
 
-Eirene is a terminal agent for working on a project through conversation. It can
-inspect files, make edits, run checks, and use installed plugins. Your selected
-provider supplies the model; Eirene supplies the workspace and the controls for
-working in it.
+Eirene is an AI agent that runs in your terminal and works on a project through conversation. It can read files, make edits, run commands and use installed plugins. A provider of your choice supplies the model, while Eirene supplies the tools, approvals and sandbox around it.
 
-Start with [installation](installation.md) and [your first session](getting-started.md).
-If Eirene is already configured, use the [command reference](commands.md) to find
-an action or the [plugin catalog](plugin-catalog.md) to choose a workflow.
+New to Eirene? Follow [Installation](getting-started/installation.md), then [Your first session](getting-started/first-session.md).
 
-## Set up
+## Getting started
 
-| Guide | What you will learn |
-| --- | --- |
-| [Installation](installation.md) | Install, choose a version, configure PATH, and download manually. |
-| [Providers and models](providers.md) | Connect API, local, custom, and subscription providers. |
-| [Platform support](platforms.md) | Supported releases, shells, isolation, and OS requirements. |
-| [Configuration](configuration.md) | Overview of settings, credentials and environment variables. |
-| [config.json reference](config-file.md) | Complete defaults, fields, nested schemas, validation, lookup order and examples. |
-| [Data layout and source structure](data-layout.md) | Filesystem trees, session/artifact identities, backups and source modules. |
-| [Updates](updates.md) | Check for releases and update an installation. |
+- [Installation](getting-started/installation.md): install, verify, and choose a version or directory.
+- [Your first session](getting-started/first-session.md): connect a provider and complete a small task.
+- [Updating](getting-started/updating.md): stable and prerelease updates.
 
-## Work in a project
+## Providers and models
 
-| Guide | What you will learn |
-| --- | --- |
-| [First session](getting-started.md) | Open a project, choose a mode, and complete a small task. |
-| [Terminal interface](terminal-interface.md) | Compose prompts, use menus, inspect output, and stop work. |
-| [Commands](commands.md) | Every built-in slash command and every public launch option. |
-| [Modes and permissions](harness.md) | Decide when changes need approval and understand host access. |
-| [Project instructions](project-instructions.md) | Give Eirene recurring project rules and verification steps. |
-| [Files and code navigation](code-navigation.md) | Find code, inspect references, edit files, and check syntax. |
-| [Plans](plans.md) | Keep an objective and progress across a session. |
-| [Code review](review.md) | Review a working tree or compare against a Git base. |
-| [Running commands](processes.md) | Manage tests, builds, servers, timeouts, and saved output. |
-| [Web research](web-search.md) | Search, read sources, and configure the optional search API. |
-| [Browser and image work](browser.md) | Inspect pages, interact with them, and review screenshots. |
-| [HTTP requests](http-requests.md) | Ask for an explicit endpoint request and inspect its response. |
-| [Sessions](sessions.md) | Resume, find, export, import, and clear conversations. |
-| [Context and usage](context-and-usage.md) | Compact long conversations and read token estimates. |
-| [Dynamic context shifting](context-shifting.md) | Understand adaptive local profiles, context budgets, execution memory, and continuation. |
-| [Side questions](side-questions.md) | Ask a question without adding it to the main conversation. |
+- [Providers and models](providers/README.md): choose and connect an API, local, subscription or custom provider.
+- [Thinking and reasoning](providers/thinking.md): control how much a model reasons.
+- [Fast mode](providers/fast-mode.md): the same model on a faster, pricier tier.
+- [OmniRoute](providers/omniroute.md): route chat through a gateway and manage it.
 
-## Customize and automate
+## Guides
 
-| Guide | What you will learn |
-| --- | --- |
-| [Skills](skills.md) | Add reusable Markdown guidance and control enabled skills. |
-| [Plugins](plugins.md) | Install bundles, inspect them, and manage their capabilities. |
-| [Plugin catalog](plugin-catalog.md) | Compare all 14 named installation shortcuts. |
-| [MCP servers](mcp.md) | Declare and enable stdio servers, understand protocol/grants and diagnose startup. |
-| [Specialist agents](specialists.md) | Use plugin profiles and request independent review passes. |
-| [Headless runs](headless.md) | Run one task from a shell or script. |
-| [Scheduled tasks](scheduling.md) | Create recurring work with your OS scheduler. |
-| [Themes and accessibility](appearance.md) | Choose colors, reduce motion, and adjust terminal output. |
-| [Notifications](notifications.md) | Enable and test desktop notifications. |
-| [Fast mode](fast-mode.md) | Use a provider's faster, pricier serving tier for the same model. |
-| [Prompt suggestions](prompt-suggestions.md) | Enable optional model-generated follow-up drafts. |
-| [Local model thinking](thinking.md) | Control the local Ollama thinking option. |
-| [Troubleshooting](troubleshooting.md) | Diagnose installation, provider, execution, and plugin issues. |
+**Using the interface**
 
-## Plugin guides
+- [Terminal interface](guides/terminal-interface.md): compose messages, keyboard shortcuts, attachments, copying and SSH.
+- [Modes and permissions](guides/modes-and-permissions.md): what Eirene may do without asking, and the sandbox.
+- [Appearance and accessibility](guides/appearance.md): themes, reduced motion, colors and the companion.
+- [Notifications](guides/notifications.md): desktop alerts when work finishes.
 
-[OmniRoute](omniroute.md) · [Ponytail](plugins/ponytail.md) ·
-[Superpowers](plugins/superpowers.md) · [Anthropic Skills](plugins/anthropic-skills.md) ·
-[Frontend Design](plugins/frontend-design.md) · [Code Review](plugins/code-review.md) ·
-[Commit Commands](plugins/commit-commands.md) · [PR Review Toolkit](plugins/pr-review-toolkit.md) ·
-[Feature Dev](plugins/feature-dev.md) · [Playwright](plugins/playwright.md) ·
-[Serena](plugins/serena.md) · [React Best Practices](plugins/react-best-practices.md) ·
-[React Native Skills](plugins/react-native-skills.md) ·
-[Web Design Guidelines](plugins/web-design-guidelines.md)
+**Doing the work**
 
-Examples inside a `text` block are prompts or slash commands to enter in Eirene.
-Examples marked `sh` or `powershell` run in your terminal. Names such as
-`SESSION_ID`, `TASK_ID`, and `MODEL_NAME` are placeholders to replace.
+- [Project instructions](guides/project-instructions.md): give Eirene your conventions and test commands.
+- [Working with code](guides/working-with-code.md): find, follow, edit and check code.
+- [Running commands](guides/running-commands.md): tests, builds, servers and background work.
+- [Web, browser and HTTP](guides/web-and-browser.md): research, rendered pages, screenshots and API calls.
+- [Code review](guides/code-review.md): read-only reviews of your changes.
+- [Plans](guides/plans.md): track progress across a long task.
+- [Subagents](guides/subagents.md): delegate to independent agents and specialist profiles.
 
-## Reading the technical references
+**Managing conversations**
 
-Start with [config.json](config-file.md) when editing settings by hand, and
-[data layout](data-layout.md) when inspecting saved state. Feature guides describe
-the corresponding command, stored schema, runtime dependencies, and limits.
-Examples with placeholder paths/model IDs require substitution; JSON fragments
-should be merged into the existing object rather than replacing unrelated fields.
-The implementation references in these guides identify the code responsible for
-the behavior. Remote plugin guides describe imported guidance; exact content can
-change with the upstream version you install.
+- [Sessions](guides/sessions.md): resume, search, export, import and clear.
+- [Context and usage](guides/context-and-usage.md): compaction, context limits, recaps, tokens and costs.
+- [Context shifting](guides/context-shifting.md): how Eirene adapts to local models.
+- [Side questions](guides/side-questions.md): ask something without adding it to the conversation.
+- [Prompt suggestions](guides/prompt-suggestions.md): drafts of your next message.
+
+## Extending Eirene
+
+- [Skills](extending/skills.md): reusable Markdown guidance.
+- [Plugins](extending/plugins.md): install, trust, update and remove bundles.
+- [Plugin catalog](extending/plugin-catalog.md): the plugins available by name, and which to choose.
+- [MCP servers](extending/mcp.md): connect external tools and services.
+- [MCP examples](mcp-examples/README.md): ready-to-import server definitions.
+- [Writing plugins](extending/writing-plugins.md): package format and hooks.
+
+Guides to individual plugins:
+[Arena](extending/plugins/arena.md) ·
+[Eirene Skills](extending/plugins/eirene-skills.md) ·
+[Feature Dev](extending/plugins/feature-dev.md) ·
+[Obsidian](extending/plugins/obsidian.md) ·
+[OmniRoute](providers/omniroute.md) ·
+[Playwright](extending/plugins/playwright.md) ·
+[Ponytail](extending/plugins/ponytail.md) ·
+[PR Review Toolkit](extending/plugins/pr-review-toolkit.md) ·
+[Serena](extending/plugins/serena.md) ·
+[Superpowers](extending/plugins/superpowers.md)
+
+## Automation
+
+- [Headless runs](automation/headless.md): run one task from a shell or script.
+- [Routines](automation/routines.md): run tasks on a schedule through your system's scheduler.
+
+## Platforms
+
+- [Platform support](platforms/platform-support.md): requirements and sandbox behavior on Linux, macOS and Windows.
+- [Windows sandbox](platforms/windows-sandbox.md): how AppContainer isolation works.
+
+## Reference
+
+- [Commands](reference/commands.md): every slash command and launch option.
+- [Configuration](reference/configuration.md): every field in `config.json`, credentials and environment variables.
+- [Data directory](reference/data-directory.md): what Eirene stores, and how to back it up or move it.
+
+## Help
+
+- [Troubleshooting](help/troubleshooting.md): diagnose common problems.
+- [Reporting bugs and crashes](help/reporting-issues.md): gather what is needed and open a GitHub issue.
+- [Security policy](../SECURITY.md): report a vulnerability privately.
+- [Releases](https://github.com/0v3rf3ar/Eirene/releases): downloads and what changed in each version.
+
+## Reading these pages
+
+Examples in `text` blocks are typed into Eirene's prompt. Examples marked `sh` or `powershell` run in your terminal. Uppercase names such as `SESSION_ID`, `NAME` and `MODEL_NAME` are placeholders for your own values.

@@ -52,7 +52,7 @@ DEFAULTS: dict[str, Any] = {
     "reduce_motion": False,
     "companion": False,
     "accessible_icons": False,
-    # auto: the terminal's own selection over SSH, Eirene's mouse handling locally.
+    # auto/eirene: Eirene handles the mouse (also over SSH); terminal: the terminal does.
     "mouse": "auto",
     "credential_store": "file",
     "search_api": {},
@@ -245,6 +245,13 @@ class Config:
 
     def plugin_enabled(self, name: str, default: bool = True) -> bool:
         return bool(self.data.setdefault("plugins", {}).get(name, default))
+
+    def plugin_trusted(self, name: str) -> bool:
+        return self.data.setdefault("plugin_trust", {}).get(name) is True
+
+    def plugin_active(self, name: str) -> bool:
+        """Trust is for a whole plugin: nothing of it works without it."""
+        return self.plugin_trusted(name) and self.plugin_enabled(name)
 
     def set_plugin(self, name: str, enabled: bool) -> None:
         self.data.setdefault("plugins", {})[name] = bool(enabled)

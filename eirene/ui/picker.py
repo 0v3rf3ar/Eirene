@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from typing import NamedTuple
 
 from rich.text import Text
 from textual import events
@@ -13,6 +14,13 @@ from . import art
 
 WINDOW = 10
 DETAIL_LINES = 4
+
+
+class Tab(NamedTuple):
+    label: str
+    options: list[tuple]
+    # (left, right) lines pinned above the rows, aligned the way rows are.
+    header: tuple | list = ()
 
 
 def _wrap(text: str, width: int) -> list[str]:
@@ -56,6 +64,8 @@ class Picker(Static):
         self.index = 0
         self.filter = ""
         self.on_highlight: Callable[[str], None] | None = None
+        self.tabs: list[Tab] = []
+        self.tab = 0
 
     def on_mount(self) -> None:
         self.display = False
@@ -75,9 +85,19 @@ class Picker(Static):
 
     async def choose(self, title: str, options: list[tuple], *,
                      on_highlight: Callable[[str], None] | None = None,
-                     selected: str = "", footer: str = "") -> str | None:
-        """Show options; returns the value or None."""
-        if not options:
+                     selected: str = "", footer: str = "",
+                     tabs: list[tuple] | None = None,
+                     tab: int = 0) -> str | None:
+        """Show options; returns the value or None.
+
+        With ``tabs`` (see Tab) the options come from the current tab, Tab
+        and the arrow keys change it, and ``self.tab`` says where the choice was made.
+        """
+        self.tabs = [Tab(*item) for item in tabs or []]
+        self.tab = tab if 0 <= tab < len(self.tabs) else 0
+        if self.tabs:
+            options = self.tabs[self.tab].options
+        elif not options:
             return None
         self.title = title
         self.footer = footer
@@ -102,6 +122,17 @@ class Picker(Static):
             self.display = False
             self.future = None
             self.on_highlight = None
+
+    def switch_tab(self, delta: int) -> None:
+        """Show the next or previous tab, with a fresh filter and highlight."""
+        if not self.waiting or not self.tabs:
+            return
+        self.tab = (self.tab + delta) % len(self.tabs)
+        self.options = self.tabs[self.tab].options
+        self.index = 0
+        self.filter = ""
+        self._draw()
+        self._preview()
 
     def _visible(self) -> list[tuple]:
         if not self.filter:
@@ -139,10 +170,16 @@ class Picker(Static):
         rows = self._visible()
         body = Text()
         body.append(f"{art.icon('info')} {self.title}\n", style="bold")
-        if not rows:
-            body.append(f"  no match for '{self.filter}'\n", style="dim")
-        start = max(0, min(self.index - WINDOW // 2, len(rows) - WINDOW))
         room = max(self.content_size.width, 1)
+        if self.tabs:
+            body.append_text(self._tab_bar(room))
+            body.append("\n\n")
+            for left, right in self.tabs[self.tab].header:
+                body.append_text(self._header_line(left, right, room))
+                body.append("\n")
+        if not rows:
+            body.append(f"  no match for '{self.filter}'\n" if self.filter else "  nothing here yet\n", style="dim")
+        start = max(0, min(self.index - WINDOW // 2, len(rows) - WINDOW))
         for position, row in enumerate(rows[start:start + WINDOW], start):
             label, hint = row[1], row[2]
             selected = position == self.index
@@ -167,6 +204,11 @@ class Picker(Static):
                 option.stylize("reverse")
             body.append_text(option)
             body.append("\n")
+        # Keep the menu's height when changing to a shorter tab.
+        if self.tabs:
+            height = lambda item, shown: len(item.header) + max(min(shown, WINDOW), 1)
+            tallest = max(height(item, len(item.options)) for item in self.tabs)
+            body.append("\n" * max(tallest - height(self.tabs[self.tab], len(rows)), 0))
         detail = self._detail(rows)
         if self.footer:
             footer = Text(" " + self.footer, style="dim")
@@ -180,7 +222,8 @@ class Picker(Static):
             lines = _wrap(detail, width) if detail else []
             # Reserve room for the longest detail so the menu keeps its height
             # while the highlight moves.
-            reserved = max((len(_wrap(row[3], width)) for row in self.options
+            every = [row for item in self.tabs for row in item.options] or self.options
+            reserved = max((len(_wrap(row[3], width)) for row in every
                             if len(row) > 3 and row[3]), default=0)
             for line in lines + [""] * (reserved - len(lines)):
                 body.append(f"   {line}\n", style="dim italic")
@@ -188,6 +231,31 @@ class Picker(Static):
             body.append(f"  Filter: {self.filter}\n", style="dim")
         body.remove_suffix("\n")
         self.update(body)
+
+    def _header_line(self, left: str, right: str, room: int) -> Text:
+        """A non-selectable line, in the same columns as the rows below it."""
+        line = Text(f"   {left}", style="dim" if right else "")
+        if right:
+            tail = Text(right, style="dim")
+            tail.truncate(max(room - 4, 1), overflow="ellipsis")
+            line.truncate(max(room - tail.cell_len - 1, 1), overflow="ellipsis")
+            line.append(" " * max(room - line.cell_len - tail.cell_len, 1))
+            line.append_text(tail)
+        else:
+            line.truncate(room, overflow="ellipsis")
+        return line
+
+    def _tab_bar(self, room: int) -> Text:
+        bar = Text(" ")
+        for position, item in enumerate(self.tabs):
+            label = item.label
+            bar.append(f" {label} ", style="reverse" if position == self.tab else "dim")
+            bar.append(" ")
+        hint = "tab to switch"
+        if bar.cell_len + len(hint) < room:
+            bar.append(" " * (room - bar.cell_len - len(hint)))
+            bar.append(hint, style="dim")
+        return bar
 
     def _detail(self, rows: list[tuple]) -> str:
         """The long text for whatever is highlighted."""
@@ -203,6 +271,9 @@ class Picker(Static):
         key = event.key
         event.stop()
         event.prevent_default()
+        if self.tabs and key in ("tab", "right", "shift+tab", "backtab", "left"):
+            self.switch_tab(1 if key in ("tab", "right") else -1)
+            return
         if key == "up":
             self._move(-1)
             return

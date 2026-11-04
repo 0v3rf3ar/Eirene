@@ -869,6 +869,17 @@ class Eirene(App):
         finally:
             self.prompt.focus()
 
+    async def ask_tabs(self, title: str, tabs: list[tuple], *,
+                       tab: int = 0, selected: str = "") -> tuple[int, str | None]:
+        """Pick from a tabbed list; returns the tab it was left on and the value or None."""
+        try:
+            self.picker.right_hint = True
+            value = await self.picker.choose(title, [], selected=selected, tabs=tabs, tab=tab)
+            return self.picker.tab, value
+        finally:
+            self.picker.tabs = []
+            self.prompt.focus()
+
     async def ask_session_tree(self, rows, *, allow_switch=True):
         from .ui.session_tree import SessionTreeScreen
         screen = SessionTreeScreen(rows, self.session.id, allow_switch)
@@ -1389,11 +1400,12 @@ class Eirene(App):
                 return  # The terminal owns selection and copying in this mode.
             self.say("nothing selected - drag over the text first", "warn")
             return
+        remote = remote_session()
         self.copy_to_clipboard(text)
-        tool = copy_to_system(text)
-        self.query_one(CopyNotice).show_count(len(text))
+        tool = "" if remote else copy_to_system(text)
+        self.query_one(CopyNotice).show_count(len(text), remote=remote)
         self.screen.clear_selection()
-        if remote_session():
+        if remote:
             self._clipboard_hint()
         elif not tool:
             self.say("copied, but no clipboard tool was found - "
@@ -1407,25 +1419,26 @@ class Eirene(App):
             self._driver.flush()
 
     def _clipboard_hint(self) -> None:
-        """Over SSH only the user's terminal can reach their clipboard; say how once."""
-        if self._clipboard_hinted:
+        """tmux swallows the copy unless configured; say how once (the notice covers the rest)."""
+        if self._clipboard_hinted or not os.environ.get("TMUX"):
             return
         self._clipboard_hinted = True
-        self.say("copied through your terminal (OSC 52) to the computer you are typing on. "
-                 "If it does not paste, allow clipboard access in your terminal's settings"
-                 + (", and add `set -g set-clipboard on` to ~/.tmux.conf" if os.environ.get("TMUX") else "")
-                 + ".")
+        self.say("inside tmux the copy reaches your computer only with `set -g set-clipboard on` "
+                 "in ~/.tmux.conf; otherwise hold Shift while selecting to use your terminal's copy.")
 
     def open_url(self, url: str, *, new_tab: bool = True) -> None:
         """Open a transcript link on the user's desktop, never blocking or crashing the UI.
 
-        Over SSH a browser here would open on the server: show the whole link to the
-        user's own terminal instead, and offer it to their clipboard too. Links that
-        are not web or mail addresses are copied, never launched (see ui.links).
+        Over SSH a browser here would open on the server: copy the link to the
+        clipboard of the user's own computer instead (OSC 52) and say how to open it
+        there. Links that are not web or mail addresses are copied, never launched
+        (see ui.links).
         """
         if remote_session():
             self.copy_to_clipboard(url)
-            self.show_outside(url)
+            self.query_one(CopyNotice).show(
+                "link copied to your computer · Shift+click (Ctrl+Shift+click in some "
+                "terminals) opens it", seconds=5)
             return
         if not links.launchable(url):
             self.copy_to_clipboard(url)
@@ -1574,9 +1587,11 @@ class Eirene(App):
         self.say(f"prompt suggestions {state}")
 
     def _start_mouse_mode(self) -> None:
-        """Over SSH default to the terminal's own selection, copying and link clicks."""
-        setting = self.config.get("mouse", "auto")
-        self._apply_mouse(setting == "eirene" or (setting == "auto" and not remote_session()))
+        """Eirene handles the mouse, locally and over SSH, unless set to "terminal".
+
+        Holding Shift still gives the terminal's own selection in nearly every terminal.
+        """
+        self._apply_mouse(self.config.get("mouse", "auto") != "terminal")
 
     def _apply_mouse(self, captured: bool) -> None:
         """Turn mouse reporting on (Eirene handles clicks) or off (the terminal does)."""
@@ -1594,7 +1609,8 @@ class Eirene(App):
 
     def action_toggle_mouse(self) -> None:
         self._apply_mouse(not self._mouse_captured)
-        self.say("Mouse: Eirene - click blocks and links, drag then Ctrl+Shift+C to copy."
+        self.say("Mouse: Eirene - click blocks and links, drag then Ctrl+C or Ctrl+Shift+C to copy. "
+                 "Hold Shift to select with your terminal instead."
                  if self._mouse_captured else
                  "Mouse: your terminal's own selection - drag to select, copy with your terminal's "
                  "shortcut, Ctrl+click links. PageUp/PageDown scroll. F4 switches back.")
@@ -1667,6 +1683,9 @@ class Eirene(App):
         return busy
 
     def action_cycle_mode(self) -> None:
+        if self.picker.waiting and self.picker.tabs:
+            self.picker.switch_tab(-1)
+            return
         self.agent.mode = next_mode(self.agent.mode)
         self.config.mode = self.agent.mode.value
         self._save_config()

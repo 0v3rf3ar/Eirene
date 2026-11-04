@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from . import commands
-from .core.errors import CommandError, EireneError
+from .core.errors import CommandError, ConfigError, EireneError, ProviderError, error_kind
 from .providers import registry as providers
 
 
@@ -36,10 +36,17 @@ class HeadlessApp:
             return
         key, model = self.agent.provider_key, self.agent.model
         if not key:
-            raise CommandError("no provider configured; run eirene and use /connect")
+            raise ConfigError("no provider configured; run eirene and use /connect")
         if not model:
-            raise CommandError(f"no model set for {key}; use --model NAME")
-        self.agent.use(providers.build(key, self.config), key, model)
+            raise ConfigError(f"no model set for {key}; use --model NAME")
+        try:
+            provider = providers.build(key, self.config)
+        except ProviderError as exc:
+            # Unknown provider, missing key or base URL: the setup is wrong, not the network.
+            if type(exc) is ProviderError and not exc.retryable:
+                raise ConfigError(exc.user_message()) from exc
+            raise
+        self.agent.use(provider, key, model)
 
     def say(self, text, level="info", *, markdown=False):
         if level in {"warn", "fail"}:
@@ -70,6 +77,10 @@ class HeadlessApp:
         if not self.list_choices or any(str(row[0]) in {"yes", "replace", "forget"} for row in options):
             raise CommandError("an explicit --choice KEY is required for this action")
         return None
+
+    async def ask_tabs(self, label, tabs, **kwargs):
+        rows = {str(row[0]): row for tab in tabs for row in tab[1]}
+        return 0, await self.ask_choice(label, list(rows.values()))
 
     async def ask_text(self, label, secret=False):
         if secret:
@@ -175,7 +186,7 @@ class HeadlessApp:
         parts = text[1:].strip().split(maxsplit=1)
         name, args = (parts[0].lower(), parts[1] if len(parts) > 1 else "") if parts else ("", "")
         self.list_choices = name in {"agents", "permissions", "theme", "skills", "plugins",
-                                     "plugin", "mcp", "sessions", "tasks", "search-api"}
+                                     "plugin", "mcp", "sessions", "routines", "search-api"}
         try:
             if name == "providers":
                 if args not in {"", "configured"}:
@@ -199,7 +210,7 @@ class HeadlessApp:
             if self.choices or self.inputs:
                 raise CommandError("unused --choice or --command-input arguments")
         except EireneError as exc:
-            self.output.error(exc.user_message())
+            self.output.error(exc.user_message(), error_kind(exc))
         finally:
             if self.turn and not self.turn.done():
                 self.turn.cancel()

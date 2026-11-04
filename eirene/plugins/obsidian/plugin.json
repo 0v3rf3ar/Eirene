@@ -1,0 +1,10 @@
+{
+  "name": "obsidian",
+  "version": "1.0.1",
+  "description": "Create and edit Obsidian vault files: Markdown, Bases and Canvas, plus the Obsidian CLI, Knap and Defuddle. From Steph Ango's obsidian-skills.",
+  "author": {
+    "name": "Eirene"
+  },
+  "license": "MIT",
+  "skills": "skills"
+}

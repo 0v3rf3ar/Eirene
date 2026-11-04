@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# SessionStart hook for superpowers plugin
+
+set -euo pipefail
+
+# Determine plugin root directory.
+# Splits $0 on its last / or \ (run-hook.cmd's cmd half passes a Windows
+# path), with no separator meaning the current directory. This avoids
+# dirname because a SessionStart:startup hook can run with a broken/empty
+# PATH before any PATH-repairing sibling hook
+# in the same startup batch takes effect.
+#
+# No command substitution or pipe runs in this script: each one forks, and a
+# fork costs tens of milliseconds under Git Bash on Windows. The paths stay
+# relative to the current directory, which is all the file read below needs.
+case "$0" in
+  */*|*\\*) SCRIPT_DIR="${0%[/\\]*}" ;;
+  *) SCRIPT_DIR="." ;;
+esac
+PLUGIN_ROOT="${SCRIPT_DIR}/.."
+
+# Read using-superpowers content with the read builtin (no cat, for the same
+# PATH-independence reason, and no $(< file) subshell). read returns 1 at end
+# of file, hence || true; the loop drops trailing newlines as $(< file) did.
+skill_md="${PLUGIN_ROOT}/skills/using-superpowers/SKILL.md"
+using_superpowers_content="Error reading using-superpowers skill"
+if [ -r "$skill_md" ]; then
+  IFS= read -r -d '' using_superpowers_content < "$skill_md" || true
+  while [[ $using_superpowers_content == *$'\n' ]]; do
+    using_superpowers_content="${using_superpowers_content%$'\n'}"
+  done
+fi
+
+# Escape string for JSON embedding using bash parameter substitution.
+# Each ${s//old/new} is a single C-level pass - orders of magnitude
+# faster than the character-by-character loop this replaces. The result
+# goes to a variable instead of stdout, so no $(...) subshell is needed.
+escape_for_json() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    using_superpowers_escaped="$s"
+}
+
+escape_for_json "$using_superpowers_content"
+session_context="<EXTREMELY_IMPORTANT>\nYou have superpowers.\n\n**Below is the full content of your 'superpowers:using-superpowers' skill - your introduction to using skills. For all other skills, use the load_skill tool:**\n\n${using_superpowers_escaped}\n</EXTREMELY_IMPORTANT>"
+
+# Eirene reads additionalContext from the hook's JSON output.
+# printf, not a heredoc, because of a heredoc hang in bash 5.3.
+# On Windows the host can close stdout before printf finishes; ignore that.
+trap '' PIPE
+printf '{\n  "additionalContext": "%s"\n}\n' "$session_context" 2>/dev/null || true
+exit 0

@@ -24,7 +24,7 @@ class PluginRuntime:
 
     def block(self, config) -> str:
         parts = [text for (name, _), text in self.context.items()
-                 if config.plugin_enabled(name) and config.get("plugin_trust", {}).get(name)]
+                 if config.plugin_active(name)]
         return ("Plugin lifecycle instructions (latest mode changes override earlier defaults):\n" +
                 "\n\n".join(parts)) if parts else ""
 
@@ -33,7 +33,7 @@ class PluginRuntime:
             return []
         notices = []
         enabled = {p.name for p in plugins.discover()
-                   if config.plugin_enabled(p.name) and plugins.executable_enabled(p, config)}
+                   if config.plugin_active(p.name)}
         self.started.intersection_update(enabled)
         if "ponytail" not in enabled:
             self.ponytail_mode = None

@@ -44,13 +44,12 @@ def test_import_commands_hooks_mcp_and_report_limits(tmp_path, config):
     assert any('SubagentStart' in w for w in plugin.warnings)
     assert plugins.merged_mcp_servers(config) == {}
     config.set('plugin_trust', {'demo': True})
-    assert plugins.merged_mcp_servers(config) == {}
-    config.set('mcp_enabled', {'demo__docs': True})
     server = plugins.merged_mcp_servers(config)['demo__docs']
     assert server['command'] == ['node', str(plugin.path / 'server.js')]
     assert server['read_paths'] == [str(plugin.path)]
 
 
+@pytest.mark.usefixtures("trusted_plugins")
 def test_alias_collisions_and_disabled_plugins(tmp_path, config):
     install(str(bundle(tmp_path)))
     assert lookup('review').name == 'review'  # built-in wins
@@ -61,12 +60,25 @@ def test_alias_collisions_and_disabled_plugins(tmp_path, config):
     assert not any(c.name.startswith('demo:') for c in commands(app))
 
 
+@pytest.mark.usefixtures("trusted_plugins")
+async def test_menus_show_only_the_short_name_when_it_is_unambiguous(tmp_path, config):
+    install(str(bundle(tmp_path)))
+    app = SimpleNamespace(config=config)
+    names = {c.name for c in commands(app)}
+    assert 'demo:review' in names  # the built-in /review keeps the namespaced form visible
+    short = next(c for c in commands(app) if c.name == 'demo')
+    assert short.usage.startswith('/demo ')
+    assert 'demo:demo' not in names
+    assert lookup('demo:demo', app) is not None  # still runs when typed
+
+
 def test_expansion_is_literal_and_supports_positional_arguments():
     assert expand('$0 $ARGUMENTS[1] $ARGUMENTS', '"one two" three') == 'one two three "one two" three'
     assert expand('Review this', 'file.py') == 'Review this\n\nUser arguments: file.py'
     assert expand('$ARGUMENTS', '$0 $(touch nope)') == '$0 $(touch nope)'
 
 
+@pytest.mark.usefixtures("trusted_plugins")
 async def test_dispatch_sends_expanded_command_through_normal_turn(tmp_path, config):
     install(str(bundle(tmp_path)))
     received = []
@@ -80,6 +92,22 @@ async def test_dispatch_sends_expanded_command_through_normal_turn(tmp_path, con
     await app.turn
     assert 'Inspect src/main.py; first src/main.py.' in received[0][0]
     assert received[0][1]['record_text'] == '/demo:review src/main.py'
+
+
+@pytest.mark.usefixtures("trusted_plugins")
+async def test_short_command_shows_its_short_name_in_the_chat(tmp_path, config):
+    install(str(bundle(tmp_path)))
+    shown, received = [], []
+    async def push(block):
+        shown.append(block)
+    async def run_turn(text, **kwargs):
+        received.append((text, kwargs))
+    app = SimpleNamespace(config=config, turn=None, push=push, _run_turn=run_turn, say=lambda *a: None,
+                          spawn=lambda coroutine, **kwargs: asyncio.ensure_future(coroutine))
+    await dispatch(app, '/demo go')
+    await app.turn
+    assert received[0][1]['record_text'] == '/demo go'
+    assert received[0][0].startswith('/demo go\n')
 
 
 async def test_lifecycle_trust_plan_start_once_stdin_and_disable(tmp_path, config, box, monkeypatch):
@@ -262,6 +290,7 @@ async def test_ponytail_control_errors_stay_local(tmp_path, config, box, monkeyp
     assert app.turn is None
 
 
+@pytest.mark.usefixtures("trusted_plugins")
 async def test_ponytail_help_and_plan_controls_do_not_call_provider(tmp_path, config, box, monkeypatch):
     app, messages = ponytail_app(tmp_path, config, box)
     async def forbidden(*args, **kwargs):
@@ -275,7 +304,7 @@ async def test_ponytail_help_and_plan_controls_do_not_call_provider(tmp_path, co
     assert 'disabled in plan mode' in messages[-1][0]
     config.set_plugin('ponytail', False)
     await dispatch(app, '/ponytail ultra')
-    assert 'unknown command' in messages[-1][0]
+    assert '/plugins enable ponytail' in messages[-1][0]
 
 
 async def test_local_controls_run_only_the_selected_plugin_hooks(tmp_path, config, box, monkeypatch):
@@ -387,8 +416,6 @@ def test_portable_manifest_and_root_mcp_file(tmp_path, config, manifest):
     assert plugin.mcp_servers['browser']['command'] == ['npx', '@playwright/mcp@latest']
     assert plugins.merged_mcp_servers(config) == {}
     config.set('plugin_trust', {'portable': True})
-    assert plugins.merged_mcp_servers(config) == {}
-    config.set('mcp_enabled', {'portable__browser': True})
     assert 'portable__browser' in plugins.merged_mcp_servers(config)
 
 

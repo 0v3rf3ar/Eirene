@@ -26,6 +26,9 @@ class Plugin:
     warnings: list[str] = field(default_factory=list)
     imported: bool = False
     catalog_shortcut: str = ""
+    marketplace: str = ""
+    # Skills from the skills folder, offered as commands the way a plugin's are.
+    standalone: bool = False
 
 
 def discover() -> list[Plugin]:
@@ -67,7 +70,8 @@ def discover() -> list[Plugin]:
                                 {str(k): v for k, v in servers.items() if isinstance(v, dict)},
                                 markdown("commands"), markdown("agents"),
                                 body.get("lifecycle", {}), body.get("warnings", []),
-                                bool(body.get("imported")), str(body.get("catalog_shortcut", ""))))
+                                bool(body.get("imported")), str(body.get("catalog_shortcut", "")),
+                                str(body.get("marketplace", ""))))
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             continue
     return found
@@ -86,7 +90,7 @@ def merged_hooks(config) -> dict[str, list[str]]:
             if isinstance(value, list):
                 merged[event].extend(str(command) for command in value if str(command).strip())
     for plugin in discover():
-        if not config.plugin_enabled(plugin.name):
+        if not config.plugin_active(plugin.name):
             continue
         for event in merged:
             merged[event].extend(plugin.hooks.get(event, []))
@@ -103,7 +107,7 @@ def available_mcp_servers(config) -> dict[str, dict[str, Any]]:
             definition = expand_definition(definition, plugin.path)
             servers.setdefault(f"{plugin.name}__{name}" if plugin.imported else name,
                 {**definition, "read_paths": [str(plugin.path), *definition.get("read_paths", [])],
-                 "_plugin": plugin.name, "_plugin_enabled": config.plugin_enabled(plugin.name)})
+                 "_plugin": plugin.name, "_plugin_enabled": config.plugin_active(plugin.name)})
     from .mcp_config import normalize
     for name, definition in servers.items():
         try:
@@ -114,12 +118,19 @@ def available_mcp_servers(config) -> dict[str, dict[str, Any]]:
     return servers
 
 
+def mcp_on(name: str, definition: dict[str, Any], switches: dict) -> bool:
+    """A trusted plugin's servers run unless turned off; others must be turned on in /mcp."""
+    if definition["_plugin"]:
+        return definition["_plugin_enabled"] and switches.get(name) is not False
+    return switches.get(name) is True
+
+
 def merged_mcp_servers(config) -> dict[str, dict[str, Any]]:
-    """Only servers explicitly enabled through /mcp are executable."""
+    """The servers that may run now."""
     enabled = config.get("mcp_enabled", {})
     merged = {}
     for name, definition in available_mcp_servers(config).items():
-        if enabled.get(name) is not True or not definition["_plugin_enabled"]:
+        if not mcp_on(name, definition, enabled):
             continue
         owner = definition["_plugin"]
         definition = {key: value for key, value in definition.items()
@@ -145,7 +156,7 @@ def _hooks(raw) -> dict[str, list[str]]:
 
 
 def executable_enabled(plugin: Plugin, config) -> bool:
-    return not plugin.imported or bool(config.get("plugin_trust", {}).get(plugin.name, False))
+    return config.plugin_trusted(plugin.name)
 
 
 def expand_definition(value, root: Path):

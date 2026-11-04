@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import shlex
+from functools import partial
 
 from ..core import plugins, skills
 from ..core.config import Config
@@ -12,14 +13,14 @@ from . import Command, REGISTRY
 def commands(config=None) -> list[Command]:
     config = config or Config.load()
     candidates = []
-    for plugin in plugins.discover():
-        if not config.plugin_enabled(plugin.name):
+    for plugin in [*plugins.discover(), *skills.standalone_bundles(config)]:
+        if not plugin.standalone and not config.plugin_active(plugin.name):
             continue
         entries = [(p, False) for p in plugin.skills + plugin.commands]
         entries += [(p, True) for p in plugin.agents]
         primary = any((p.parent.name if p.name == "SKILL.md" else p.stem) == plugin.name
                       for p, agent in entries if not agent)
-        if not primary:
+        if not primary and not plugin.standalone:
             entries.append((None, False))
         seen = set()
         for path, agent in entries:
@@ -42,12 +43,17 @@ def commands(config=None) -> list[Command]:
             name = f"{plugin.name}:{slug}".lower()
             if name in seen or fields.get("user-invocable", "true").lower() == "false":
                 continue
-            if is_skill and not config.skill_enabled(f"{plugin.name}:{slug}", True):
+            if is_skill and not plugin.standalone and not config.skill_enabled(f"{plugin.name}:{slug}", True):
+                continue
+            # A command a skill carries goes away with that skill.
+            owner = path.parent.parent if path and not is_skill and path.parent.name == "commands" else None
+            if owner and not plugin.standalone and (owner / "SKILL.md").is_file() \
+                    and not config.skill_enabled(f"{plugin.name}:{owner.name}", True):
                 continue
             seen.add(name)
             summary = fields.get("description", "") or f"{plugin.name} {slug}"
             async def invoke(app, args, *, path=path, body=body, name=name, root=plugin.path,
-                             plugin=plugin, slug=slug):
+                             plugin=plugin, slug=slug, shown=None):
                 if getattr(app, "turn", None) and not app.turn.done():
                     app.say("finish or stop the current turn before running a plugin command", "warn")
                     return
@@ -68,9 +74,9 @@ def commands(config=None) -> list[Command]:
                     if provider and not (provider.supports_tools or getattr(provider, "owns_context", False)):
                         raise CommandError("this provider cannot call MCP tools; select a tool-capable provider with /connect")
                 from ..ui.chat import UserBlock
-                request = f"/{name}" + (f" {args}" if args else "")
+                request = f"/{shown or name}" + (f" {args}" if args else "")
                 expanded = expand(body, args)
-                expanded = plugins.expand_definition(expanded, root)
+                expanded = skills.expand_paths(expanded, path.parent if path else root, root)
                 instruction = (f"{request}\n\nFollow this plugin command. Plugin directory: {root}\n"
                                f"Command directory: {path.parent if path else root}\n{expanded}\n\n"
                                "Use the available host tools for equivalent operations. "
@@ -83,7 +89,8 @@ def commands(config=None) -> list[Command]:
             if path is None and plugin.catalog_shortcut and plugin.catalog_shortcut != plugin.name:
                 candidates.append(Command(f"{plugin.name}:{plugin.catalog_shortcut}", summary,
                     f"/{plugin.catalog_shortcut} [arguments]", invoke, True))
-    # Short aliases only when unambiguous, with built-in commands taking precedence.
+    # Prefer the short name when it is unambiguous and not a built-in. The namespaced
+    # form then stays out of menus but still runs when typed.
     counts = {}
     for command in candidates:
         slug = command.name.split(":", 1)[1]
@@ -92,8 +99,24 @@ def commands(config=None) -> list[Command]:
     for command in candidates:
         slug = command.name.split(":", 1)[1]
         if counts[slug] == 1 and slug not in REGISTRY:
-            result.append(Command(slug, command.summary, command.usage, command.handler, True))
+            command.hidden = True
+            usage = command.usage.replace(f"/{command.name}", f"/{slug}", 1)
+            result.append(Command(slug, command.summary, usage, partial(command.handler, shown=slug), True))
     return result
+
+
+def inactive_hint(name: str, config) -> str:
+    """Why a typed command does nothing, when it belongs to a plugin that is off."""
+    for plugin in plugins.discover():
+        if config.plugin_active(plugin.name):
+            continue
+        slugs = {path.parent.name if path.name == "SKILL.md" else path.stem for path in plugin.skills + plugin.commands}
+        if name.split(":", 1)[0] == plugin.name.lower() or name in {slug.lower() for slug in slugs} \
+                or name == plugin.catalog_shortcut.lower():
+            if config.plugin_trusted(plugin.name):
+                return f"/{name} belongs to {plugin.name}, which is disabled. Run /plugins enable {plugin.name}."
+            return f"/{name} belongs to {plugin.name}, which you have not trusted. Run /plugins trust {plugin.name}."
+    return ""
 
 
 def entry_instructions(plugin, config):

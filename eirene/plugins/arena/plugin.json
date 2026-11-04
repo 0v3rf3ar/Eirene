@@ -1,0 +1,10 @@
+{
+  "name": "arena",
+  "version": "1.0.0",
+  "description": "Run a tournament over one task: sub-agents with different strategies attack each other's answers until one survives. Adapted for Eirene from Jake Schincariol's arena-skill.",
+  "author": {
+    "name": "Eirene"
+  },
+  "license": "MIT",
+  "skills": "skills"
+}

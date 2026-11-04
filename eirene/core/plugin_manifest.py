@@ -22,13 +22,22 @@ def read_object(path: Path) -> dict:
     return value
 
 
-def normalize(root: Path, fallback: str) -> dict:
+def normalize(root: Path, fallback: str, entry: dict | None = None) -> dict:
+    """Read a bundle's declarations; a marketplace ``entry`` overrides its manifest.
+
+    Marketplace entries may share one repository, so a component list in the
+    entry selects exactly those files instead of everything in the default folder.
+    """
     manifest = next((p for p in (root / ".claude-plugin/plugin.json",
                                 root / ".codex-plugin/plugin.json",
                                 root / ".agent-plugin/plugin.json",
                                 root / ".github/plugin/plugin.json",
                                 root / "plugin.json") if p.is_file()), None)
     body = read_object(manifest) if manifest else {}
+    selected = set()
+    if entry:
+        body = {**body, **{key: value for key, value in entry.items() if key != "source"}}
+        selected = {key for key in ("skills", "commands", "agents") if entry.get(key)}
     name = body.get("name", fallback)
     if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
         raise ValueError("plugin must have a simple alphanumeric name")
@@ -42,7 +51,7 @@ def normalize(root: Path, fallback: str) -> dict:
             warnings.append(f"unsupported {key} declaration")
             raw = []
         found = set()
-        for value in defaults + raw:
+        for value in ([] if key in selected else defaults) + raw:
             if not isinstance(value, str):
                 raise ValueError(f"invalid {key} path")
             path = inside(root, value)
@@ -56,6 +65,10 @@ def normalize(root: Path, fallback: str) -> dict:
 
     skills = markdown("skills", ["skills", "SKILL.md"])
     commands = markdown("commands", ["commands"])
+    # A skill may carry its own commands: skills/<skill>/commands/*.md.
+    commands = sorted({*commands, *(
+        item.relative_to(root).as_posix() for skill in skills if skill.endswith("/SKILL.md")
+        for item in (root / skill).parent.glob("commands/*.md") if item.is_file())})
     agents = markdown("agents", ["agents"])
     if agents:
         warnings.append("agent profiles use the selected provider/model through delegate_tasks; native CLIs use their own delegation tools")

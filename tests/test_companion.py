@@ -69,14 +69,24 @@ def test_sixel_and_ordinary_terminal_detection(monkeypatch):
     assert prepare_renderer({}) is None
 
 
-@pytest.mark.parametrize("name", ["idle.png", "idle-blink.png", "q.png", "work.png", "sleepy.png", "angry.png", "furious.png"])
+DELTA_FRAMES = ["idle-blink.png", "glint-1.png", "glint-2.png", "glint-3.png",
+                "hum-1.png", "hum-2.png", "hum-3.png"]
+
+
+@pytest.mark.parametrize("name", ["idle.png", "q.png", "work.png", "sleepy.png", "angry.png",
+                                  "furious.png", *DELTA_FRAMES])
 def test_packaged_portraits_touch_the_bottom_of_the_frame(name):
     from PIL import Image
     path = ASSETS / name
-    assert path.stat().st_size < 5_000
     with Image.open(path) as source:
-        assert source.size == (128, 128)
         assert source.info["Author"] == "s3p"
+        if name in DELTA_FRAMES:
+            # Only the changed pixels are packaged, pasted over idle.
+            assert source.info["base"] == "idle.png"
+            assert path.stat().st_size < 1_000
+        else:
+            assert source.size == (128, 128)
+            assert path.stat().st_size < 5_000
     frame = portrait_frame(name)
     assert frame.size == (128, 128) and frame.mode == "RGBA"
     assert frame.getchannel("A").getbbox()[3] == frame.height
@@ -88,6 +98,26 @@ def test_blink_keeps_same_silhouette_size_and_position():
     blink = portrait_frame("idle-blink.png")
     assert idle.getchannel("A").getbbox() == blink.getchannel("A").getbbox()
     assert idle.tobytes() != blink.tobytes()
+
+
+@pytest.mark.parametrize("name", DELTA_FRAMES)
+def test_delta_frames_register_with_idle(name):
+    idle = portrait_frame("idle.png")
+    frame = portrait_frame(name)
+    assert frame.size == idle.size
+    changed = [(x, y) for x in range(128) for y in range(128)
+               if frame.getpixel((x, y)) != idle.getpixel((x, y))]
+    assert 0 < len(changed) < 400, "a small change on top of the idle pose"
+    # Her feet and body never move; only the face or a mark beside her head.
+    assert max(y for _, y in changed) < 70
+
+
+def test_every_moment_frame_is_packaged():
+    from eirene.ui.companion import MOMENTS
+    for steps in MOMENTS.values():
+        for filename, seconds in steps:
+            assert portrait_frame(filename).size == (128, 128)
+            assert seconds >= 0.4, "refreshes run every 0.4 seconds"
 
 
 def test_sixel_encoder_skips_transparent_pixels_including_last_band():
@@ -492,6 +522,66 @@ async def test_clicks_escalate_anger_and_cool_down_to_current_activity(workdir, 
         clock.now = companion._angry_until
         companion.refresh_companion()
         assert companion.state == "question"
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_idle_moments_play_only_while_left_alone(workdir, monkeypatch):
+    from types import SimpleNamespace
+    from textual_image.widget import HalfcellImage
+    import eirene.app as app_mod
+    import eirene.ui.companion as companion_mod
+    from test_tui import start
+
+    monkeypatch.setattr(app_mod, "prepare_renderer", lambda config: HalfcellImage)
+    app, pilot, context = await start(workdir, companion=True)
+    try:
+        companion = app.query_one(Companion)
+        clock = SimpleNamespace(now=companion._last_interaction)
+        monkeypatch.setattr(companion_mod, "time", SimpleNamespace(monotonic=lambda: clock.now))
+        monkeypatch.setattr(companion._random, "choice", lambda options: "glint")
+        companion._next_moment = clock.now + 5
+        companion._tick = 0
+        companion.refresh_companion()
+        assert companion._drawn == "idle.png"
+        clock.now += 5
+        companion._tick = 0
+        companion.refresh_companion()
+        assert companion._drawn == "glint-1.png"
+        clock.now += 0.4
+        companion.refresh_companion()
+        assert companion._drawn == "glint-2.png"
+        clock.now += 0.4
+        companion.refresh_companion()
+        assert companion._drawn == "glint-3.png"
+        clock.now += 0.4
+        companion._tick = 0
+        companion.refresh_companion()
+        assert companion._drawn == "idle.png"
+        gap = companion._next_moment - clock.now
+        assert companion_mod.MOMENT_GAP[0] <= gap <= companion_mod.MOMENT_GAP[1]
+
+        # Typing interrupts a moment and postpones the next one.
+        clock.now = companion._next_moment
+        companion.refresh_companion()
+        assert companion._drawn == "glint-1.png"
+        companion.wake()
+        companion._tick = 0
+        companion.refresh_companion()
+        assert companion._drawn == "idle.png"
+        assert companion._next_moment > clock.now + companion_mod.MOMENT_GAP[0] - 0.01
+
+        # Never while she works, and never with reduced motion.
+        app.status.start()
+        clock.now = companion._next_moment
+        companion.refresh_companion()
+        assert companion.state == "thinking" and companion._moment is None
+        app.status.stop("done")
+        app.config.set("reduce_motion", True)
+        clock.now = companion._next_moment + 60
+        companion._last_interaction = clock.now
+        companion.refresh_companion()
+        assert companion._drawn == "idle.png" and companion._moment is None
     finally:
         await context.__aexit__(None, None, None)
 

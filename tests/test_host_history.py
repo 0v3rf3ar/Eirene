@@ -27,7 +27,7 @@ def request_json(request):
     return json.loads(content)
 
 KEYS = ['chatgpt', 'chatgpt-plan', 'anthropic', 'gemini', 'groq', 'deepseek',
-        'kimi', 'ollama', 'ollama-local', 'perplexity', 'omniroute',
+        'kimi', 'ollama', 'ollama-local', 'llamacpp', 'perplexity', 'omniroute',
         'custom-openai', 'custom-anthropic']
 
 

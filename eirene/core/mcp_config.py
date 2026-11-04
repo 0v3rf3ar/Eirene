@@ -339,9 +339,10 @@ def prepare_local(name: str, definition: dict, base: Path | None = None) -> dict
     reads.extend(item for item in derived if Path(item).exists() and _safe_grant(Path(item)))
     launcher = Path(found).stem
     directory = paths.home() / 'mcp-runtime' / name
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    from .private_dirs import make_private_dir
+    make_private_dir(directory, parents=True)
     runtime_home = directory / 'home'
-    runtime_home.mkdir(exist_ok=True, mode=0o700)
+    make_private_dir(runtime_home)
     env = dict(result.get('env', {}))
     # Persist server-owned OAuth profiles, browser downloads, and configuration.
     # This is a private child-process home, not the user's entire home directory.

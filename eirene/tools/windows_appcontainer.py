@@ -4,7 +4,7 @@ No command reaches ResumeThread until its kernel token has been checked and it
 belongs to a kill-on-close Job. No credentials or handles are inherited except
 explicitly supplied standard handles, and the token carries exactly the
 capabilities the runtime requested. Workspace grants are
-managed by windows_runtime. See docs/windows-sandbox.md for the boundary.
+managed by windows_runtime. See docs/platforms/windows-sandbox.md for the boundary.
 """
 
 from __future__ import annotations

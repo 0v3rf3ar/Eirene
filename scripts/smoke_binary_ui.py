@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise typing /plugins, Esc, the plugin popup, and optional binary replacement."""
+"""Exercise typing /plugins, Esc, the plugin popup and its tabs, and optional binary replacement."""
 from __future__ import annotations
 
 import argparse
@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -36,7 +37,7 @@ def check(binary: Path, replacement: Path | None = None):
         master,slave=pty.openpty()
         fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',36,110,0,0))
         process=subprocess.Popen([str(target),'-C',str(workspace)],stdin=slave,stdout=slave,
-                                 stderr=slave,cwd=workspace,env=env)
+                                 stderr=slave,cwd=workspace,env=env,start_new_session=True)
         os.close(slave)
         transcript=bytearray()
         def pump(seconds, allow_exit=False):
@@ -64,10 +65,16 @@ def check(binary: Path, replacement: Path | None = None):
             os.write(master,b'\r')  # Submit /plugins and open the floating catalog.
             pump(.6)
             deadline=time.monotonic()+5
+            while b'Marketplace' not in transcript and time.monotonic()<deadline:
+                pump(.1)
+            if b'Marketplace' not in transcript:
+                raise RuntimeError('Frozen plugin catalog did not open: '+transcript[-5000:].decode(errors='replace'))
+            os.write(master,b'\t')  # The catalog is on the Marketplace tab; a profile with no plugins opens on Installed.
+            deadline=time.monotonic()+5
             while b'ponytail' not in transcript and time.monotonic()<deadline:
                 pump(.1)
             if b'ponytail' not in transcript:
-                raise RuntimeError('Frozen plugin catalog did not open: '+transcript[-5000:].decode(errors='replace'))
+                raise RuntimeError('Tab did not reach the frozen Marketplace tab: '+transcript[-5000:].decode(errors='replace'))
             os.write(master,b'\x1b')
             pump(.5)
             os.write(master,b'\x04')
@@ -76,11 +83,15 @@ def check(binary: Path, replacement: Path | None = None):
             if process.returncode or b'Traceback' in transcript or b'zlib.error' in transcript:
                 raise RuntimeError(f'Frozen UI failed: {transcript[-3000:].decode(errors="replace")}')
         finally:
-            if process.poll() is None:
-                process.kill()
-                process.wait()
+            # A frozen binary is a bootloader plus the app it starts, so stopping
+            # only the first leaves the app running: stop the whole group, always.
+            try:
+                os.killpg(process.pid,signal.SIGKILL)
+            except (ProcessLookupError,PermissionError):
+                pass
+            process.wait()
             os.close(master)
-    print('Frozen /plugins typing, Esc, popup dismissal, and exit passed'
+    print('Frozen /plugins typing, Esc, Tab, popup dismissal, and exit passed'
           + (' after replacing the running executable.' if replacement else '.'))
 
 

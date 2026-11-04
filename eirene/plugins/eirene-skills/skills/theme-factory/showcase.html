@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Theme showcase</title>
+<style>
+:root{--bg:#fff;--fg:#1d1d1f;--muted:#5f6368;--line:#e2e2e2}
+@media (prefers-color-scheme:dark){:root{--bg:#151515;--fg:#ececec;--muted:#a0a0a0;--line:#333}}
+body{margin:0;padding:32px 16px;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}
+h1{font-size:22px;margin:0 auto 24px;max-width:1100px}
+main{display:grid;gap:20px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));max-width:1100px;margin:auto}
+.card{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.sample{padding:22px 20px;position:relative}
+.sample h2{margin:0 0 6px;font-size:24px;font-weight:700}
+.sample p{margin:0;font-size:14px;opacity:.9}
+.sample i{position:absolute;right:20px;top:24px;width:28px;height:28px;border-radius:50%}
+.sws{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:14px 16px}
+.sw{display:grid;grid-template-columns:22px 1fr;column-gap:8px;font-size:13px}
+.sw span{grid-row:span 2;width:22px;height:22px;border-radius:4px;border:1px solid var(--line)}
+.sw code{color:var(--muted);font-size:12px}
+.type{margin:0;padding:0 16px 14px;color:var(--muted);font-size:13px}
+</style></head><body>
+<h1>Theme showcase</h1>
+<main>
+<section class="card">
+  <div class="sample" style="background:#d4e4f7;color:#fafafa"><h2 style="font-family:"DejaVu Sans", Verdana, sans-serif">Arctic Frost</h2><p style="font-family:"DejaVu Sans", Verdana, sans-serif">Cool and crisp; clear, precise and professional.</p><i style="background:#4a6fa5"></i></div>
+  <div class="sws"><div class="sw"><span style="background:#d4e4f7"></span><b>Ice Blue</b><code>#d4e4f7</code></div><div class="sw"><span style="background:#4a6fa5"></span><b>Steel Blue</b><code>#4a6fa5</code></div><div class="sw"><span style="background:#c0c0c0"></span><b>Silver</b><code>#c0c0c0</code></div><div class="sw"><span style="background:#fafafa"></span><b>Crisp White</b><code>#fafafa</code></div></div>
+  <p class="type">Headers: DejaVu Sans Bold · Body: DejaVu Sans</p>
+</section>
+<section class="card">
+  <div class="sample" style="background:#4a7c59;color:#f5f3ed"><h2 style="font-family:"DejaVu Serif", Georgia, serif">Botanical Garden</h2><p style="font-family:"DejaVu Sans", Verdana, sans-serif">Fresh and organic, full of garden color.</p><i style="background:#f9a620"></i></div>
+  <div class="sws"><div class="sw"><span style="background:#4a7c59"></span><b>Fern Green</b><code>#4a7c59</code></div><div class="sw"><span style="background:#f9a620"></span><b>Marigold</b><code>#f9a620</code></div><div class="sw"><span style="background:#b7472a"></span><b>Terracotta</b><code>#b7472a</code></div><div class="sw"><span style="background:#f5f3ed"></span><b>Cream</b><code>#f5f3ed</code></div></div>
+  <p class="type">Headers: DejaVu Serif Bold · Body: DejaVu Sans</p>
+</section>
+<section class="card">
+  <div class="sample" style="background:#d4a5a5;color:#5d2e46"><h2 style="font-family:"FreeSans", Verdana, sans-serif">Desert Rose</h2><p style="font-family:"FreeSans", Verdana, sans-serif">Soft and refined, with dusty, muted tones.</p><i style="background:#b87d6d"></i></div>
+  <div class="sws"><div class="sw"><span style="background:#d4a5a5"></span><b>Dusty Rose</b><code>#d4a5a5</code></div><div class="sw"><span style="background:#b87d6d"></span><b>Clay</b><code>#b87d6d</code></div><div class="sw"><span style="background:#e8d5c4"></span><b>Sand</b><code>#e8d5c4</code></div><div class="sw"><span style="background:#5d2e46"></span><b>Deep Burgundy</b><code>#5d2e46</code></div></div>
+  <p class="type">Headers: FreeSans Bold · Body: FreeSans</p>
+</section>
+<section class="card">
+  <div class="sample" style="background:#2d4a2b;color:#faf9f6"><h2 style="font-family:"FreeSerif", Georgia, serif">Forest Canopy</h2><p style="font-family:"FreeSans", Verdana, sans-serif">Natural and grounded, in the tones of a dense forest.</p><i style="background:#7d8471"></i></div>
+  <div class="sws"><div class="sw"><span style="background:#2d4a2b"></span><b>Forest Green</b><code>#2d4a2b</code></div><div class="sw"><span style="background:#7d8471"></span><b>Sage</b><code>#7d8471</code></div><div class="sw"><span style="background:#a4ac86"></span><b>Olive</b><code>#a4ac86</code></div><div class="sw"><span style="background:#faf9f6"></span><b>Ivory</b><code>#faf9f6</code></div></div>
+  <p class="type">Headers: FreeSerif Bold · Body: FreeSans</p>
+</section>
+<section class="card">
+  <div class="sample" style="background:#f4a900;color:#4a403a"><h2 style="font-family:"FreeSans", Verdana, sans-serif">Golden Hour</h2><p style="font-family:"FreeSans", Verdana, sans-serif">Rich autumn warmth that feels inviting and assured.</p><i style="background:#c1666b"></i></div>
+  <div class="sws"><div class="sw"><span style="background:#f4a900"></span><b>Mustard Yellow</b><code>#f4a900</code></div><div class="sw"><span style="background:#c1666b"></span><b>Terracotta</b><code>#c1666b</code></div><div class="sw"><span style="background:#d4b896"></span><b>Warm Beige</b><code>#d4b896</code></div><div class="sw"><span style="background:#4a403a"></span><b>Chocolate Brown</b><code>#4a403a</code></div></div>
+  <p class="type">Headers: FreeSans Bold · Body: FreeSans</p>
+</section>
+<section class="card">
+  <div class="sample" style="background:#2b1e3e;color:#e6e6fa"><h2 style="font-family:"FreeSans", Verdana, sans-serif">Midnight Galaxy</h2><p style="font-family:"FreeSans", Verdana, sans-serif">Dramatic and cosmic, deep purples with a touch of mystery.</p><i style="background:#4a4e8f"></i></div>
+  <div class="sws"><div class="sw"><span style="background:#2b1e3e"></span><b>Deep Purple</b><code>#2b1e3e</code></div><div class="sw"><span style="background:#4a4e8f"></span><b>Cosmic Blue</b><code>#4a4e8f</code></div><div class="sw"><span style="background:#a490c2"></span><b>Lavender</b><code>#a490c2</code></div><div class="sw"><span style="background:#e6e6fa"></span><b>Silver</b><code>#e6e6fa</code></div></div>
+  <p class="type">Headers: FreeSans Bold · Body: FreeSans</p>
+</section>
+<section class="card">
+  <div class="sample" style="background:#36454f;color:#ffffff"><h2 style="font-family:"DejaVu Sans", Verdana, sans-serif">Modern Minimalist</h2><p style="font-family:"DejaVu Sans", Verdana, sans-serif">Clean and current, a restrained greyscale that suits almost anything.</p><i style="background:#708090"></i></div>
+  <div class="sws"><div class="sw"><span style="background:#36454f"></span><b>Charcoal</b><code>#36454f</code></div><div class="sw"><span style="background:#708090"></span><b>Slate Gray</b><code>#708090</code></div><div class="sw"><span style="background:#d3d3d3"></span><b>Light Gray</b><code>#d3d3d3</code></div><div class="sw"><span style="background:#ffffff"></span><b>White</b><code>#ffffff</code></div></div>
+  <p class="type">Headers: DejaVu Sans Bold · Body: DejaVu Sans</p>
+</section>
+<section class="card">
+  <div class="sample" style="background:#1a2332;color:#f1faee"><h2 style="font-family:"DejaVu Sans", Verdana, sans-serif">Ocean Depths</h2><p style="font-family:"DejaVu Sans", Verdana, sans-serif">Calm and professional, with the steadiness of deep water.</p><i style="background:#2d8b8b"></i></div>
+  <div class="sws"><div class="sw"><span style="background:#1a2332"></span><b>Deep Navy</b><code>#1a2332</code></div><div class="sw"><span style="background:#2d8b8b"></span><b>Teal</b><code>#2d8b8b</code></div><div class="sw"><span style="background:#a8dadc"></span><b>Seafoam</b><code>#a8dadc</code></div><div class="sw"><span style="background:#f1faee"></span><b>Cream</b><code>#f1faee</code></div></div>
+  <p class="type">Headers: DejaVu Sans Bold · Body: DejaVu Sans</p>
+</section>
+<section class="card">
+  <div class="sample" style="background:#e76f51;color:#264653"><h2 style="font-family:"DejaVu Serif", Georgia, serif">Sunset Boulevard</h2><p style="font-family:"DejaVu Sans", Verdana, sans-serif">Warm and lively, like the last hour of a summer evening.</p><i style="background:#f4a261"></i></div>
+  <div class="sws"><div class="sw"><span style="background:#e76f51"></span><b>Burnt Orange</b><code>#e76f51</code></div><div class="sw"><span style="background:#f4a261"></span><b>Coral</b><code>#f4a261</code></div><div class="sw"><span style="background:#e9c46a"></span><b>Warm Sand</b><code>#e9c46a</code></div><div class="sw"><span style="background:#264653"></span><b>Deep Purple</b><code>#264653</code></div></div>
+  <p class="type">Headers: DejaVu Serif Bold · Body: DejaVu Sans</p>
+</section>
+<section class="card">
+  <div class="sample" style="background:#0066ff;color:#ffffff"><h2 style="font-family:"DejaVu Sans", Verdana, sans-serif">Tech Innovation</h2><p style="font-family:"DejaVu Sans", Verdana, sans-serif">Bold, modern and high-contrast.</p><i style="background:#00ffff"></i></div>
+  <div class="sws"><div class="sw"><span style="background:#0066ff"></span><b>Electric Blue</b><code>#0066ff</code></div><div class="sw"><span style="background:#00ffff"></span><b>Neon Cyan</b><code>#00ffff</code></div><div class="sw"><span style="background:#1e1e1e"></span><b>Dark Gray</b><code>#1e1e1e</code></div><div class="sw"><span style="background:#ffffff"></span><b>White</b><code>#ffffff</code></div></div>
+  <p class="type">Headers: DejaVu Sans Bold · Body: DejaVu Sans</p>
+</section>
+</main>
+</body></html>

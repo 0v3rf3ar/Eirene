@@ -71,7 +71,7 @@ def test_prompt_run_logs_a_session(workdir, connected, answering, capsys):
 
 
 def test_prompt_run_without_a_provider(workdir, capsys):
-    assert main(["-p", "hi", "-C", str(workdir)]) == 1
+    assert main(["-p", "hi", "-C", str(workdir)]) == 3
     assert "/connect" in capsys.readouterr().err
 
 
@@ -81,7 +81,7 @@ def test_prompt_run_reports_a_bad_key(workdir, connected, capsys):
                               headers={"content-type": "application/json"})
     base.set_transport(httpx.MockTransport(handler))
     try:
-        assert main(["-p", "hi", "-C", str(workdir)]) == 1
+        assert main(["-p", "hi", "-C", str(workdir)]) == 4
         assert "rejected" in capsys.readouterr().err
     finally:
         base.set_transport(None)
@@ -311,8 +311,9 @@ def test_json_answer_reports_input_identity_and_usage(workdir, connected, answer
 
 
 def test_json_configuration_failure_is_still_a_result(workdir, capsys):
-    assert main(["-p", "hi", "-C", str(workdir), "--json"]) == 1
+    assert main(["-p", "hi", "-C", str(workdir), "--json"]) == 3
     result = json.loads(capsys.readouterr().out)
+    assert result["error_kind"] == "config" and result["exit_code"] == 3
     assert result["input"] == "hi" and result["output"] == ""
     assert result["status"] == "failed" and result["output_tokens"] == 0
     assert result["errors"]
@@ -404,6 +405,7 @@ def test_json_timeout_retains_partial_answer(workdir, connected, monkeypatch, ca
     assert result["status"] == "timeout" and result["output"] == "partial"
 
 
+@pytest.mark.usefixtures("trusted_plugins")
 def test_headless_plugin_command_expands_and_awaits_turn(workdir, connected, capsys):
     from eirene.core import paths
 
@@ -501,3 +503,291 @@ def test_read_output_events_are_silent(capsys, failed):
     _emit(ToolFinished('page', 'read_output', 'internal artifact', 'internal result', failed, 0), False)
     captured = capsys.readouterr()
     assert captured.out == captured.err == ''
+
+
+def test_task_only_offers_the_granted_tools(workdir, connected):
+    from eirene.scheduling.base import Schedule, Task, save_tasks
+    from eirene.scheduling.history import finished_runs, load_output
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, content=ANSWER.encode(),
+                              headers={"content-type": "text/event-stream"})
+
+    base.set_transport(httpx.MockTransport(handler))
+    save_tasks([Task(id="t1", name="n", prompt="look around", cwd=str(workdir),
+                     schedule=Schedule("hourly"), provider="chatgpt", model="gpt-4o",
+                     tools=["read"])])
+    try:
+        assert main(["--task", "t1"]) == 0
+        names = {tool["function"]["name"] for tool in seen["body"].get("tools", [])}
+        assert "read_file" in names
+        assert not names & {"write_file", "edit_file", "run_command", "web_fetch",
+                            "delegate_tasks", "request_full_access"}
+        item = finished_runs("t1")[0]
+        assert load_output("t1", item["run"])["output"].strip() == "done"
+    finally:
+        base.set_transport(None)
+
+
+def test_answers_around_a_tool_call_stay_separate_paragraphs():
+    from eirene.core.agent import Answer, ToolFinished, ToolStarted
+    from eirene.headless import RunOutput
+    output = RunOutput("x", True, True)
+    output.event(Answer("Reading the file."))
+    output.event(ToolStarted("t1", "read", "notes.txt", "read"))
+    output.event(Answer("## Results"))
+    output.event(Answer(" all good"))
+    assert output.result["output"] == "Reading the file.\n\n## Results all good"
+
+
+# --- launch limits, stdin, streaming and exit codes -------------------------
+
+TOOL_CALL = ('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function",'
+             '"function":{"name":"write_file","arguments":"{\\"path\\":\\"out.txt\\",'
+             '\\"content\\":\\"hi\\"}"}}]}}]}\n\n'
+             'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}],'
+             '"usage":{"prompt_tokens":50,"completion_tokens":10}}\n\n'
+             "data: [DONE]\n\n")
+
+
+@pytest.fixture
+def recording():
+    """Answer each request, first with a file write, and keep the request bodies."""
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        body = TOOL_CALL if len(bodies) == 1 else ANSWER
+        return httpx.Response(200, content=body.encode(),
+                              headers={"content-type": "text/event-stream"})
+    base.set_transport(httpx.MockTransport(handler))
+    yield bodies
+    base.set_transport(None)
+
+
+def _user_text(body):
+    return "\n".join(str(m.get("content")) for m in body["messages"] if m["role"] == "user")
+
+
+def _model_text(body):
+    return "\n".join(str(m.get("content")) for m in body["messages"])
+
+
+def test_run_flags_need_a_prompt(workdir, capsys):
+    assert main(["-C", str(workdir), "--timeout", "5"]) == 2
+    assert "--timeout" in capsys.readouterr().err
+    assert main(["--task", "t1", "--quiet"]) == 2
+
+
+def test_tools_flag_uses_the_schedule_format(capsys):
+    args = build_parser().parse_args(["-p", "x", "--tools", "shell, files"])
+    assert args.tools == ["read", "edit", "commands"]
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["-p", "x", "--tools", "rootkit"])
+    assert "unknown tool group" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("flag", ["--timeout", "--max-steps", "--max-tokens"])
+def test_limits_must_be_positive(flag, capsys):
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["-p", "x", flag, "0"])
+
+
+def test_json_and_stream_json_are_exclusive(workdir, capsys):
+    assert main(["-p", "x", "-C", str(workdir), "--json", "--stream-json"]) == 2
+
+
+def test_tools_flag_limits_the_offered_tools(workdir, connected, recording, capsys):
+    assert main(["-p", "look", "-C", str(workdir), "--tools", "read"]) == 0
+    names = {tool["function"]["name"] for tool in recording[0].get("tools", [])}
+    assert "read_file" in names
+    assert not names & {"write_file", "edit_file", "run_command", "web_fetch",
+                        "delegate_tasks", "request_full_access"}
+    assert "Allowed tools: read" in _model_text(recording[0])
+    # The saved session keeps the user's words, not the access note.
+    from eirene.core import paths
+    log = (paths.sessions_dir() / f"{list_sessions()[0]['id']}.jsonl").read_text()
+    assert "look" in log and "Allowed tools" not in log
+
+
+def test_restricted_tools_fail_closed_on_a_native_tool_provider(workdir, connected, monkeypatch):
+    from eirene.core.agent import Agent, Failed
+    from eirene.headless import RunOutput, _drive
+    import asyncio
+
+    class Native:
+        owns_context, supports_tools = True, False
+
+    real_use = Agent.use
+
+    def use(self, provider, key, model):
+        real_use(self, provider, key, model)
+        self.provider = Native()
+    monkeypatch.setattr(Agent, "use", use)
+    output = RunOutput("x", True, True)
+    code = asyncio.run(_drive("x", workdir, "", "", "auto", True, output=output,
+                              tool_groups=["read"]))
+    assert code == 1 and output.result["error_kind"] == "config"
+    assert "cannot be enforced" in output.result["errors"][0]
+
+
+def test_json_result_lists_tools_files_and_duration(workdir, connected, recording, capsys):
+    assert main(["-p", "write it", "-C", str(workdir), "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert [call["name"] for call in result["tool_calls"]] == ["write_file"]
+    assert result["tool_call_count"] == 1
+    assert result["files_edited"] == ["out.txt"]
+    assert result["input_tokens"] == 55 and result["output_tokens"] == 12
+    assert result["duration_seconds"] >= 0 and result["session"]
+    assert result["cost_usd"] is None
+
+
+def test_json_reports_cost_when_prices_are_configured(workdir, connected, answering, capsys):
+    connected.set("model_costs", {"gpt-4o": {"input_per_million": 1_000_000,
+                                             "output_per_million": 2_000_000}})
+    connected.save()
+    assert main(["-p", "hi", "-C", str(workdir), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["cost_usd"] == 9.0
+
+
+def test_stream_json_emits_events_then_the_result(workdir, connected, recording, capsys):
+    assert main(["-p", "write it", "-C", str(workdir), "--stream-json"]) == 0
+    captured = capsys.readouterr()
+    events = [json.loads(line) for line in captured.out.splitlines()]
+    kinds = [event["type"] for event in events]
+    assert kinds[0] == "start" and kinds[-1] == "result"
+    assert {"tool_start", "tool_end", "text", "turn_done"} <= set(kinds)
+    assert events[-1]["output"] == "done" and events[-1]["exit_code"] == 0
+    assert "write_file" not in captured.err
+
+
+def test_quiet_hides_tool_activity(workdir, connected, recording, capsys):
+    assert main(["-p", "write it", "-C", str(workdir), "-q"]) == 0
+    captured = capsys.readouterr()
+    assert "done" in captured.out and "write_file" not in captured.err
+
+
+def test_max_steps_stops_the_turn_as_incomplete(workdir, connected, recording, capsys):
+    assert main(["-p", "write it", "-C", str(workdir), "--max-steps", "1", "--json"]) == 6
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "incomplete" and result["error_kind"] == "incomplete"
+    assert "1 steps" in result["errors"][0]
+    assert len(recording) == 1
+
+
+def test_max_tokens_stops_before_running_more_tools(workdir, connected, recording, capsys):
+    assert main(["-p", "write it", "-C", str(workdir), "--max-tokens", "40", "--json"]) == 6
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "incomplete" and "token limit" in result["errors"][0]
+    assert result["tool_calls"] == [] and not (workdir / "out.txt").exists()
+
+
+def test_timeout_flag_is_used(workdir, connected, monkeypatch, capsys):
+    from eirene import headless
+    seen = {}
+
+    def fake(text, cwd, **kwargs):
+        seen.update(kwargs)
+        return 0
+    monkeypatch.setattr(headless, "run_prompt", fake)
+    assert main(["-p", "hi", "-C", str(workdir), "--timeout", "42"]) == 0
+    assert seen["task_timeout"] == 42
+
+
+def test_network_failure_has_its_own_exit_code(workdir, connected, monkeypatch, capsys):
+    from eirene.core.agent import Agent
+    from eirene.core.errors import ConnectionFailed
+    monkeypatch.setattr(Agent, "retry_attempts", property(lambda self: 1))
+
+    def handler(request):
+        raise httpx.ConnectError("refused", request=request)
+    base.set_transport(httpx.MockTransport(handler))
+    try:
+        assert main(["-p", "hi", "-C", str(workdir), "--json"]) == 5
+        result = json.loads(capsys.readouterr().out)
+        assert result["error_kind"] == "network"
+    finally:
+        base.set_transport(None)
+
+
+def test_error_kinds():
+    from eirene.core.errors import (AuthError, ConfigError, ConnectionFailed, ModelNotFound,
+                                    ProviderError, RateLimitError, ToolError, error_kind)
+    assert error_kind(AuthError()) == "auth"
+    assert error_kind(ModelNotFound("x")) == error_kind(ConfigError("x")) == "config"
+    assert error_kind(ConnectionFailed("h")) == error_kind(RateLimitError()) == "network"
+    assert error_kind(ProviderError("bad", status=503)) == "network"
+    assert error_kind(ProviderError("bad", status=400)) == "provider"
+    assert error_kind(ToolError("x")) == "tool"
+    try:
+        try:
+            raise ConnectionFailed("h")
+        except ProviderError as inner:
+            raise ProviderError("cannot reach h. try later") from inner
+    except ProviderError as outer:
+        assert error_kind(outer) == "network"
+    assert error_kind(ValueError()) == "failed"
+
+
+class _Pipe:
+    """A stand-in stdin: piped bytes, or a pipe that stays open with nothing in it."""
+
+    def __init__(self, data=None):
+        import io
+        import threading
+        self.data, self.blocked = data, threading.Event()
+        self.buffer = io.BytesIO(data) if data is not None else self
+
+    def isatty(self):
+        return False
+
+    def read1(self, size):
+        self.blocked.wait()
+        return b""
+
+
+def test_piped_input_is_added_after_the_prompt(monkeypatch):
+    from eirene import __main__ as cli
+    monkeypatch.setattr(sys, "stdin", _Pipe(b"diff --git a b\n"))
+    assert cli.read_stdin("review this") == "review this\n\n<stdin>\ndiff --git a b\n</stdin>"
+
+
+def test_dash_reads_the_whole_prompt_from_stdin(monkeypatch):
+    from eirene import __main__ as cli
+    monkeypatch.setattr(sys, "stdin", _Pipe(b"  explain the project\n"))
+    assert cli.read_stdin("-") == "explain the project"
+
+
+def test_open_unused_stdin_does_not_hang(monkeypatch):
+    from eirene import __main__ as cli
+    pipe = _Pipe()
+    monkeypatch.setattr(sys, "stdin", pipe)
+    monkeypatch.setattr(cli, "STDIN_WAIT", 0.05)
+    try:
+        assert cli.read_stdin("hi") == "hi"
+    finally:
+        pipe.blocked.set()
+
+
+def test_oversized_stdin_is_refused(monkeypatch, workdir, capsys):
+    from eirene import __main__ as cli
+    monkeypatch.setattr(cli, "STDIN_LIMIT", 10)
+    monkeypatch.setattr(sys, "stdin", _Pipe(b"x" * 100))
+    assert cli.read_stdin("hi") is None
+    monkeypatch.setattr(sys, "stdin", _Pipe(b"x" * 100))
+    assert main(["-p", "hi", "-C", str(workdir)]) == 2
+    assert "larger than" in capsys.readouterr().err
+
+
+def test_slash_commands_ignore_piped_input(monkeypatch):
+    from eirene import __main__ as cli
+    monkeypatch.setattr(sys, "stdin", _Pipe(b"ignored"))
+    assert cli.read_stdin("/providers") == "/providers"
+
+
+def test_piped_prompt_reaches_the_model(workdir, connected, recording, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "stdin", _Pipe(b"needle-in-stdin"))
+    main(["-p", "what is this", "-C", str(workdir), "--tools", "read"])
+    assert "needle-in-stdin" in _user_text(recording[0])

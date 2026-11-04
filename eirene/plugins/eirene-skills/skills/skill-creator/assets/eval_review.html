@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trigger test queries</title>
+<style>
+  :root { --bg: #f6f7f9; --panel: #fff; --text: #1c1e22; --muted: #6a707a; --line: #e1e4e8;
+          --accent: #2f6fdb; --accent-text: #fff; --yes: #1a7f37; --no: #9a3412; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121417; --panel: #1b1e23; --text: #e6e8eb; --muted: #9aa1ab; --line: #2d3138;
+            --accent: #7aa7ff; --accent-text: #0c1222; --yes: #5fd07d; --no: #fdba74; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 20px 16px 60px; }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  .muted { color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin: 14px 0; }
+  .row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: start;
+         border-top: 1px solid var(--line); padding: 10px 0; }
+  .row:first-child { border-top: 0; }
+  textarea { width: 100%; min-height: 64px; font: inherit; padding: 8px; border-radius: 6px;
+             border: 1px solid var(--line); background: var(--bg); color: var(--text); resize: vertical; }
+  button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--panel); color: var(--text); cursor: pointer; white-space: nowrap; }
+  button.yes { color: var(--yes); border-color: var(--yes); }
+  button.no { color: var(--no); border-color: var(--no); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .bar .count { margin-right: auto; }
+  @media (max-width: 600px) { .row { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Trigger test queries: <span id="skill"></span></h1>
+  <p class="muted">Each query is something a person might type. Mark whether the skill should be used for it,
+    edit or delete queries, add your own, then export. Near-misses — requests that share words with the skill
+    but need something else — make the best "should not" cases.</p>
+  <div class="card"><strong>Current description</strong><p id="description" class="muted"></p></div>
+  <div class="bar">
+    <span class="count muted" id="count"></span>
+    <button id="add">Add query</button>
+    <button class="primary" id="export">Export eval set</button>
+  </div>
+  <div class="card" id="list"></div>
+</main>
+<script>
+const SKILL = __SKILL_NAME_PLACEHOLDER__;
+const DESCRIPTION = __SKILL_DESCRIPTION_PLACEHOLDER__;
+let items = __EVAL_DATA_PLACEHOLDER__;
+const STORE = `trigger-evals:${SKILL}`;
+try { const saved = JSON.parse(localStorage.getItem(STORE) || "null"); if (Array.isArray(saved)) items = saved; } catch {}
+document.getElementById("skill").textContent = SKILL;
+document.getElementById("description").textContent = DESCRIPTION;
+
+function save() { try { localStorage.setItem(STORE, JSON.stringify(items)); } catch {} }
+
+function render() {
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+  items.forEach((item, i) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const text = document.createElement("textarea");
+    text.value = item.query;
+    text.setAttribute("aria-label", `Query ${i + 1}`);
+    text.oninput = () => { item.query = text.value; save(); };
+    const toggle = document.createElement("button");
+    const paint = () => {
+      toggle.textContent = item.should_trigger ? "Should trigger" : "Should not trigger";
+      toggle.className = item.should_trigger ? "yes" : "no";
+    };
+    paint();
+    toggle.onclick = () => { item.should_trigger = !item.should_trigger; paint(); save(); count(); };
+    const remove = document.createElement("button");
+    remove.textContent = "Delete";
+    remove.onclick = () => { items.splice(i, 1); save(); render(); };
+    row.append(text, toggle, remove);
+    list.append(row);
+  });
+  count();
+}
+
+function count() {
+  const yes = items.filter((i) => i.should_trigger).length;
+  document.getElementById("count").textContent = `${items.length} queries · ${yes} should trigger · ${items.length - yes} should not`;
+}
+
+document.getElementById("add").onclick = () => { items.push({ query: "", should_trigger: true }); save(); render(); };
+document.getElementById("export").onclick = () => {
+  const clean = items.filter((i) => i.query.trim()).map((i) => ({ query: i.query.trim(), should_trigger: !!i.should_trigger }));
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([JSON.stringify(clean, null, 2)], { type: "application/json" }));
+  link.download = "eval_set.json";
+  link.click();
+};
+render();
+</script>
+</body>
+</html>

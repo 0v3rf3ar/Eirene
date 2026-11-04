@@ -8,3 +8,20 @@ you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
     http://www.apache.org/licenses/LICENSE-2.0
+
+The frontend-design skill in eirene/plugins/eirene-skills is adapted from the
+frontend-design skill in anthropics/claude-plugins-official, licensed under the
+Apache License, Version 2.0. It was modified for Eirene: the description, wording,
+and guidance for existing products and screenshot tooling were changed.
+
+The following bundles in eirene/plugins are adapted from third-party projects under
+the MIT License. Each folder keeps its original LICENSE file.
+
+- arena: from Jake Schincariol's arena-skill (github.com/Jakeschincariol/arena-skill,
+  commit df07b8e), modified to run on Eirene's delegate_tasks with a smaller default.
+- obsidian: from Steph Ango's obsidian-skills (github.com/kepano/obsidian-skills,
+  commit 3ccff53), with a plugin manifest added.
+- superpowers: from Jesse Vincent's Superpowers (github.com/obra/superpowers, commit
+  22f0b46, version 7.0.2), modified for Eirene's tools. The diagnosing-superpowers
+  skill and other hosts' files were removed, and the brainstorming server's remote
+  logo was disabled.

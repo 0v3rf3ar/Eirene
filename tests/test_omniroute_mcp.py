@@ -35,8 +35,6 @@ def test_optional_install_runs_no_external_installer_or_gateway(source,monkeypat
     assert plugin.mcp_servers['gateway']['env']['DATA_DIR']==str(data)
     assert plugin.mcp_servers['gateway']['write_paths']==[str(data)]
     config.set('plugin_trust',{'omniroute':True})
-    assert plugins.merged_mcp_servers(config)=={}
-    config.set('mcp_enabled',{'omniroute__gateway':True})
     definition=plugins.merged_mcp_servers(config)['omniroute__gateway']
     assert definition['network'] is True
     assert definition['env']['OMNIROUTE_BASE_URL']=='http://localhost:20128'
@@ -56,19 +54,17 @@ async def test_slash_command_installs_optional_adapter(monkeypatch):
         lambda *args,**kwargs: pytest.fail('no Git clone needed'))
     await dispatch(app,'/plugins install Omniroute')
     assert plugins.discover()[0].name=='omniroute'
-    assert '/mcp' in messages[-1]
+    assert '/plugins trust omniroute' in messages[-1]
     assert plugins.merged_mcp_servers(config)=={}
 
 
-def test_saved_connection_updates_are_bound_only_after_manual_enable(monkeypatch):
+def test_saved_connection_updates_are_bound_only_after_trust(monkeypatch):
     monkeypatch.setattr('eirene.core.omniroute_mcp.shutil.which',lambda name: None)
     install('omniroute')
     config=Config.load()
     config.set_provider('omniroute',api_key='first-secret',base_url='https://gateway.example/v1')
     assert plugins.merged_mcp_servers(config)=={}
     config.set('plugin_trust',{'omniroute':True})
-    assert plugins.merged_mcp_servers(config)=={}
-    config.set('mcp_enabled',{'omniroute__gateway':True})
     definition=plugins.merged_mcp_servers(config)['omniroute__gateway']
     assert definition['env']['OMNIROUTE_BASE_URL']=='https://gateway.example'
     assert definition['env']['OMNIROUTE_API_KEY']=='first-secret'
@@ -77,7 +73,7 @@ def test_saved_connection_updates_are_bound_only_after_manual_enable(monkeypatch
     assert definition['env']['OMNIROUTE_BASE_URL']=='https://other.example'
     assert definition['env']['OMNIROUTE_API_KEY']=='second-secret'
     assert 'first-secret' not in (paths.plugins_dir()/'omniroute/plugin.json').read_text()
-    config.set('mcp_enabled',{})
+    config.set('mcp_enabled',{'omniroute__gateway':False})
     assert plugins.merged_mcp_servers(config)=={}
 
 
@@ -92,8 +88,6 @@ def test_explicit_env_overrides_preserve_separate_management_key(monkeypatch):
     config=Config.load()
     config.set_provider('omniroute',api_key='chat-only-key',base_url='https://chat.example/v1')
     config.set('plugin_trust',{'omniroute':True})
-    assert plugins.merged_mcp_servers(config)=={}
-    config.set('mcp_enabled',{'omniroute__gateway':True})
     definition=plugins.merged_mcp_servers(config)['omniroute__gateway']
     assert definition['env']['OMNIROUTE_API_KEY']=='management-key'
     assert definition['env']['OMNIROUTE_BASE_URL']=='https://management.example'
@@ -114,8 +108,6 @@ def test_resolves_node_and_external_npm_dependencies_for_isolation(tmp_path,monk
     install('omniroute')
     config=Config.load()
     config.set('plugin_trust',{'omniroute':True})
-    assert plugins.merged_mcp_servers(config)=={}
-    config.set('mcp_enabled',{'omniroute__gateway':True})
     definition=plugins.merged_mcp_servers(config)['omniroute__gateway']
     assert definition['command']==[str(node),str(cli),'--mcp']
     assert str(dependencies) in definition['read_paths']
@@ -135,7 +127,7 @@ def test_default_data_directory_matches_upstream(monkeypatch,tmp_path,legacy):
     assert data_directory()==tmp_path/('.omniroute' if legacy else 'config/omniroute')
 
 
-async def test_network_access_applies_only_to_manually_enabled_mcp(workdir):
+async def test_network_access_applies_only_to_trusted_mcp(workdir):
     from eirene.core.agent import Agent
     from eirene.core.session import Session
     from eirene.tools.sandbox import Sandbox
@@ -145,9 +137,7 @@ async def test_network_access_applies_only_to_manually_enabled_mcp(workdir):
     runner=Agent(session,config,Sandbox(workdir))
     assert runner.mcp.definitions=={}
     config.set('plugin_trust',{'omniroute':True})
-    assert plugins.merged_mcp_servers(config)=={}
-    config.set('mcp_enabled',{'omniroute__gateway':True})
-    config.set('mcp_enabled',{'omniroute__gateway':True,'other':True})
+    config.set('mcp_enabled',{'other':True})
     config.set('mcp_servers',{'other':{'command':['other-tool'],'network':'true'}})
     runner=Agent(session,config,Sandbox(workdir))
     assert runner.mcp.definitions['omniroute__gateway']['_isolate_network'] is False

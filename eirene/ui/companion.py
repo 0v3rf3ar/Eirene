@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import random
 import sys
 import time
 from functools import lru_cache
@@ -18,6 +19,16 @@ ASSETS = Path(__file__).with_name("companion_assets")
 PORTRAITS = {"idle": "idle.png", "question": "q.png", "thinking": "work.png",
              "writing": "work.png", "working": "work.png", "sleepy": "sleepy.png",
              "angry": "angry.png", "furious": "furious.png"}
+# Idle moments: short animations she plays now and then while you leave her be.
+# Each is a list of (frame, seconds); refreshes run every 0.4 seconds.
+MOMENT_GAP = (8.0, 22.0)
+MOMENTS = {
+    "glint": [("glint-1.png", 0.4), ("glint-2.png", 0.4), ("glint-3.png", 0.4)],
+    "hum": [("hum-1.png", 0.8), ("hum-2.png", 0.8), ("hum-3.png", 0.8),
+            ("idle.png", 0.4), ("hum-1.png", 0.8), ("hum-2.png", 0.8), ("hum-3.png", 0.8)],
+    "double-blink": [("idle-blink.png", 0.4), ("idle.png", 0.4), ("idle-blink.png", 0.4)],
+    "rest-eyes": [("idle-blink.png", 2.0)],
+}
 QUESTION_PHASES = {"waiting for confirmation", "waiting for input", "waiting for required user input"}
 
 
@@ -57,7 +68,7 @@ def emotion(status, idle_seconds: float, waiting_for_user: bool = False) -> str:
     return "sleepy" if idle_seconds >= SLEEP_AFTER else "idle"
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=16)
 def portrait_bounds(filename: str):
     """Ignore nearly transparent background specks when framing the artwork."""
     from PIL import Image
@@ -66,12 +77,21 @@ def portrait_bounds(filename: str):
             lambda alpha: 255 if alpha >= 128 else 0).getbbox()
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=16)
 def portrait_frame(filename: str):
     """Keep each portrait's feet on the bottom edge of its display frame."""
     from PIL import Image
     with Image.open(ASSETS / filename) as source:
+        base, offset = source.info.get("base"), source.info.get("offset")
         sprite = source.convert("RGBA")
+    if base:
+        # A delta frame: only the changed pixels, pasted over its base picture.
+        if base == filename:
+            raise ValueError(f"{filename} is its own base")
+        x, y = (int(value) for value in offset.split(","))
+        canvas = portrait_frame(base).copy()
+        canvas.paste(sprite, (x, y), sprite.getchannel("A").point(lambda a: 255 if a else 0))
+        return canvas
     # Bundled frames are already scaled and aligned; keep their pixels intact.
     if sprite.size == (128, 128):
         return sprite
@@ -134,6 +154,10 @@ class Companion(Container):
         self._poke_count = 0
         self._angry_until = 0.0
         self._anger_timer = None
+        self._random = random.Random()
+        self._moment = None
+        self._moment_started = 0.0
+        self._next_moment = time.monotonic() + self._random.uniform(*MOMENT_GAP)
 
     def poke_at(self, x: int, y: int) -> bool:
         """Only clicks on her visible pixels count, including the native overlay."""
@@ -164,6 +188,22 @@ class Companion(Container):
         self.refresh_companion()
         return True
 
+    def _moment_frame(self, now: float):
+        """The frame of the idle moment playing now, starting one when it is due."""
+        if self._moment is None:
+            if now < self._next_moment:
+                return None
+            self._moment = MOMENTS[self._random.choice(sorted(MOMENTS))]
+            self._moment_started = now
+        elapsed = now - self._moment_started
+        for filename, seconds in self._moment:
+            if elapsed < seconds:
+                return filename
+            elapsed -= seconds
+        self._moment = None
+        self._next_moment = now + self._random.uniform(*MOMENT_GAP)
+        return None
+
     def compose(self):
         if self.renderer is not None:
             self._portrait = self.renderer(classes="portrait")
@@ -187,7 +227,11 @@ class Companion(Container):
                               max(0, border.region.y - self.size.height))
 
     def wake(self):
-        self._last_interaction = time.monotonic()
+        """Attention stops an idle moment; they only happen while you leave her be."""
+        now = time.monotonic()
+        self._last_interaction = now
+        self._moment = None
+        self._next_moment = now + self._random.uniform(*MOMENT_GAP)
 
     def start_turn(self):
         self._asked_question = False
@@ -236,7 +280,14 @@ class Companion(Container):
             return
         self.call_after_refresh(self.position_portrait)
         filename = PORTRAITS[self.state]
-        if self.state == "idle" and not reduced and self._tick % 10 == 9:
+        moment = self._moment_frame(now) if self.state == "idle" and not reduced else None
+        if self.state != "idle" or reduced:
+            # Anything else she does postpones her next idle moment.
+            self._moment = None
+            self._next_moment = now + self._random.uniform(*MOMENT_GAP)
+        if moment is not None:
+            filename = moment
+        elif self.state == "idle" and not reduced and self._tick % 10 == 9:
             filename = "idle-blink.png"
         if filename != self._drawn:
             try:

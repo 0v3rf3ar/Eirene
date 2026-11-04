@@ -28,7 +28,8 @@ class MCPSecrets:
 
     def update(self, **changes) -> None:
         body = {**self.read(), **changes}
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        from .private_dirs import make_private_dir
+        make_private_dir(self.path.parent, parents=True)
         fd, filename = tempfile.mkstemp(dir=self.path.parent, prefix='.auth-')
         try:
             with os.fdopen(fd, 'w', encoding='utf-8') as stream:

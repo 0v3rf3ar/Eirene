@@ -35,42 +35,60 @@ async def test_connect_omniroute_requires_plugin_and_does_not_enable_mcp(config)
     assert not skills.discover()
 
 
-async def test_mcp_picker_enables_persists_and_disables_without_hook_trust(config):
+async def test_mcp_picker_turns_a_trusted_plugins_server_off_and_on(config):
     install('omniroute')
     config.set('mcp_servers', {'docs': {'command': ['docs-mcp']}})
     assert plugins.merged_mcp_servers(config) == {}
+    config.set('plugin_trust', {'omniroute': True})
+    assert set(plugins.merged_mcp_servers(config)) == {'omniroute__gateway'}
     app = app_for(config, ['omniroute__gateway', ''])
     await dispatch(app, '/mcp')
     first = app.ask_choice.call_args_list[0].args[1]
-    assert {row[1] for row in first if not row[0].startswith(':')} == {'docs (off)', 'omniroute / gateway (off)'}
+    assert {row[1] for row in first if not row[0].startswith(':')} == {'docs (off)', 'omniroute / gateway (on)'}
     assert {row[0] for row in first if row[0].startswith(':')} == {':add', ':manage'}
     assert app.ask_choice.call_args.kwargs['footer'] == 'Esc back to menu'
     assert first[0][2:] == ('', '')
     assert 'docs-mcp' not in str(first)
-    assert set(plugins.merged_mcp_servers(Config.load())) == {'omniroute__gateway'}
-    assert config.get('plugin_trust', {}) == {}
-    assert app.ask_choice.call_args.args[1][1][1] == 'omniroute / gateway (on)'
+    assert plugins.merged_mcp_servers(Config.load()) == {}
+    assert app.ask_choice.call_args.args[1][1][1] == 'omniroute / gateway (off)'
     app.agent.mcp.close.assert_awaited_once()
     app.ask_choice = AsyncMock(side_effect=['omniroute__gateway', ''])
     await dispatch(app, '/mcp')
-    assert plugins.merged_mcp_servers(Config.load()) == {}
+    assert set(plugins.merged_mcp_servers(Config.load())) == {'omniroute__gateway'}
     assert app.agent.mcp.close.await_count == 2
+
+
+async def test_your_own_server_still_needs_turning_on(config):
+    config.set('mcp_servers', {'docs': {'command': ['docs-mcp']}})
+    app = app_for(config, ['docs', ''])
+    await dispatch(app, '/mcp')
+    assert set(plugins.merged_mcp_servers(Config.load())) == {'docs'}
+
+
+async def test_untrusted_plugin_mcp_cannot_be_enabled(config):
+    install('omniroute')
+    app = app_for(config, ['omniroute__gateway', ''])
+    await dispatch(app, '/mcp')
+    assert plugins.merged_mcp_servers(Config.load()) == {}
+    assert 'plugin untrusted or disabled' in app.ask_choice.call_args.args[1][0][3]
 
 
 async def test_disabled_plugin_mcp_cannot_be_enabled(config):
     install('omniroute')
+    config.set('plugin_trust', {'omniroute': True})
     config.set_plugin('omniroute', False)
     app = app_for(config, ['omniroute__gateway', ''])
     await dispatch(app, '/mcp')
     assert config.get('mcp_enabled') == {}
-    assert 'plugin disabled' in app.ask_choice.call_args.args[1][0][3]
+    assert 'plugin untrusted or disabled' in app.ask_choice.call_args.args[1][0][3]
     app.agent.mcp.close.assert_not_awaited()
 
 
 @pytest.mark.parametrize('action', ['untrust', 'refresh'])
 async def test_plugin_revocation_clears_mcp_grant(config, action):
     install('omniroute')
-    config.set('mcp_enabled', {'omniroute__gateway': True})
+    config.set('plugin_trust', {'omniroute': True})
+    assert plugins.merged_mcp_servers(config)
     app = app_for(config, [])
     await dispatch(app, '/plugins ' + action + ' omniroute')
     assert plugins.merged_mcp_servers(Config.load()) == {}

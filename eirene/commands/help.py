@@ -10,11 +10,11 @@ from ..ui.shortcuts import SHORTCUTS, EDITING_KEYS
 
 # Names only, grouped by topic; options appear in the / menu as you type.
 GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Conversation", ("btw", "clear", "compact", "plan", "review", "sessions",
+    ("Conversation", ("btw", "clear", "compact", "plan", "review", "security-review", "sessions",
                       "subagents", "usage")),
     ("Model & provider", ("connect", "model", "fast", "think", "prompt-suggest", "recap")),
     ("Modes & access", ("agents", "permissions", "sandbox")),
-    ("Tools & extensions", ("mcp", "plugins", "skills", "search-api", "schedule", "tasks")),
+    ("Tools & extensions", ("mcp", "plugins", "skills", "search-api", "schedule", "routines")),
     ("Interface", ("theme", "diff", "companion", "notification", "keybindings", "config")),
     ("Eirene", ("pwd", "update", "restart", "help", "exit")),
 )
@@ -43,14 +43,15 @@ SHORT = {
     "pwd": "show the working directory",
     "recap": "session recaps on/off",
     "restart": "restart, keeping this chat",
-    "review": "review uncommitted changes",
+    "review": "review changes for defects",
+    "routines": "review, edit and run routines",
     "sandbox": "show sandbox status",
-    "schedule": "schedule a task",
+    "schedule": "schedule a routine",
     "search-api": "configure web search",
+    "security-review": "review changes for vulnerabilities",
     "sessions": "switch, search, export",
     "skills": "enable or disable skills",
     "subagents": "browse subagent sessions",
-    "tasks": "list scheduled tasks",
     "theme": "choose a theme",
     "think": "local thinking on/off",
     "update": "install the latest release",

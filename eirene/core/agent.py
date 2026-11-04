@@ -17,7 +17,7 @@ from ..tools.sandbox import Sandbox
 from . import prompt as prompts
 from . import questions
 from . import skills as skills_mod
-from .errors import Cancelled, EireneError, ProviderError, SandboxError, ToolError
+from .errors import Cancelled, EireneError, ProviderError, SandboxError, ToolError, error_kind
 from .modes import ALLOW, ASK, BLOCK, Mode, decide
 from .session import Message, Session
 from .usage import Usage, estimate_messages, estimate_tokens
@@ -145,6 +145,7 @@ class ContextCompaction:
 @dataclass
 class Failed:
     text: str
+    kind: str = ""
 
 
 @dataclass
@@ -203,6 +204,16 @@ class Agent:
         self._tool_cache: dict[str, tuple[str, bool, str, int]] = {}
         self._work_revision = 0
         self._delegation_depth = 0
+        # Capability groups a scheduled run was given; None means no limit.
+        self.tool_groups: frozenset[str] | None = None
+        # Per-run caps from a headless launch; None defers to the config.
+        self.step_limit: int | None = None
+        self.token_limit: int | None = None
+        # MCP servers an unattended run was granted up front. None keeps the
+        # interactive rule: every enabled server, each call approved by a person.
+        self.mcp_servers: frozenset[str] | None = None
+        # Skills an unattended run may load; None keeps the saved skill settings.
+        self.skill_names: frozenset[str] | None = None
         self._delegated_usage = Usage()
         self._context_overhead = 0
         self._effective_context_window = 0
@@ -268,6 +279,10 @@ class Agent:
 
     def reload_skills(self) -> list[skills_mod.Skill]:
         self.skills = skills_mod.apply_config(skills_mod.discover(), self.config)
+        if self.skill_names is not None:
+            for skill in self.skills:
+                # Naming a skill overrides its own setting, never its plugin's trust.
+                skill.enabled = skill.name in self.skill_names and skills_mod.group_on(skill.name, self.config)
         return self.skills
 
     @property
@@ -360,7 +375,8 @@ class Agent:
     def iteration_limit(self) -> int:
         """Tool rounds allowed in one turn; 0 means no limit."""
         try:
-            wanted = int(self.config.get("max_iterations", DEFAULT_ITERATIONS))
+            wanted = int(self.config.get("max_iterations", DEFAULT_ITERATIONS)
+                         if self.step_limit is None else self.step_limit)
         except (TypeError, ValueError):
             return DEFAULT_ITERATIONS
         wanted = max(wanted, 0)
@@ -450,7 +466,7 @@ class Agent:
             return None
         specs = tools.specs(include_exec=self.mode is not Mode.PLAN)
         from .plugins import discover
-        if not any(self.config.plugin_enabled(plugin.name) for plugin in discover()):
+        if not any(self.config.plugin_active(plugin.name) for plugin in discover()):
             specs = [spec for spec in specs if spec["name"] != "load_plugin_resource"]
         if not any(skill.enabled for skill in self.skills):
             specs = [spec for spec in specs if spec["name"] != "load_skill"]
@@ -460,7 +476,15 @@ class Agent:
             specs.extend(spec for spec in tools.specs() if spec["name"] == "run_command")
         if self.mode is not Mode.PLAN:
             specs.extend(self.mcp.specs())
+        if self.tool_groups is not None:
+            specs = [spec for spec in specs if self._tool_allowed(spec["name"])]
         return self.host.tool_specs(specs)
+
+    def _tool_allowed(self, name: str) -> bool:
+        if self.tool_groups is None or name == "ask_user":
+            return True
+        group = "mcp" if self.mcp.owns(name) else tools.group_of(name)
+        return group == "read" or group in self.tool_groups
 
     # the loop
 
@@ -562,10 +586,23 @@ class Agent:
                    attachments: list[dict] | None = None, files: list[dict] | None = None
                    ) -> AsyncIterator[AgentEvent]:
         if not self.ready:
-            yield Failed("no provider selected; run /connect")
+            yield Failed("no provider selected; run /connect", "config")
+            yield TurnDone(0.0, 0.0, Usage())
+            return
+        if self.tool_groups is not None and getattr(self.provider, "owns_context", False) \
+                and not {"edit", "commands", "web", "mcp", "agents"} <= self.tool_groups:
+            # A provider that runs its own tools cannot honour a narrower grant; fail closed.
+            yield Failed(f"{self.provider_key} runs its own tools, so a restricted tool list "
+                         "cannot be enforced; choose a provider Eirene runs tools for, or allow all tools",
+                         "config")
             yield TurnDone(0.0, 0.0, Usage())
             return
         definitions = merged_mcp_servers(self.config)
+        if self.mcp_servers is not None:
+            for name in sorted(self.mcp_servers - set(definitions)):
+                yield Notice(f"MCP server '{name}' is not enabled in /mcp; its tools are unavailable")
+            definitions = {name: definition for name, definition in definitions.items()
+                           if name in self.mcp_servers}
         permissions = self.config.get("permissions", "sandboxed")
         if definitions != self._mcp_definitions or permissions != self._mcp_permissions:
             from .permissions import isolation, isolate_network
@@ -583,10 +620,17 @@ class Agent:
                 from ..providers.attachment_reader import definition
                 native_definitions["eirene_attachments"] = definition(self.session.id)
             native_plugins(native_definitions)
-        if self.mode is Mode.PLAN or getattr(self.provider, "owns_context", False):
+        if (self.mode is Mode.PLAN or getattr(self.provider, "owns_context", False)
+                or self.tool_groups is not None and "mcp" not in self.tool_groups
+                or self.mcp_servers is not None and not definitions):
             await self.mcp.close()
         else:
+            fresh = not getattr(self.mcp, "ready", False)
             await self.mcp.ensure()
+            if fresh and self.mcp_servers is not None:
+                # Unattended: say why a granted server's tools are missing.
+                for error in getattr(self.mcp, "errors", []):
+                    yield Notice(f"MCP: {error}")
         self.session.repair_pending()
         self._consume_input()
         self._turn_instructions = text if record_text is not None and record_text != text else ""
@@ -624,7 +668,8 @@ class Agent:
                 async for event in self._background_completions():
                     yield event
                 self._consume_input()
-                if limit and iteration >= limit and local_context:
+                # An explicit --max-steps is a hard stop, not a cue to recover.
+                if limit and iteration >= limit and local_context and self.step_limit is None:
                     if len(outcomes) >= 2 and outcomes[-1] != outcomes[-2]:
                         yield Notice("continuing with another local model work batch", transient=True)
                         iteration = 0
@@ -717,6 +762,9 @@ class Agent:
                 turn_usage.output_tokens += usage_out
                 if not first_token:
                     first_token = time.monotonic() - started
+                spent = (turn_usage.input_tokens + turn_usage.output_tokens
+                         + self._delegated_usage.input_tokens + self._delegated_usage.output_tokens)
+                over_budget = self.token_limit is not None and spent >= self.token_limit
 
                 serialised = [self._serialise_call(c) for c in calls]
                 self.session.add_assistant(reply, serialised, thinking,
@@ -750,6 +798,14 @@ class Agent:
                         continue
                     if finish in TRUNCATED or finish in {"cancelled", "interrupted", "failed", "incomplete"}:
                         status = "incomplete"
+                    break
+
+                if over_budget:
+                    note = f"stopped: used {spent} tokens, reaching the {self.token_limit}-token limit"
+                    self.session.add_note("guard", reason=note)
+                    yield Notice(note)
+                    self.session.repair_pending("not executed: the run's token limit was reached")
+                    status = "incomplete"
                     break
 
                 signature = _signature(calls)
@@ -819,7 +875,7 @@ class Agent:
             status = "failed"
             self.session.repair_pending()
             self.session.add_note("error", message=str(exc))
-            yield Failed(exc.user_message())
+            yield Failed(exc.user_message(), error_kind(exc))
             self.logger.error("turn.failed", extra={"session_id": self.session.id,
                                                     "error_type": type(exc).__name__,
                                                     "error": str(exc)[:500]})
@@ -827,7 +883,7 @@ class Agent:
             status = "failed"
             self.session.repair_pending()
             self.session.add_note("error", message=repr(exc))
-            yield Failed(f"unexpected failure: {exc}")
+            yield Failed(f"unexpected failure: {exc}", "failed")
             self.logger.exception("turn.crashed", extra={"session_id": self.session.id})
 
         seconds = time.monotonic() - started
@@ -1047,6 +1103,11 @@ class Agent:
             self.session.add_tool_result(call.id, call.name, result, True)
             yield Notice(result, transient=True, phase="adjusting approach")
             return
+        if not self._tool_allowed(call.name):
+            message = f"blocked: {call.name} is not among the tools this run was allowed"
+            self.session.add_tool_result(call.id, call.name, message, True)
+            yield ToolFinished(call.id, call.name, call.name, message, True, 0.0)
+            return
         if call.name == "ask_user":
             async for event in self._ask_user(call):
                 yield event
@@ -1098,15 +1159,19 @@ class Agent:
             self.session.add_tool_result(call.id, call.name, result)
             yield ToolFinished(call.id, call.name, label, result, False, 0.0)
             return
-        escape = ("external MCP tool requires explicit approval" if is_mcp else
-                  tools.sandbox_escape(call.name, call.arguments, self.sandbox))
+        # Only granted servers are started for an unattended run, so their calls
+        # were approved when the run was set up.
+        escape = (("" if self.mcp_servers is not None else "external MCP tool requires explicit approval")
+                  if is_mcp else tools.sandbox_escape(call.name, call.arguments, self.sandbox))
         if call.name == "request_full_access":
             if not str(call.arguments.get("reason", "")).strip():
                 raise ToolError("reason is required for temporary full access")
             escape = "request temporary full host access: " + str(call.arguments.get("reason", ""))
         network_tools = {"web_search", "web_fetch", "http_request", "browser_inspect", "browser_interact", "browser_screenshot"}
         # Web search only reads public results, so it never asks.
-        if (call.name in network_tools and call.name != "web_search"
+        # A scheduled run granted "web" was approved for network up front.
+        web_granted = self.tool_groups is not None and "web" in self.tool_groups
+        if (call.name in network_tools and call.name != "web_search" and not web_granted
                 and self.config.get("isolate_network", True)):
             escape = escape or "this tool requires network access outside command isolation"
         from .permissions import full_access
@@ -1214,8 +1279,7 @@ class Agent:
             else:
                 if call.name == "load_skill":
                     wanted = str(call.arguments.get("name") or "")
-                    selected = next((skill for skill in self.skills
-                                     if skill.name == wanted), None)
+                    selected = skills_mod.find(self.skills, wanted)
                     if selected is None or not selected.enabled:
                         raise ToolError(f"skill '{wanted}' is disabled or unavailable")
                 with self.sandbox.permit(*outside):

@@ -95,7 +95,6 @@ class StatusLine(Static):
         self._spinner_style = art.spinner_style()
         self.note = ""
         self.note_icon = "dot"
-        self._tick = 0
         self._timer = None
         self._last_activity = 0.0
         self._connection_wait = False
@@ -216,7 +215,6 @@ class StatusLine(Static):
         self.output_tokens = output_tokens
 
     def _refresh(self) -> None:
-        self._tick += 1
         if not self.active:
             body = Text()
             if self.note:
@@ -231,10 +229,14 @@ class StatusLine(Static):
         # spinner, word, then "(1m 3s · thinking)"; token counts stay out of the way.
         body = Text()
         config = getattr(self.app, "config", None) if self.is_mounted else None
-        frame = "*" if config and config.get("reduce_motion", False) else art.spinner_frame(self._tick, self._spinner_style)
+        now = time.monotonic()
+        # Read the frame off the clock: activity redraws this line on every
+        # token, and the spinner's speed must not follow the stream's.
+        tick = int((now - self.started) / TICK)
+        frame = "*" if config and config.get("reduce_motion", False) else art.spinner_frame(tick, self._spinner_style)
         working_style = self._working_style(self.shade_level)
         body.append(f"  {frame} ", style=working_style)
         body.append(f"{self.verb}…", style=working_style)
-        elapsed = elapsed_label(time.monotonic() - self.started)
+        elapsed = elapsed_label(now - self.started)
         body.append(f" ({elapsed} {art.icon('dot')} {self.activity})", style="dim")
         self.update(body)

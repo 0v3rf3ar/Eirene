@@ -58,7 +58,7 @@ class OpenAICompatible(Provider):
             "model": model,
             "messages": to_openai_messages(
                 provider_history(messages, supports_tools=self.supports_tools), system,
-                include_reasoning=self.name in {"deepseek", "kimi", "omniroute", "custom-openai"},
+                include_reasoning=self.name in {"deepseek", "kimi", "omniroute", "custom-openai", "llamacpp"},
                 require_reasoning=deepseek),
             "stream": True,
             "max_tokens": max_tokens,

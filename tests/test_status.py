@@ -32,6 +32,23 @@ def test_silence_progressively_fades_and_activity_restores_brightness(clocked_st
     assert frames[-1].spans[0].style.bold
 
 
+def test_spinner_speed_follows_the_clock_not_the_token_stream(clocked_status):
+    status, clock, frames = clocked_status
+    glyph = lambda frame: frame.plain.split()[0]
+
+    # A fast stream redraws many times inside one tick; the glyph must hold.
+    for _ in range(50):
+        status.mark_activity()
+    assert {glyph(frame) for frame in frames} == {glyph(frames[0])}
+
+    # A stalled stream still moves it, one frame per tick.
+    style_frames = status_mod.art.SPINNERS[status.spinner_style]
+    for step in range(1, 4):
+        clock.now += status_mod.TICK * 1.01
+        status._refresh()
+        assert glyph(frames[-1]) == style_frames[step % len(style_frames)]
+
+
 def test_retry_ticks_do_not_reset_fading_or_show_connection_text(clocked_status):
     status, clock, frames = clocked_status
     status.set_phase("reconnecting")

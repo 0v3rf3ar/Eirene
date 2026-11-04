@@ -10,6 +10,7 @@ from ..core.errors import ProviderError
 from .anthropic_compat import AnthropicCompatible
 from .base import Provider
 from .gemini import Gemini
+from .llamacpp import LlamaCpp
 from .ollama import Ollama
 from .openai_compat import OpenAICompatible
 from .deepseek import DeepSeek, MODELS as DEEPSEEK_MODELS
@@ -68,6 +69,10 @@ SPECS: dict[str, Spec] = {
     "ollama-local": Spec(
         "ollama-local", "Ollama", "ollama", "http://localhost:11434",
         needs_key=False),
+    "llamacpp": Spec(
+        "llamacpp", "llama.cpp", "openai", "http://localhost:9931/v1",
+        needs_key=False, needs_base_url=True, optional_key=True,
+        key_hint="only if llama-server was started with --api-key; otherwise leave empty"),
     "gemini": Spec(
         "gemini", "Google (aistudio)", "gemini",
         "https://generativelanguage.googleapis.com/v1beta",
@@ -145,7 +150,8 @@ def resolve_alias(name: str) -> str:
                "custom": "custom-openai", "openai-compatible": "custom-openai",
                "anthropic-compatible": "custom-anthropic",
                "ollama-api": "ollama", "ollama-cloud": "ollama",
-               "local-ollama": "ollama-local"}
+               "local-ollama": "ollama-local",
+               "llama.cpp": "llamacpp", "llama-cpp": "llamacpp", "llama-server": "llamacpp"}
     if text in SPECS:
         return text
     if text in aliases:
@@ -188,6 +194,9 @@ def build(key: str, config: Config, *, api_key: str | None = None,
             think = bool(config.provider_config(key).get("think", True))
         return Ollama(token, url, name=key, static_models=info.models,
                       timeout=max(timeout, 600.0), think=think)
+    if key == "llamacpp":
+        return LlamaCpp(token, url, timeout=max(timeout, 600.0),
+                        think=bool(config.provider_config(key).get("think", True)))
     if key == "omniroute":
         return OmniRoute(token, url, timeout=timeout)
     if key == "deepseek" or (info.protocol == "openai" and urlparse(url).hostname == "api.deepseek.com"):
@@ -209,7 +218,8 @@ def validate_key(key: str, raw: str) -> str:
     cleaned = "".join(raw.split())
     if not cleaned:
         raise ProviderError("key is empty")
-    if len(cleaned) < 8:
+    # llama-server accepts whatever key its owner chose.
+    if len(cleaned) < 8 and key != "llamacpp":
         raise ProviderError("key is too short to be valid")
     if len(cleaned) > 512:
         raise ProviderError("key is unusually long; check what you pasted")

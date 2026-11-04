@@ -22,7 +22,7 @@ class LaunchdBackend(Backend):
 
     name = "launchd"
 
-    def install(self, task: Task) -> str:
+    def install(self, task: Task, password: str | None = None) -> str:
         AGENT_DIR.mkdir(parents=True, exist_ok=True)
         path = plist_path(task)
         try:
@@ -31,12 +31,42 @@ class LaunchdBackend(Backend):
             raise SchedulerError(f"cannot write {path.name}: {exc}") from exc
         target = f"gui/{os.getuid()}"
         _run(["launchctl", "bootout", target, str(path)], check=False)
+        if task.schedule.kind == "boot":
+            # RunAtLoad would start it the moment it is loaded; LaunchAgents load at
+            # login anyway, so leave it for the next one.
+            return f"installed {path.name} (runs from your next login)"
         _run(["launchctl", "bootstrap", target, str(path)])
         return f"installed {path.name}"
+
+    def set_enabled(self, task: Task, enabled: bool) -> str:
+        path = plist_path(task)
+        target = f"gui/{os.getuid()}"
+        if enabled:
+            _run(["launchctl", "enable", f"{target}/{label(task)}"])
+            if task.schedule.kind != "boot":
+                _run(["launchctl", "bootout", target, str(path)], check=False)
+                _run(["launchctl", "bootstrap", target, str(path)])
+            return f"enabled {label(task)}"
+        # disable is remembered across logins; bootout stops the loaded copy now.
+        _run(["launchctl", "disable", f"{target}/{label(task)}"])
+        _run(["launchctl", "bootout", target, str(path)], check=False)
+        return f"disabled {label(task)}"
+
+    def run_now(self, task: Task) -> str:
+        path = plist_path(task)
+        target = f"gui/{os.getuid()}"
+        if _run(["launchctl", "print", f"{target}/{label(task)}"], check=False).returncode:
+            _run(["launchctl", "bootstrap", target, str(path)])
+            if task.schedule.kind == "boot":
+                return f"started {label(task)}"  # RunAtLoad already started it
+        _run(["launchctl", "kickstart", f"{target}/{label(task)}"])
+        return f"started {label(task)}"
 
     def remove(self, task: Task) -> str:
         path = plist_path(task)
         _run(["launchctl", "bootout", f"gui/{os.getuid()}", str(path)], check=False)
+        # Forget a disabled override left by set_enabled.
+        _run(["launchctl", "enable", f"gui/{os.getuid()}/{label(task)}"], check=False)
         try:
             path.unlink()
         except FileNotFoundError:
@@ -49,7 +79,7 @@ class LaunchdBackend(Backend):
         result = _run(["launchctl", "print", f"gui/{os.getuid()}/{label(task)}"],
                       check=False)
         if result.returncode != 0:
-            return "not loaded"
+            return "loads at your next login" if task.schedule.kind == "boot" else "not loaded"
         for line in (result.stdout or "").splitlines():
             stripped = line.strip()
             if stripped.startswith("state ="):
@@ -71,7 +101,8 @@ def plist_body(task: Task) -> dict:
     body: dict = {
         "Label": label(task),
         "ProgramArguments": runner_command(task),
-        "WorkingDirectory": task.cwd,
+        # No WorkingDirectory: launchd would refuse to start the job if the folder
+        # went away, before Eirene could record why. The runner uses task.cwd itself.
         "RunAtLoad": task.schedule.kind == "boot",
         "StandardOutPath": str(logs / f"{task.unit}.log"),
         "StandardErrorPath": str(logs / f"{task.unit}.log"),

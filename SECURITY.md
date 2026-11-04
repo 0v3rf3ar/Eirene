@@ -55,4 +55,4 @@ Plan mode remains read-only. `/permissions sandboxed` stops Eirene-managed comma
 processes and MCP servers and restores restrictions. External effects already
 performed cannot be undone. Every new process starts sandboxed, including resumes.
 Legacy backend settings are normalized to automatic platform isolation.
-See [execution boundaries](docs/harness.md) for the full trust model.
+See [modes and permissions](docs/guides/modes-and-permissions.md) for the full trust model.
