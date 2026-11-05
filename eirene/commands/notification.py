@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from ..core import notify
 from ..core.errors import CommandError
 from ..ui import art
@@ -24,7 +26,7 @@ async def run(app, args: str) -> None:
     elif want in OFF:
         state = False
     elif want == "test":
-        _test(app)
+        await _test(app)
         return
     else:
         raise CommandError("say /notification on, off or test")
@@ -40,10 +42,13 @@ async def run(app, args: str) -> None:
         notify.send("Eirene", "notifications are on")
 
 
-def _test(app) -> None:
+async def _test(app) -> None:
     if not notify.available():
         raise CommandError(f"no notification tool here - {_missing()}")
-    if notify.send("Eirene", "this is what a notification looks like"):
+    sent = notify.send("Eirene", "this is what a notification looks like")
+    if sent and notify.IS_WINDOWS:
+        sent = await asyncio.to_thread(notify.toast_shown)
+    if sent:
         app.say(f"{art.icon('ok')} sent one")
         if notify.IS_MAC and not notify.shutil.which("terminal-notifier"):
             app.say("install terminal-notifier (brew install terminal-notifier) so notifications "

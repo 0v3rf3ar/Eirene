@@ -1405,3 +1405,20 @@ async def test_schedule_without_a_password_runs_only_signed_in(workdir, monkeypa
     assert not task.run_signed_out and password is None
     assert not hasattr(engine, "checked")  # nothing sent to Windows
     assert "no password given" in body
+
+
+async def test_notification_test_admits_a_windows_toast_that_failed(workdir, monkeypatch):
+    from eirene.core import notify
+
+    monkeypatch.setattr(notify, "IS_WINDOWS", True)
+    monkeypatch.setattr(notify, "available", lambda: True)
+    monkeypatch.setattr(notify, "send", lambda title, body="": True)
+    monkeypatch.setattr(notify, "toast_shown", lambda: False)
+    app, pilot, context = await start(workdir)
+    try:
+        await dispatch(app, "/notification test")
+        await pilot.pause()
+        assert any("could not send" in text for text in texts(app))
+        assert not any("sent one" in text for text in texts(app))
+    finally:
+        await context.__aexit__(None, None, None)

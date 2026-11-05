@@ -6,6 +6,7 @@ from .subprocesses import external_environment
 
 import atexit
 import base64
+import ctypes
 import functools
 import os
 import shutil
@@ -18,6 +19,7 @@ APP_NAME = "Eirene"
 ICON_NAME = "Eirene.png"
 IS_WINDOWS = os.name == "nt"
 IS_MAC = sys.platform == "darwin"
+GA_ROOTOWNER = 3
 
 
 def icon_path() -> str:
@@ -140,6 +142,7 @@ def _toast(title: str, body: str) -> str:
 # Windows PowerShell 5.1 ships with Windows and can load the WinRT toast API.
 WINDOWS_TOAST = r"""
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
 $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
 function Safe($text) { [Security.SecurityElement]::Escape([string]$text) }
@@ -150,29 +153,50 @@ $xml.LoadXml("<toast><visual><binding template='ToastGeneric'><text>$(Safe $env:
 $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
 $toast.Tag = 'eirene'
 $toast.Group = $env:EIRENE_TOAST_GROUP
-$null = Register-ObjectEvent -InputObject $toast -EventName Activated -SourceIdentifier clicked
+# PowerShell 5.1 can't subscribe to WinRT events and Add-Type can't reference .winmd files.
+Add-Type -TypeDefinition @'
+using System;
+using System.Threading;
+namespace Eirene {
+    public static class ToastClick {
+        public static readonly ManualResetEvent Clicked = new ManualResetEvent(false);
+        public static void On(object sender, object args) { Clicked.Set(); }
+        public static void Watch(object toast) {
+            var activated = toast.GetType().GetEvent("Activated");
+            var handler = Delegate.CreateDelegate(activated.EventHandlerType, typeof(ToastClick).GetMethod("On"));
+            activated.GetAddMethod().Invoke(toast, new object[] { handler });
+        }
+    }
+}
+'@
+[Eirene.ToastClick]::Watch([object]$toast)
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe').Show($toast)
-$null = Wait-Event -SourceIdentifier clicked
+[Console]::Out.WriteLine('shown')
+# Leave with Eirene, even if it could not clean up after itself.
+while (-not [Eirene.ToastClick]::Clicked.WaitOne(5000)) {
+    if (-not (Get-Process -Id ([int]$env:EIRENE_TOAST_PID) -ErrorAction SilentlyContinue)) { exit }
+}
 Add-Type -Namespace Eirene -Name Window -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
 [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr window, int command);
 [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
 [DllImport("user32.dll")] public static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
 '@
-# Walk up from Eirene to the first process that owns a window: the terminal.
+$window = [IntPtr][long]$env:EIRENE_TOAST_WINDOW
+# Other terminals: walk up from Eirene to the first process that owns a window.
 $id = [int]$env:EIRENE_TOAST_PID
-for ($i = 0; $i -lt 10 -and $id; $i++) {
+for ($i = 0; $i -lt 10 -and $id -and $window -eq [IntPtr]::Zero; $i++) {
     $process = Get-Process -Id $id -ErrorAction SilentlyContinue
-    if ($process -and $process.MainWindowHandle -ne [IntPtr]::Zero) {
-        $window = $process.MainWindowHandle
-        if ([Eirene.Window]::IsIconic($window)) { $null = [Eirene.Window]::ShowWindow($window, 9) }
-        # Windows only lets the active app take focus; a synthetic Alt press lifts that lock.
-        [Eirene.Window]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
-        [Eirene.Window]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
-        $null = [Eirene.Window]::SetForegroundWindow($window)
-        break
-    }
+    if (-not $process -or $process.ProcessName -eq 'explorer') { break }
+    $window = $process.MainWindowHandle
     $id = (Get-CimInstance Win32_Process -Filter "ProcessId=$id").ParentProcessId
+}
+if ($window -ne [IntPtr]::Zero) {
+    if ([Eirene.Window]::IsIconic($window)) { $null = [Eirene.Window]::ShowWindow($window, 9) }
+    # Windows only lets the active app take focus; a synthetic Alt press lifts that lock.
+    [Eirene.Window]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
+    [Eirene.Window]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
+    $null = [Eirene.Window]::SetForegroundWindow($window)
 }
 """
 
@@ -207,6 +231,7 @@ _lock = threading.Lock()
 _sender: threading.Thread | None = None
 _waiter: subprocess.Popen | None = None
 _last_id = 0
+_toast_shown = True
 
 
 @functools.cache
@@ -259,20 +284,51 @@ def _send_replacing(title: str, body: str) -> None:
 
 def _send_windows(title: str, body: str) -> None:
     """A toast that replaces this session's last one and raises the terminal on click."""
-    global _waiter
+    global _waiter, _toast_shown
     with _lock:
+        _toast_shown = False
         _stop_waiter()
         env = external_environment()
         env.update(EIRENE_TOAST_TITLE=title, EIRENE_TOAST_BODY=body, EIRENE_TOAST_ICON=icon_path(),
-                   EIRENE_TOAST_GROUP=f"eirene-{os.getpid()}", EIRENE_TOAST_PID=str(os.getpid()))
+                   EIRENE_TOAST_GROUP=f"eirene-{os.getpid()}", EIRENE_TOAST_PID=str(os.getpid()),
+                   EIRENE_TOAST_WINDOW=str(_console_window()))
         script = base64.b64encode(WINDOWS_TOAST.encode("utf-16-le")).decode("ascii")
         try:
             _waiter = subprocess.Popen(
                 ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", script],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                 env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except OSError:
-            pass
+            return
+        with _waiter.stdout as answer:
+            _toast_shown = answer.readline().strip() == b"shown"
+
+
+def _console_window() -> int:
+    """The window holding Eirene's console, or 0 when this terminal doesn't say."""
+    try:
+        kernel32, user32 = ctypes.WinDLL("kernel32"), ctypes.WinDLL("user32")
+    except (AttributeError, OSError):
+        return 0
+    kernel32.GetConsoleWindow.restype = ctypes.c_void_p
+    user32.GetAncestor.restype = ctypes.c_void_p
+    user32.GetAncestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
+    user32.GetClassNameW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+    # Windows Terminal owns the pseudo console window of each of its tabs.
+    window = user32.GetAncestor(kernel32.GetConsoleWindow(), GA_ROOTOWNER)
+    name = ctypes.create_unicode_buffer(64)
+    if not window or not user32.IsWindowVisible(window):
+        return 0
+    user32.GetClassNameW(window, name, len(name))
+    return 0 if name.value == "PseudoConsoleWindow" else window
+
+
+def toast_shown(timeout: float = 20.0) -> bool:
+    """Whether the last Windows toast reached the screen; waits for it to finish starting."""
+    if _sender is not None:
+        _sender.join(timeout)
+    return _toast_shown
 
 
 def _stop_waiter() -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import os
 import subprocess
 from types import SimpleNamespace
@@ -297,6 +298,7 @@ def test_windows_toast_replaces_the_last_one(monkeypatch):
     class Waiting:
         def __init__(self, argv, **kw):
             self.argv, self.env, self.alive = argv, kw["env"], True
+            self.stdout = io.BytesIO(b"shown\n")
             launched.append(self)
 
         def poll(self):
@@ -450,3 +452,26 @@ async def test_turns_in_one_session_share_a_spinner(workdir):
         assert seen == [art.session_spinner(app.session.id)] * 3
     finally:
         await context.__aexit__(None, None, None)
+
+
+def test_windows_toast_avoids_the_winrt_event_cmdlet():
+    # Windows PowerShell 5.1 refuses it, which used to stop the toast from ever showing.
+    assert "Register-ObjectEvent" not in notify.WINDOWS_TOAST
+    assert notify.WINDOWS_TOAST.index("ToastClick]::Watch") < notify.WINDOWS_TOAST.index(".Show($toast)")
+
+
+@pytest.mark.parametrize("output, shown", [(b"shown\n", True), (b"", False)])
+def test_windows_toast_reports_whether_it_appeared(monkeypatch, output, shown):
+    class Process:
+        def __init__(self, *args, **kwargs):
+            self.stdout = io.BytesIO(output)
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(notify, "_waiter", None)
+    monkeypatch.setattr(notify, "_sender", None)
+    monkeypatch.setattr(notify, "_toast_shown", True)
+    monkeypatch.setattr(notify.subprocess, "Popen", Process)
+    notify._send_windows("chat", "body")
+    assert notify.toast_shown() is shown
