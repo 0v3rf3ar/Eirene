@@ -1053,8 +1053,7 @@ class Eirene(App):
                     await self.push(NoticeBlock(self._friendly_failure(event.text)))
                 elif isinstance(event, agent_mod.TurnDone):
                     self.transcript.settle()
-                    self.status.stop(self._turn_note(event),
-                                     "done" if event.status == "completed" else "dot")
+                    self._show_turn_note(event)
                     self.companion.finish_turn(
                         event.status == "completed" and questions.wants_an_answer(reply_text))
                     self._announce_done(event, answer)
@@ -1316,16 +1315,35 @@ class Eirene(App):
         notify.send(title, body or f"done in {event.seconds:.0f}s")
 
     def _turn_note(self, event: agent_mod.TurnDone, now: datetime | None = None) -> str:
-        finished = clock_label(now or datetime.now())
+        moment = now or (datetime.fromtimestamp(event.finished) if event.finished else datetime.now())
+        finished = clock_label(moment)
+        if event.finished and moment.date() != datetime.now().date():
+            finished = f"{moment:%b} {moment.day}, {finished}"
         if event.status != "completed":
             return f"{event.status} · {elapsed_label(event.seconds)} · {finished}"
         if event.seconds < 1 and not event.usage.total:
             return ""
-        parts = [f"{art.done_verb()} for {elapsed_label(event.seconds)}"]
+        # Seeded so a resumed session shows the verb it showed live.
+        verb = art.done_verb(int(event.finished) if event.finished else None)
+        parts = [f"{verb} for {elapsed_label(event.seconds)}"]
         if event.usage.output_tokens:
             parts.append(f"{art.icon('tokens')} {event.usage.output_tokens} tokens")
         parts.append(finished)
         return " · ".join(parts)
+
+    def _show_turn_note(self, event: agent_mod.TurnDone) -> None:
+        self.status.stop(self._turn_note(event),
+                         "done" if event.status == "completed" else "dot")
+
+    def _restore_turn_note(self) -> None:
+        """Show a resumed session's last turn; logs older than the timings have none."""
+        turn = self.session.last_turn
+        if not turn or "seconds" not in turn:
+            self.status.stop()
+            return
+        self._show_turn_note(agent_mod.TurnDone(
+            float(turn["seconds"]), 0.0, UsageTotals(output_tokens=int(turn.get("output_tokens") or 0)),
+            str(turn.get("status") or "completed"), float(turn.get("ts") or 0)))
 
     # actions
 
@@ -1547,6 +1565,7 @@ class Eirene(App):
             self.transcript.reset()
             await self.push(ArtBlock(self._banner_text(), reflow=self._banner_text))
             await self.replay_transcript()
+            self._restore_turn_note()
             self.name_the_tab()
         finally:
             splash.finish()

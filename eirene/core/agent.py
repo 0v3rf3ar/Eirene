@@ -154,6 +154,7 @@ class TurnDone:
     thinking_seconds: float
     usage: Usage = field(default_factory=Usage)
     status: str = "completed"
+    finished: float = 0.0  # wall clock; also what the saved session records
 
 
 AgentEvent = (Phase | Thought | Answer | ToolPreview | ToolStarted | ToolOutput
@@ -895,8 +896,10 @@ class Agent:
                                                  "seconds": seconds,
                                                  "input_tokens": turn_usage.input_tokens,
                                                  "output_tokens": turn_usage.output_tokens})
-        self.session.add_note("turn_status", status=status)
-        yield TurnDone(seconds, first_token, turn_usage, status)
+        finished = time.time()
+        self.session.add_note("turn_status", status=status, seconds=seconds,
+                              output_tokens=turn_usage.output_tokens, ts=finished)
+        yield TurnDone(seconds, first_token, turn_usage, status, finished)
 
     async def _budget_context(self):
         if getattr(self.provider, "owns_context", False):

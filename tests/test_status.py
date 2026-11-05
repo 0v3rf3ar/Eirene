@@ -241,3 +241,74 @@ def test_completed_note_uses_done_icon(clocked_status):
     status.start()
     status.stop("stopped")
     assert frames[-1].plain == f"  {status_mod.art.icon('dot')} stopped"
+
+
+async def test_resume_restores_the_last_turn_note(workdir):
+    from eirene.providers.base import Done, TextDelta, Usage
+    from test_tui import Script, start, type_line
+    app, pilot, context = await start(workdir, Script([TextDelta("Hello."), Usage(1, 15), Done("stop")]))
+    try:
+        await type_line(pilot, "hi")
+        for _ in range(100):
+            await pilot.pause()
+            if not app._busy:
+                break
+        live = app.status.note
+        session_id = app.session.id
+    finally:
+        await context.__aexit__(None, None, None)
+    assert " for " in live and "15 tokens" in live
+
+    app, pilot, context = await start(workdir, resume=session_id)
+    try:
+        await pilot.pause()
+        assert app.status.note == live
+        assert app.status.note_icon == "done"
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_resume_note_dates_an_earlier_day_and_skips_an_unfinished_turn(workdir):
+    from datetime import datetime
+    from eirene.core.session import Session
+    from test_tui import start
+    app, pilot, context = await start(workdir)
+    try:
+        session = app.session
+        session.add_user("hi")
+        finished = datetime(2026, 1, 3, 14, 50).timestamp()
+        session.add_note("turn_status", status="completed", seconds=2.4, output_tokens=15, ts=finished)
+        session.close()
+        resumed = Session.resume(session.id)
+        app.session = resumed
+        app._restore_turn_note()
+        assert app.status.note.endswith(" for 2s · " + status_mod.art.icon("tokens") + " 15 tokens · Jan 3, 2:50 PM")
+
+        # Cancelled: the newer turn has no status, so the old timing must not stand in for it.
+        resumed.add_user("again")
+        resumed.close()
+        app.session = Session.resume(session.id)
+        app._restore_turn_note()
+        assert app.status.note == ""
+        app.session.close()
+    finally:
+        await context.__aexit__(None, None, None)
+
+
+async def test_resume_of_a_log_without_timings_shows_no_note(workdir):
+    from eirene.core.session import Session
+    from test_tui import start
+    app, pilot, context = await start(workdir)
+    try:
+        session = app.session
+        session.add_user("hi")
+        session.add_note("turn_status", status="completed")
+        session.close()
+        app.status.stop("left over from another session")
+        app.session = Session.resume(session.id)
+        app._restore_turn_note()
+        assert app.status.note == ""
+        app.session.close()
+    finally:
+        await context.__aexit__(None, None, None)
+

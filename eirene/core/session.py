@@ -97,6 +97,8 @@ class Session:
         self.messages: list[Message] = []
         self.file_attachments: dict[str, dict] = {}
         self.transcript_messages: list[Message] | None = None
+        # The turn_status record of the last turn when resumed, if it reached the end.
+        self.last_turn: dict[str, Any] | None = None
         # Delegated agents started from this session, keyed by their session id.
         self.subagents: dict[str, dict[str, Any]] = {}
         self.started = time.time()
@@ -134,6 +136,7 @@ class Session:
         self.file_attachments.clear()
         self.subagents.clear()
         self.transcript_messages = None
+        self.last_turn = None
         self.close()
         self._closed = False
         self.name = ""
@@ -155,8 +158,12 @@ class Session:
         session.name = str(meta.get("name") or "")
         for record in records:
             if record.get("t") == "user":
+                # A later turn that left no status was cancelled or cut off.
+                session.last_turn = None
                 for item in record.get("files") or []:
                     session.file_attachments[item["id"]] = item
+            if record.get("t") == "turn_status":
+                session.last_turn = record
             if record.get("t") == "rename" and record.get("name"):
                 session.name = str(record["name"])
             if record.get("t") == "subagent" and record.get("session_id"):

@@ -84,7 +84,8 @@ Each line of a session log is a JSON object with a type field `t` and usually a 
 | `rename` | A later title. |
 | `compact` | `summary` and `messages`, which replace the active context. Earlier lines stay in the file. |
 | `provider_tool` | Activity from an external CLI. |
-| Others | Diagnostics such as `tool_state`, `permissions`, `guard`, `cancelled`, `error` and `turn_status`. |
+| `turn_status` | `status`, `seconds` and `output_tokens` of a finished turn. The last one is shown again on resume. |
+| Others | Diagnostics such as `tool_state`, `permissions`, `guard`, `cancelled` and `error`. |
 
 Blank and malformed lines are skipped on reading, so a damaged log can be partly recovered. Tool calls left pending when a session ended are marked with an unknown outcome and are never re-run on resume.
 
