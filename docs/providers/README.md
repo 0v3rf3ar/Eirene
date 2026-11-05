@@ -266,6 +266,7 @@ with the CLI.
 - Retries honor `Retry-After` and are staggered after a cooldown.
 - Before each request, Eirene checks that tool calls and results are paired correctly, and for Gemini and Anthropic that required signatures are present.
   A session that already lost this data cannot be repaired, so start a new conversation if the error persists after upgrading.
+- On the `anthropic` connection, Eirene turns on prompt caching, so repeated input within a session costs less. It does not send this to `custom-anthropic` endpoints.
 - Switching providers keeps your conversation, but the tools and limits may change.
 
 A rejected key, used-up quota or unsupported endpoint must be resolved with the provider. See

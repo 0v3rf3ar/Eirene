@@ -83,6 +83,9 @@ class AnthropicCompatible(Provider):
                                  "description": spec.get("description", ""),
                                  "input_schema": spec.get("parameters", {})}
                                 for spec in tools]
+        if self.host == "api.anthropic.com":
+            # Clones may reject or ignore this field, so only Anthropic's own API gets it.
+            payload["cache_control"] = {"type": "ephemeral"}
         headers = self.headers()
         if self.fast_active(model):
             self._fast_request(payload, headers, model)
@@ -170,12 +173,17 @@ class AnthropicCompatible(Provider):
         raise ProviderError(f"{self.host} did not return a model list")
 
 
+def _usage(usage: dict) -> Usage:
+    # input_tokens excludes cached input, but Eirene's totals and limits count all of it.
+    total = sum(int(usage.get(field) or 0) for field in
+                ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+    return Usage(total, int(usage.get("output_tokens") or 0))
+
+
 def _consume(kind: str, chunk: dict, blocks: dict[int, dict]) -> list:
     events = []
     if kind == "message_start":
-        usage = ((chunk.get("message") or {}).get("usage")) or {}
-        events.append(Usage(int(usage.get("input_tokens") or 0),
-                            int(usage.get("output_tokens") or 0)))
+        events.append(_usage(((chunk.get("message") or {}).get("usage")) or {}))
     elif kind == "content_block_start":
         index = int(chunk.get("index") or 0)
         block = chunk.get("content_block") or {}
@@ -203,8 +211,7 @@ def _consume(kind: str, chunk: dict, blocks: dict[int, dict]) -> list:
     elif kind == "message_delta":
         usage = chunk.get("usage") or {}
         if usage:
-            events.append(Usage(int(usage.get("input_tokens") or 0),
-                                int(usage.get("output_tokens") or 0)))
+            events.append(_usage(usage))
     return events
 
 

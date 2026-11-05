@@ -231,6 +231,26 @@ async def test_anthropic_request_shape():
     assert [m["role"] for m in body["messages"]] == ["user", "assistant", "user"]
 
 
+async def test_anthropic_asks_for_prompt_caching_only_from_its_own_api():
+    recorder = install(Recorder(ANTHROPIC_STREAM))
+    await collect(AnthropicCompatible("sk-ant-x", "https://api.anthropic.com/v1"))
+    assert recorder.payload["cache_control"] == {"type": "ephemeral"}
+    await collect(AnthropicCompatible("key", "https://clone.example/v1", name="custom-anthropic"))
+    assert "cache_control" not in recorder.payload
+
+
+async def test_anthropic_usage_counts_cached_input():
+    stream = ANTHROPIC_STREAM.replace(
+        '"usage":{"input_tokens":30,',
+        '"usage":{"input_tokens":30,"cache_creation_input_tokens":200,'
+        '"cache_read_input_tokens":5000,')
+    install(Recorder(stream))
+    provider = AnthropicCompatible("sk-ant-x", "https://api.anthropic.com/v1")
+    usage = [e for e in await collect(provider) if isinstance(e, base.Usage)]
+    assert usage[0] == base.Usage(5230, 0)
+    assert usage[1] == base.Usage(0, 9)
+
+
 def test_anthropic_merges_tool_results():
     converted = to_anthropic_messages(HISTORY)
     last = converted[-1]
