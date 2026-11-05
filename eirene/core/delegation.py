@@ -98,6 +98,7 @@ async def run_tasks(parent, raw, on_output=None):
             child.plugin_runtime.context = dict(parent.plugin_runtime.context)
             child.plugin_runtime.started = set(parent.plugin_runtime.started)
             child.plugin_runtime.ponytail_mode = parent.plugin_runtime.ponytail_mode
+            child.plugin_runtime.failed = set(parent.plugin_runtime.failed)
             text = task["prompt"]
             if task["agent"]:
                 plugin, path, _, body = profiles[task["agent"]]

@@ -1,9 +1,12 @@
 """Portable skill imports and their activation in Eirene."""
 
+import tempfile
+
 import pytest
 
 from eirene.core import paths, plugins, skills
 from eirene.core.config import Config
+from eirene.core.plugin_catalog import source_for
 from eirene.core.plugin_install import github_source, install
 
 
@@ -314,3 +317,18 @@ def test_other_download_errors_keep_their_own_message(tmp_path, monkeypatch):
         lambda argv, **kw: SimpleNamespace(returncode=128), ["fatal: unable to access: Could not resolve host\n"]))
     with pytest.raises(ValueError, match="could not download repository: fatal: unable to access"):
         clone("https://github.com/a/b.git", tmp_path / "x")
+
+
+def test_install_does_not_depend_on_how_the_temp_folder_is_spelled(tmp_path, monkeypatch):
+    """A symlink stands in for a Windows 8.3 short name: the same folder under another spelling."""
+    real = tmp_path / "long-temp-name"
+    real.mkdir()
+    short = tmp_path / "LONG~1"
+    try:
+        short.symlink_to(real, target_is_directory=True)
+    except OSError:
+        pytest.skip("needs symlinks")
+    monkeypatch.setattr(tempfile, "tempdir", str(short))
+    # A shipped plugin goes through the temporary folder; a local folder would not.
+    name, _ = install(source_for("arena"))
+    assert name == "arena"

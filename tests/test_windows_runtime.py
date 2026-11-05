@@ -2,6 +2,8 @@
 
 import asyncio
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -97,6 +99,26 @@ def test_python_shim_is_valid_and_inert_outside_the_sandbox(monkeypatch):
     assert os.mkdir is before and sys.meta_path == meta
 
 
+def test_node_options_load_the_shim_and_keep_what_was_already_set():
+    shim = Path("C:/Users/A B/stdio.cjs")
+    assert runtime._node_options(shim) == '--require "C:/Users/A B/stdio.cjs"'
+    assert runtime._node_options(shim, "--max-old-space-size=99") == '--require "C:/Users/A B/stdio.cjs" --max-old-space-size=99'
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="needs node")
+@pytest.mark.parametrize("env", [{}, {"EIRENE_SANDBOX_SID": "S-1-15-2-1"}], ids=["outside", "sandbox-sid-off-windows"])
+def test_node_shim_is_valid_and_inert_off_windows_or_outside_the_sandbox(tmp_path, env):
+    if os.name == "nt" and env:
+        pytest.skip("the shim is active here; the native tests cover it")
+    shim = tmp_path / "stdio.cjs"
+    shim.write_text(runtime._NODE_SHIM, encoding="utf-8")
+    script = "console.log(require('child_process').execFileSync(process.execPath, ['-p', '1+1'], {encoding: 'utf8'}).trim())"
+    base = {k: v for k, v in os.environ.items() if k != "EIRENE_SANDBOX_SID"}
+    result = subprocess.run(["node", "--require", str(shim), "-e", script], env={**base, **env},
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0 and result.stdout.strip() == "2", result.stderr
+
+
 def test_private_environment_paths_cannot_be_overridden(tmp_path):
     from eirene.tools.windows_appcontainer import _environment
     home = tmp_path / "private"
@@ -138,6 +160,65 @@ async def test_native_commands_run_concurrently(workdir):
     results = await asyncio.gather(*(_run("ping -n 3 127.0.0.1 >nul & echo done", workdir) for _ in range(2)))
     assert all(result.exit_code == 0 and "done" in result.output for result in results)
     assert asyncio.get_running_loop().time() - started < 3.5, "sandboxed commands were serialized"
+
+
+NODE_CHILD_CASES = {
+    "execFileSync": "console.log(c.execFileSync(process.execPath, ['-p', '40+2'], {encoding: 'utf8'}).trim())",
+    "execSync": "console.log(c.execSync('cmd /c echo 42', {encoding: 'utf8'}).trim())",
+    "spawnSync input": "console.log(c.spawnSync(process.execPath, ['-e', "
+        "'process.stdin.pipe(process.stdout)'], {input: '42', encoding: 'utf8'}).stdout)",
+    "spawnSync timeout": "const r = c.spawnSync(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], "
+        "{stdio: ['ignore', 'pipe', 'ignore'], timeout: 500}); console.log(r.error.code === 'ETIMEDOUT' ? 42 : r.error)",
+    "maxBuffer": "try { c.execFileSync(process.execPath, ['-p', '\"x\".repeat(5000)'], {maxBuffer: 10}) } "
+        "catch (e) { console.log(e.code === 'ENOBUFS' ? 42 : e.code) }",
+    "spawn": "const k = c.spawn(process.execPath, ['-p', '40+2']); let o = ''; k.stdout.on('data', d => o += d); "
+        "k.on('close', s => console.log(s === 0 ? o.trim() : s))",
+    "exec": "c.exec('cmd /c echo 42', (e, o) => console.log(e || o.trim()))",
+    "stdin": "const k = c.spawn(process.execPath, ['-e', 'process.stdin.pipe(process.stdout)']); let o = ''; "
+        "k.stdout.on('data', d => o += d); k.on('close', () => console.log(o)); k.stdin.end('42')",
+    "large output": "const k = c.spawn(process.execPath, ['-e', 'process.stdout.write(\"x\".repeat(3e6))']); let n = 0; "
+        "k.stdout.on('data', d => n += d.length); k.on('close', () => console.log(n === 3e6 ? 42 : n))",
+    "kill": "const k = c.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)']); "
+        "k.on('close', (_, s) => console.log(s === 'SIGTERM' ? 42 : s)); setTimeout(() => k.kill(), 200)",
+    "missing program": "c.spawn('no-such-program-x').on('error', e => console.log(e.code === 'ENOENT' ? 42 : e.code))",
+}
+
+
+@native
+@pytest.mark.parametrize("case", NODE_CHILD_CASES)
+async def test_native_node_child_processes_with_piped_stdio_finish(workdir, case):
+    """libuv's stdio pipes are denied in an AppContainer and it retries forever without the shim."""
+    if not shutil.which("node"):
+        pytest.skip("needs node")
+    paths.use_session_temp(workdir, "node-" + case.replace(" ", "-"))
+    (workdir / "probe.js").write_text("const c = require('child_process');\n" + NODE_CHILD_CASES[case], encoding="utf-8")
+    result = await _run("node probe.js", workdir, input_text="")
+    assert result.exit_code == 0 and "42" in result.output, result.summary()
+
+
+@native
+async def test_native_a_node_channel_fails_plainly_instead_of_hanging(workdir):
+    if not shutil.which("node"):
+        pytest.skip("needs node")
+    paths.use_session_temp(workdir, "node-fork")
+    (workdir / "probe.js").write_text(
+        "try { require('child_process').fork(__filename + '.none'); console.log('forked') }"
+        " catch (e) { console.log('refused ' + e.code) }", encoding="utf-8")
+    result = await _run("node probe.js", workdir, input_text="")
+    assert result.exit_code == 0 and "refused ENOTSUP" in result.output, result.summary()
+
+
+@native
+async def test_native_node_scripts_load_from_a_grant_outside_the_workspace(workdir, outside):
+    """Node resolves a script by stat'ing each folder above it; a grant must allow that walk."""
+    if not shutil.which("node"):
+        pytest.skip("needs node")
+    paths.use_session_temp(workdir, "node-grant")
+    nested = outside / "plugin" / "hooks"
+    nested.mkdir(parents=True)
+    (nested / "run.js").write_text("console.log('loaded')", encoding="utf-8")
+    result = await _run(f'node "{nested / "run.js"}"', workdir, input_text="", read_paths=[str(outside / "plugin")])
+    assert result.exit_code == 0 and "loaded" in result.output, result.summary()
 
 
 @native

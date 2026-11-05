@@ -167,6 +167,93 @@ def test_hook_block_and_output_contract():
         parse_output('{"decision":"block","reason":"stop here"}')
 
 
+def test_malformed_hook_output_is_reported_rather_than_fatal():
+    assert parse_output('{"hookSpecificOutput":"nonsense"}') == ('', 'ignored malformed hookSpecificOutput')
+
+
+def _failing_plugin(tmp_path, config, name='demo'):
+    install(str(bundle(tmp_path, name)))
+    config.set('plugin_trust', {name: True})
+
+
+@pytest.mark.parametrize('outcome', [
+    SimpleNamespace(ok=False, exit_code=None, output='', summary=lambda: 'timed out after 15s and was killed'),
+    SimpleNamespace(ok=False, exit_code=1, output='', summary=lambda: 'exit 1\nEPERM'),
+    ToolError('Windows command executable is unavailable: node'),
+    PermissionError('Access is denied'),
+], ids=['timeout', 'crash', 'cannot-start', 'os-error'])
+async def test_a_broken_hook_of_any_plugin_never_stops_the_turn(tmp_path, config, box, monkeypatch, outcome):
+    _failing_plugin(tmp_path, config)
+    calls = []
+    async def run(command, cwd, **kwargs):
+        calls.append(command)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+    monkeypatch.setattr('eirene.core.plugin_runtime.shell.run', run)
+    runtime = PluginRuntime('broken')
+    notices = await runtime.submit('hello', box, config)
+    assert len(notices) == 2 and all('demo:' in n and 'skipped for this session' in n for n in notices)
+    # A hook that costs its whole timeout must not cost it again on every prompt.
+    assert len(calls) == 2
+    assert await runtime.submit('again', box, config) == [] and len(calls) == 2
+
+
+async def test_a_failed_hook_can_recover_when_asked_for_by_name(tmp_path, config, box, monkeypatch):
+    _failing_plugin(tmp_path, config)
+    results = [SimpleNamespace(ok=False, exit_code=1, output='', summary=lambda: 'exit 1')] * 2
+    async def run(command, cwd, **kwargs):
+        return results.pop() if results else SimpleNamespace(ok=True, exit_code=0, output='recovered')
+    monkeypatch.setattr('eirene.core.plugin_runtime.shell.run', run)
+    runtime = PluginRuntime('recovers')
+    await runtime.submit('hello', box, config)
+    assert runtime.failed
+    assert await runtime.submit('retry', box, config, only='demo') == []
+    assert not runtime.failed and 'recovered' in runtime.block(config)
+
+
+@pytest.mark.parametrize('output, match', [('{"decision":"block","reason":"stop here"}', 'stop here'),
+                                           ('{"continue":false,"stopReason":"policy"}', 'policy')])
+async def test_a_hook_that_decides_to_block_still_blocks(tmp_path, config, box, monkeypatch, output, match):
+    _failing_plugin(tmp_path, config)
+    async def run(command, cwd, **kwargs):
+        return SimpleNamespace(ok=True, exit_code=0, output=output)
+    monkeypatch.setattr('eirene.core.plugin_runtime.shell.run', run)
+    with pytest.raises(ToolError, match=match):
+        await PluginRuntime('blocks').submit('hello', box, config)
+
+
+async def test_exit_2_blocks_a_prompt_but_not_a_session_start(tmp_path, config, box, monkeypatch):
+    _failing_plugin(tmp_path, config)
+    async def run(command, cwd, **kwargs):
+        return SimpleNamespace(ok=False, exit_code=2, output='', summary=lambda: 'exit 2\nno secrets please')
+    monkeypatch.setattr('eirene.core.plugin_runtime.shell.run', run)
+    runtime = PluginRuntime('exit2')
+    with pytest.raises(ToolError, match='(?s)demo blocked this prompt.*no secrets'):
+        await runtime.submit('hello', box, config)
+    assert ('demo', 'SessionStart') in runtime.failed
+
+
+
+
+async def test_a_failing_ponytail_rule_load_does_not_stop_the_turn(tmp_path, config, box, monkeypatch):
+    root = bundle(tmp_path, 'ponytail')
+    (root / 'hooks/ponytail-instructions.js').write_text('// fixture')
+    install(str(root))
+    config.set('plugin_trust', {'ponytail': True})
+    rule_loads = []
+    async def run(command, cwd, **kwargs):
+        if kwargs.get('argv'):
+            rule_loads.append(command)
+            return SimpleNamespace(ok=False, exit_code=None, output='', summary=lambda: 'timed out')
+        (Path(kwargs['env']['PLUGIN_DATA']) / '.ponytail-active').write_text('full')
+        return SimpleNamespace(ok=True, exit_code=0, output='')
+    monkeypatch.setattr('eirene.core.plugin_runtime.shell.run', run)
+    runtime = PluginRuntime('rules')
+    assert any('rules hook skipped' in n for n in await runtime.submit('hi', box, config))
+    assert await runtime.submit('hi', box, config) == [] and len(rule_loads) == 1
+
+
 @pytest.mark.parametrize('field', ['skills', 'commands', 'hooks', 'mcpServers'])
 def test_declared_paths_cannot_escape(tmp_path, field):
     root = bundle(tmp_path)

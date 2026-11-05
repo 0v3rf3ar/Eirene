@@ -198,6 +198,9 @@ def install(source: str, *, replacing=None, outcome: UpdateResult | None = None,
     entry = None
     market = ""
     with tempfile.TemporaryDirectory(prefix="eirene-plugin-") as temporary:
+        # Windows may spell %TEMP% with 8.3 short names (PLYGRN~1), which later resolved
+        # paths inside it would not share.
+        temporary = str(Path(temporary).resolve())
         listed = None
         if not local.is_dir() and source_for(source) == source:
             from . import marketplace

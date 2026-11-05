@@ -122,7 +122,8 @@ A plugin must be enabled and trusted for hooks to run, and Plan mode skips them.
 | JSON with `additionalContext` or `hookSpecificOutput.additionalContext` | Added to the model's context. |
 | JSON with `systemMessage` | Shown as a notice. |
 | JSON with `continue: false` or `decision: "block"` | Raises a blocking error. |
-| A non-zero exit code | The hook fails. |
+| Exit code 2 from `UserPromptSubmit` | Blocks the prompt, with the hook's output as the reason. |
+| Any other failure: a non-zero exit, a timeout, or a hook that cannot start | Shown as a notice, and the turn continues without the hook. It is not run again this session, unless a plugin command such as `/ponytail` asks for it. |
 
 These hooks are separate from the [`before_tool` and `after_tool` hooks](../reference/configuration.md#tool-hooks) in `config.json`, which use a different format.
 

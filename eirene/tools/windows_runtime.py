@@ -252,6 +252,128 @@ _keep_shim_in_venv()
 _chain()
 '''
 
+
+# libuv names the stdio pipes of a child process \\.\pipe\uv\..., which an AppContainer may
+# not create. It takes the ACCESS_DENIED for a name collision and retries forever, so any
+# Node program that starts a child with piped stdio spins at full CPU and never returns:
+# no timeout can fire. Sandboxed Node loads this through NODE_OPTIONS. It works at the
+# bindings every child_process call goes through: synchronous calls capture through files,
+# and asynchronous ones through pipes under \\.\pipe\LOCAL\, the one place a package may
+# create them. Node cannot hand a server end to a child without its loop running, so
+# each stream is relayed between two client ends, both opened synchronously.
+_NODE_SHIM = r'''"use strict";
+// Eirene Windows sandbox: see _NODE_SHIM in eirene/tools/windows_runtime.py.
+(() => {
+  if (process.platform !== "win32" || !process.env.EIRENE_SANDBOX_SID) return;
+  const crypto = require("crypto"), fs = require("fs"), net = require("net"), os = require("os"), path = require("path");
+  const uv = process.binding("uv");
+  const unique = () => crypto.randomBytes(12).toString("hex");
+
+  const sync = process.binding("spawn_sync"), spawnSync = sync.spawn;
+  sync.spawn = function (options) {
+    const made = [];
+    try {
+      const stdio = options.stdio.map((entry, index) => {
+        if (!entry || entry.type !== "pipe") return entry;
+        const file = path.join(os.tmpdir(), `eirene-stdio-${unique()}`);
+        fs.writeFileSync(file, entry.input || "", { flag: "wx" });
+        const output = entry.writable === true;
+        const fd = fs.openSync(file, output ? "r+" : "r");
+        made.push({ index, file, fd, output });
+        return { type: "fd", fd };
+      });
+      const result = spawnSync.call(this, { ...options, stdio });
+      for (const item of made) {
+        if (!item.output || !result.output) continue;
+        let data = fs.readFileSync(item.file);
+        if (options.maxBuffer > 0 && data.length > options.maxBuffer) {
+          data = data.subarray(0, options.maxBuffer);
+          result.error = result.error || uv.UV_ENOBUFS;
+        }
+        result.output[item.index] = data;
+      }
+      return result;
+    } catch {
+      return { error: uv.UV_EPERM, status: null, signal: null, output: null, pid: 0 };
+    } finally {
+      for (const item of made) {
+        try { fs.closeSync(item.fd); fs.rmSync(item.file, { force: true }); } catch {}
+      }
+    }
+  };
+
+  const relayed = (entry) => {
+    const ends = [`\\\\.\\pipe\\LOCAL\\eirene-${unique()}`, `\\\\.\\pipe\\LOCAL\\eirene-${unique()}`];
+    const sockets = [];
+    const servers = ends.map((name) => {
+      const server = net.createServer((socket) => {
+        server.close();
+        socket.on("error", () => sockets.forEach((item) => item.destroy()));
+        sockets.push(socket);
+        if (sockets.length === 2) { sockets[0].pipe(sockets[1]); sockets[1].pipe(sockets[0]); }
+      });
+      server.on("error", () => {});
+      server.listen(name);
+      return server;
+    });
+    const child = fs.openSync(ends[0], "r+");
+    entry.handle.open(fs.openSync(ends[1], "r+"));
+    return { fd: child, abandon: () => servers.forEach((server) => server.close()) };
+  };
+
+  const Process = process.binding("process_wrap").Process, spawn = Process.prototype.spawn;
+  Process.prototype.spawn = function (...args) {
+    // Node has passed these both as one options object and as positional arguments.
+    const at = args.findIndex((value) => Array.isArray(value) && value.length
+      && value.every((item) => item && typeof item === "object" && "type" in item));
+    const given = at >= 0 ? args[at] : args[0] && args[0].stdio;
+    const relays = [];
+    try {
+      const stdio = (given || []).map((entry) => {
+        if (!entry || !entry.handle || (entry.type !== "pipe" && entry.type !== "overlapped")) return entry;
+        // fork()'s message channel is not relayed. Fail plainly rather than spin.
+        if (entry.ipc) throw new Error("no IPC channel in the sandbox");
+        const relay = relayed(entry);
+        relays.push(relay);
+        return { type: "fd", fd: relay.fd };
+      });
+      if (at >= 0) args[at] = stdio; else if (args[0]) args[0] = { ...args[0], stdio };
+      const status = spawn.apply(this, args);
+      if (status) relays.forEach((relay) => relay.abandon());
+      return status;
+    } catch {
+      relays.forEach((relay) => relay.abandon());
+      return uv.UV_ENOTSUP;
+    } finally {
+      for (const relay of relays) { try { fs.closeSync(relay.fd); } catch {} }
+    }
+  };
+})();
+'''
+
+
+def _write_shim(path, text):
+    if not path.is_file() or path.read_text(encoding="utf-8") != text:
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+
+def _reachable(owner, shim, sid):
+    """Node stats each folder above a --require path and refuses to start if one is denied,
+    which is far worse than the hang the shim prevents. Folders above the profile are
+    readable anyway; the ones below it must have taken the grant."""
+    files, home = _Files(owner.api), Path.home().resolve()
+    try:
+        return all(files.has(folder, sid) for folder in shim.parents
+                   if folder == home or home in folder.parents)
+    except OSError:
+        return False
+
+
+def _node_options(shim, existing=""):
+    # Forward slashes: NODE_OPTIONS treats a backslash inside quotes as an escape.
+    return f'--require "{shim.as_posix()}" {existing}'.strip()
+
 TOOLCHAINS = "Eirene.Sandbox.Toolchains"
 # internetClient, internetClientServer, privateNetworkClientServer.
 NETWORK = ("S-1-15-3-1", "S-1-15-3-2", "S-1-15-3-3")
@@ -745,6 +867,8 @@ async def start(argv, root, cwd, *, network=False, read_paths=(), write_paths=()
             if temp:
                 owner.persist(temp, sid, "(OI)(CI)M")
             owner.persist_ancestors(root, sid)
+            for path in [*reads, *writes]:
+                owner.persist_ancestors(path, sid)
             owner.persist_window_objects(sid)
             owner.persist_volume_root(root, toolchains)
             if network:
@@ -758,15 +882,20 @@ async def start(argv, root, cwd, *, network=False, read_paths=(), write_paths=()
             if (not any(runtime == folder or folder in runtime.parents for folder in [root, *reads, *writes, *system])
                     and _narrow(runtime)):
                 owner.persist(_specific(runtime), toolchains, "(OI)(CI)RX")
-        _grant_toolchains(toolchains, _toolchains(executable))
+            chains = _toolchains(executable)
+            for folder in chains:
+                owner.persist_ancestors(folder, toolchains)
+        _grant_toolchains(toolchains, chains)
         for path, writable in [*((p, False) for p in reads), *((p, True) for p in writes)]:
             owner.grant(path, extra, writable)
         if not read_only:
             owner.executables = _Executables(owner.api, [root, *writes])
         shim = owner.box.home / "python" / "sitecustomize.py"
-        if not shim.is_file() or shim.read_text(encoding="utf-8") != _PYTHON_SHIM:
-            shim.parent.mkdir(exist_ok=True)
-            shim.write_text(_PYTHON_SHIM, encoding="utf-8")
+        _write_shim(shim, _PYTHON_SHIM)
+        node_shim = owner.box.home / "node" / "stdio.cjs"
+        _write_shim(node_shim, _NODE_SHIM)
+        with _setup:
+            owner.persist_ancestors(node_shim, sid)
         # PowerShell resolves bare names such as git or whoami through PATHEXT.
         # The package token hides Administrators ownership of the workspace, so
         # git's ownership check would reject it; trust only the workspace.
@@ -777,6 +906,8 @@ async def start(argv, root, cwd, *, network=False, read_paths=(), write_paths=()
                "GIT_CONFIG_KEY_1": "safe.directory", "GIT_CONFIG_VALUE_1": root.as_posix() + "/*",
                "PYTHONPATH": str(shim.parent), "EIRENE_SANDBOX_SID": sid,
                **(env or {})}
+        if _reachable(owner, node_shim, sid):
+            env["NODE_OPTIONS"] = _node_options(node_shim, env.get("NODE_OPTIONS", ""))
         if streams:
             return _streaming(owner, argv, cwd, env, temp, limit)
         # Unique names: commands of one workspace share the profile's private storage.
